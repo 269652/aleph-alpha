@@ -22,6 +22,7 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
@@ -488,15 +489,76 @@ func test_a_hungry_village_takes_nobody_in():
 	assert_eq(manager.household_count_for_settlement(_settlement_id), before, "an empty larder attracts nobody")
 
 
-func test_a_well_fed_village_with_room_eventually_takes_someone_in():
-	_market().add_stock("cooked_meat", 500.0)
-	var before := manager.household_count_for_settlement(_settlement_id)
+## Raises one more house than this village has people for, and answers with
+## the spare capacity that left standing -- the room an arrival needs.
+func _raise_a_spare_house() -> int:
+	var house_id: String = BuildingCatalog.BUILDING_IDS[0]
+	var origin = manager._growth_site_for(_chunk_coord, house_id)
+	if origin == null:
+		return 0
+	manager._place_building_over_roads(_chunk_coord, origin, house_id, 3, _settlement_id)
+	var census := manager._village_census_for(
+		_chunk_coord, manager._households_in_settlement(_settlement_id)
+	)
+	return int(census["spare_house_capacity"])
+
+
+func _draw_for_a_while() -> void:
 	# Many steps: the draw is a real rate per day, not one arrival per call.
 	for i in 400:
 		manager._step_village_immigration(
 			_settlement_id, _market(), manager._households_in_settlement(_settlement_id)
 		)
-	assert_gt(manager.household_count_for_settlement(_settlement_id), before, "a fed village with room grows")
+
+
+## **Rewritten 2026-09-20**, and the rewrite is the point. This used to drive
+## the immigration step alone and expect the village to grow, which worked
+## only because the old gate admitted one household per step on the strength
+## of FRONTAGE -- somewhere to BUILD, not somewhere to live. Reported live:
+## "NPCs should only move in when a new unoccupied house exists for them".
+##
+## So "a fed village grows" is two steps now, and this drives both: a village
+## whose roofs are all full takes nobody in however fed it is, and the same
+## village takes somebody in the moment one really stands empty.
+func test_a_well_fed_village_grows_once_a_house_really_stands_empty():
+	_market().add_stock("cooked_meat", 500.0)
+	var before := manager.household_count_for_settlement(_settlement_id)
+
+	_draw_for_a_while()
+	assert_eq(
+		manager.household_count_for_settlement(_settlement_id), before,
+		"a village with every roof full takes nobody in, however well fed"
+	)
+
+	var spare := _raise_a_spare_house()
+	if spare <= 0:
+		pending("no street frontage left in this village to raise a spare house on")
+		return
+
+	_draw_for_a_while()
+	assert_gt(
+		manager.household_count_for_settlement(_settlement_id), before,
+		"an empty house is exactly what a fed village grows into"
+	)
+
+
+## And the ladder is what puts that house there -- otherwise the gate above
+## would simply stop every village for ever. A village with every roof full
+## owes itself a house, whatever else it already has.
+func test_a_village_with_every_roof_full_owes_itself_a_house():
+	var census := manager._village_census_for(
+		_chunk_coord, manager._households_in_settlement(_settlement_id)
+	)
+	assert_eq(int(census["spare_house_capacity"]), 0, "the premise: nowhere for anyone to move in")
+	assert_eq(
+		VillageGrowth.next_building(
+			manager.household_count_for_settlement(_settlement_id),
+			int(census["housed_count"]),
+			VillageGrowth.LADDER_BUILDING_IDS,
+			int(census["spare_house_capacity"])
+		),
+		BuildingCatalog.BUILDING_IDS[0]
+	)
 
 
 # -- productivity is not decoration: it scales what the village gathers ----
@@ -955,3 +1017,65 @@ func test_every_rung_the_village_raises_is_walkable_back_to_its_street():
 		"%d of %d rungs stand on paving no street reaches: %s" % [stranded.size(), raised.size(), str(stranded)]
 	)
 
+
+
+# -- an arrival you can actually see ----------------------------------------
+#
+# Reported live with the town panel in shot: *"despite showing 20 population
+# only 10 NPCs are there"*.
+#
+# `spawn_village` runs only from `_load_chunk`, so the villager roster is
+# fixed at the moment the chunk loaded -- while `admit_household` goes on
+# adding to the settlement's household count. A household that moved in
+# while you were standing in the village had no villager at all until you
+# walked far enough away to unload the chunk and came back.
+
+
+func _villagers_on_screen() -> int:
+	var found := 0
+	for node in manager._loaded_villages.get(_chunk_coord, []):
+		if is_instance_valid(node) and node is NpcMarker:
+			found += 1
+	return found
+
+
+func test_a_loaded_village_starts_with_a_villager_for_every_household():
+	assert_eq(
+		_villagers_on_screen(), manager.household_count_for_settlement(_settlement_id),
+		"the premise: a freshly loaded village already shows everyone who lives in it"
+	)
+
+
+func test_a_household_admitted_to_a_loaded_village_gets_a_villager_of_its_own():
+	var before := _villagers_on_screen()
+	assert_ne(manager.admit_household(_chunk_coord), "", "the premise: somebody really moved in")
+	assert_eq(
+		_villagers_on_screen(), before + 1,
+		"a household that moved in while you were watching had nobody to show for it"
+	)
+
+
+## However many arrive, and whenever: the villagers you can see are the
+## households that live there, not the roster the chunk happened to load with.
+func test_the_villagers_on_screen_always_match_the_households_that_live_there():
+	for arrival in 3:
+		manager.admit_household(_chunk_coord)
+		assert_eq(
+			_villagers_on_screen(), manager.household_count_for_settlement(_settlement_id),
+			"after %d arrivals the village shows the wrong number of people" % (arrival + 1)
+		)
+
+
+## ...and nobody is duplicated doing it. Re-deriving a village must replace
+## its villagers, never add a second copy of everyone already standing there.
+func test_nobody_is_duplicated_when_a_village_takes_somebody_in():
+	manager.admit_household(_chunk_coord)
+	var seen: Dictionary = {}
+	for node in manager._loaded_villages.get(_chunk_coord, []):
+		if not is_instance_valid(node) or not (node is NpcMarker):
+			continue
+		var identity = node.identity
+		if identity == null:
+			continue
+		assert_false(seen.has(identity.seed_value), "two markers for the same villager")
+		seen[identity.seed_value] = true

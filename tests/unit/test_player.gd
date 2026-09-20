@@ -27,6 +27,8 @@ const MinableOre = preload("res://src/rendering/minable_ore.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const Knapping = preload("res://src/gameplay/knapping.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+const Player = preload("res://scenes/player.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
@@ -5012,3 +5014,89 @@ func test_enter_exit_step_does_not_re_trigger_while_the_key_stays_held():
 
 	assert_false(player.is_indoors(), "a held key must not re-enter on the very next step")
 	Input.action_release("enter")
+
+
+# -- the player's own ground footprint --------------------------------------
+#
+# Reported live: *"houses hitbox extend by 20% above their tiles blocking
+# movement"*.
+#
+# The houses were innocent. Measured with tools/probe_building_hitbox.gd: a
+# `house_small` at (4,4) owns world rows 66624.0..66656.0 and its collider
+# covers 66624.0..66656.0 -- tile-exact, no overhang at all. What reached
+# past the house was the PLAYER's own box: 12x12 px, centred on their feet,
+# so its leading edge stood 6px ahead of where they were standing. At a 16px
+# tile that is well over a third of a tile of body in front of you, and you
+# are stopped that far short of any wall you walk up to.
+#
+# A standing adult is not square on the ground: roughly 45cm across the
+# shoulders and 27cm front to back. Squaring that off at the WIDER of the
+# two is what put the extra depth there.
+
+
+func _collider_size() -> Vector2:
+	return (player.get_node("CollisionShape2D") as CollisionShape2D).shape.size
+
+
+func test_the_player_is_not_as_thick_front_to_back_as_they_are_wide():
+	var size := _collider_size()
+	assert_lt(
+		size.y, size.x,
+		"a square footprint gives a person as much body depth as shoulder width"
+	)
+
+
+## Derived from a real body at the project's own scale, not chosen: the same
+## PX_PER_METER every other real measurement in this world goes through.
+func test_the_footprint_is_a_real_bodys_breadth_and_depth():
+	var size := _collider_size()
+	assert_almost_eq(size.x, Player.BODY_BREADTH_M * GroundSlide.PX_PER_METER, 0.01)
+	assert_almost_eq(size.y, Player.BODY_DEPTH_M * GroundSlide.PX_PER_METER, 0.01)
+
+
+## The number the report was really about: how far in front of where you
+## stand your own body stops you. Half a body-depth, and that has to leave
+## most of a tile walkable or you cannot stand against a wall at all.
+func test_you_are_stopped_less_than_a_quarter_tile_short_of_what_you_walk_into():
+	assert_lt(
+		_collider_size().y * 0.5, TerrainRenderer.TILE_SIZE * 0.25,
+		"your own body reaches too far ahead of you to stand against a wall"
+	)
+
+
+## ...and is still a real body, not a point: a footprint of nothing would
+## stand inside walls and doorposts.
+##
+## Against real metres rather than a fraction of a tile, which is the whole
+## reason these are declared in metres: at this world's own PX_PER_METER
+## (11.2) a real 45cm shoulder width is about 5px, a third of a 16px tile.
+## An earlier draft of this test asserted "wider than 0.4 of a tile" from a
+## guess at the scale and failed against the real body -- the tile is worth
+## about 1.4 real metres here, not one.
+func test_the_footprint_is_still_a_real_body_and_not_a_point():
+	assert_between(
+		Player.BODY_BREADTH_M, 0.40, 0.55, "an adult's breadth across the shoulders, in metres"
+	)
+	assert_between(
+		Player.BODY_DEPTH_M, 0.20, 0.33, "an adult's depth front to back, in metres"
+	)
+	assert_gt(_collider_size().y, 1.0, "a body with no depth at all would stand inside walls")
+
+
+## And the player really is as tall against the ground as they are wide
+## across it -- the one cross-check that the footprint and the drawn figure
+## describe the same person rather than two differently-scaled ones.
+func test_the_footprint_matches_the_height_the_player_is_drawn_at():
+	var drawn_ratio: float = StoneSize.PLAYER_WORLD_HEIGHT_PX / _collider_size().x
+	var real_ratio: float = (StoneSize.PLAYER_HEIGHT_CM / 100.0) / Player.BODY_BREADTH_M
+	assert_almost_eq(drawn_ratio, real_ratio, 0.1, "drawn height over footprint width")
+
+
+## The shadow is the body's own breadth -- it was PLAYER_SIZE, which was
+## both extents at once, so it has to follow the one that really is width.
+func test_the_shadow_is_as_wide_as_the_body_really_is():
+	var shadow := player.get_node_or_null("Shadow") as Sprite2D
+	assert_not_null(shadow, "the player casts a real shadow")
+	assert_almost_eq(
+		float(shadow.texture.get_width()), Player.BODY_BREADTH_M * GroundSlide.PX_PER_METER, 1.0
+	)

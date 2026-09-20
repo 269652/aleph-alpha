@@ -190,3 +190,120 @@ func test_the_bed_he_walks_to_is_the_bed_that_is_standing_there():
 			marker._plots[i].global_position, marker.home + marker._plot_offset(i),
 			"bed %d is not where the farmer walks to tend it" % i
 		)
+
+
+# -- the farmer asks before it walks, like every other worker ---------------
+#
+# Reported live: "Creatures and NPCs also walk through houses", then "the
+# farmer too". The farmer was the one walker deliberately left ungated in the
+# first pass, because its rails are the one fence a villager is SUPPOSED to
+# cross: a field's rails stand on its inner edge, so the person they would
+# otherwise shut out is the farmer whose beds they enclose. Gating it without
+# that exemption would have re-broken "a farmer's own rail shut them IN",
+# which a separate pass had just fixed for NpcMarker.
+#
+# WalkGate already takes the exemption as a parameter. What was missing was
+# the farmer knowing which cells are its own.
+
+
+class FenceStubWorld:
+	var walls: Dictionary = {}
+	var rails: Dictionary = {}  # "fx,fy>tx,ty" -> true
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		return walls.has(Vector2i(x, y))
+	func fence_blocks_step_global(fx: int, fy: int, tx: int, ty: int) -> bool:
+		return rails.has("%d,%d>%d,%d" % [fx, fy, tx, ty])
+
+
+func _tile_of(point: Vector2) -> Vector2i:
+	return Vector2i(
+		floori(point.x / TerrainRenderer.TILE_SIZE), floori(point.y / TerrainRenderer.TILE_SIZE)
+	)
+
+
+## Puts the farmer at its farmhouse with the middle bed as its target, on a
+## stub world that answers only the two questions the gate asks.
+func _farmer_walking_to_its_bed() -> FenceStubWorld:
+	var world := FenceStubWorld.new()
+	marker.earth = world
+	marker.home = Vector2(8.0, 8.0)
+	marker.position = marker.home
+	marker._target_index = 1
+	return world
+
+
+func test_a_farmer_knows_which_beds_are_its_own():
+	_farmer_walking_to_its_bed()
+	var cells: Dictionary = marker.own_field_cells()
+	for i in FarmerMarker.PLOT_COUNT:
+		assert_true(
+			cells.has(_tile_of(marker.home + marker._plot_offset(i))),
+			"bed %d must be one of its own" % i
+		)
+
+
+## A wall is a wall, even for the farmer, and even on the way to its own soil
+## -- the exemption is about rails and only rails.
+func test_a_wall_between_the_farmer_and_its_bed_stops_it():
+	var world := _farmer_walking_to_its_bed()
+	var bed := marker.home + marker._plot_offset(1)
+	world.walls[_tile_of(bed)] = true
+	var before := marker.position
+	marker._step_approaching(0.5)
+	assert_eq(marker.position, before, "a farmer may not walk into a house either")
+
+
+## ...but its OWN rail is the one fence it crosses, or it stands nine pixels
+## from its own soil forever (measured, reported, and fixed once already for
+## the other villager class).
+func test_the_farmer_crosses_the_rail_around_its_own_field():
+	var world := _farmer_walking_to_its_bed()
+	var bed := marker.home + marker._plot_offset(1)
+	world.rails["%d,%d>%d,%d" % [
+		_tile_of(marker.home).x, _tile_of(marker.home).y, _tile_of(bed).x, _tile_of(bed).y
+	]] = true
+	var before := marker.position
+	marker._step_approaching(0.5)
+	assert_ne(marker.position, before, "its own rail must not shut it out of its beds")
+
+
+## And the exemption is its OWN field, not fences in general: a fence crossed
+## on the WAY to its beds, enclosing somebody else's, still stops it.
+##
+## The first draft of this test moved `home` to make the fence a stranger's,
+## which quietly moved the farmer's TARGET too -- so it walked off toward a
+## different bed and never took the step the rail was registered for. The
+## honest scenario is a farmer approaching from far enough away that the
+## blocked step is nowhere near its own soil.
+func test_a_neighbours_rail_still_stops_the_farmer():
+	var world := FenceStubWorld.new()
+	marker.earth = world
+	marker.home = Vector2(200.0, 200.0)
+	marker._target_index = 1
+	marker.position = Vector2(100.0, 200.0)  # a long walk east to its beds
+	var here := _tile_of(marker.position)
+	var next := here + Vector2i(1, 0)
+	assert_false(
+		marker.own_field_cells().has(here) or marker.own_field_cells().has(next),
+		"precondition: this step must be nowhere near its own beds"
+	)
+	world.rails["%d,%d>%d,%d" % [here.x, here.y, next.x, next.y]] = true
+	marker._step_approaching(0.5)
+	# "It must not move" is the wrong assertion and this test made it twice.
+	# A rail is an EDGE you may not CROSS, and WalkGate deliberately slides
+	# along the free axis rather than freezing -- so the farmer legitimately
+	# drifts sideways here. What must not happen is arriving in `next`.
+	assert_eq(
+		_tile_of(marker.position), here,
+		"somebody else's fence is still a fence: it may slide, not cross"
+	)
+
+
+## The exemption's cache is keyed on `home`, so a farmer whose farmhouse
+## moves cannot keep answering with the old field's cells.
+func test_moving_the_farmhouse_moves_which_beds_count_as_its_own():
+	_farmer_walking_to_its_bed()
+	var first: Dictionary = marker.own_field_cells().duplicate()
+	marker.home = Vector2(600.0, 600.0)
+	var second: Dictionary = marker.own_field_cells()
+	assert_ne(first.keys(), second.keys(), "the cache may not outlive the home it was built for")

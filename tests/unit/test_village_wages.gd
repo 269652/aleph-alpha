@@ -279,3 +279,71 @@ func test_a_negative_headcount_counts_as_nobody_rather_than_a_nonsense_rate():
 		EPSILON,
 		"an entirely nonsense census must levy nothing at all"
 	)
+
+
+# -- tax is a transfer, so it must be taken from somebody ------------------
+#
+# Asked directly: "Gold should only be conjured by the travelling
+# merchant". _collect_estate_tax credited the purse and debited nobody, so
+# it was a second faucet (docs/concept/traveling_merchants.md, "The
+# merchant is the ONLY faucet"). What a village is OWED is
+# estate_tax_for's answer; what it can actually COLLECT is bounded by what
+# its households hold, and the coins really leave their wallets.
+
+
+func _sum(values: Array) -> int:
+	var total := 0
+	for value in values:
+		total += int(value)
+	return total
+
+
+func test_a_household_pays_from_what_it_holds():
+	assert_eq(VillageWages.tax_debits([5, 5], 4), [4, 0], "the first covers it")
+
+
+func test_a_demand_bigger_than_one_purse_spills_to_the_next():
+	assert_eq(VillageWages.tax_debits([3, 9], 7), [3, 4])
+
+
+## The invariant that makes this a transfer rather than a faucet: nobody is
+## ever debited more than they have, so no gold is invented by collecting.
+func test_no_household_is_ever_debited_more_than_it_holds():
+	var balances := [2, 0, 7, 1]
+	for owed in [0, 1, 5, 10, 99]:
+		var debits := VillageWages.tax_debits(balances, owed)
+		assert_eq(debits.size(), balances.size(), "one debit per household")
+		for i in balances.size():
+			assert_true(
+				int(debits[i]) >= 0 and int(debits[i]) <= int(balances[i]),
+				"household %d paid %s of %s" % [i, str(debits[i]), str(balances[i])]
+			)
+
+
+func test_a_village_collects_what_is_there_not_what_it_is_due():
+	var balances := [1, 1]
+	assert_eq(_sum(VillageWages.tax_debits(balances, 50)), 2, "no arrears are invented")
+
+
+func test_collecting_nothing_takes_nothing():
+	assert_eq(VillageWages.tax_debits([4, 4], 0), [0, 0])
+	assert_eq(VillageWages.tax_debits([], 5), [])
+
+
+## A negative or absurd demand is refused rather than paying households.
+func test_a_negative_demand_never_pays_anybody():
+	assert_eq(VillageWages.tax_debits([4], -3), [0])
+
+
+func test_an_empty_household_is_simply_skipped():
+	assert_eq(VillageWages.tax_debits([0, 0, 6], 4), [0, 0, 4])
+
+
+func test_the_collection_never_exceeds_what_is_owed():
+	assert_eq(_sum(VillageWages.tax_debits([10, 10], 3)), 3)
+
+
+func test_the_collection_is_deterministic():
+	var first := VillageWages.tax_debits([3, 3, 3], 5)
+	for _i in 4:
+		assert_eq(VillageWages.tax_debits([3, 3, 3], 5), first)

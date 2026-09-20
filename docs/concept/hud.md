@@ -61,6 +61,51 @@ The rule is **not** to reorder the layers but to hide the floaters:
 > pinned expression; `_any_gameplay_window_open()` is the same predicate
 > `EscapeAction.action_for` already treats as "a modal is open".
 
+### An affordance hint is wrong in planner mode, not merely covered
+
+Reported live with a screenshot: the build palette open, and *"Tree"*,
+*"Chop (Space)"* and an *"Iron Axe"* card all drawn straight over it.
+
+Two different faults, and it is worth keeping them apart because the fix for
+one is not the fix for the other.
+
+**The held-item card was simply in the wrong place.** It sits in the hotbar's
+own bottom-centre strip, naming what the hotbar's hand is holding, and
+`_apply_view_mode` gives that strip to the palette in planner mode — it hides
+`_hotbar` there. The card was added later and nobody hid it with the thing it
+belongs to. It now follows `ViewMode.shows_hotbar`, the same predicate the
+hotbar itself reads.
+
+**The prompt and the tooltip were a deeper mistake than occlusion.** The
+tempting fix is "do not draw a world hint over the palette", treating this as
+a z-order problem. But *"Chop (Space)"* is not a label that happened to land
+in a bad place — in planner mode there is no chopping. The hotbar is gone, the
+click plants a blueprint, and the key the prompt names does something else.
+The hint is **wrong**, not covered, and it would still be wrong drawn in an
+empty corner of the screen.
+
+So the rule is about the mode, not about the rectangle:
+
+> `ViewMode.shows_world_hints(mode)` is false in planner mode. An affordance
+> hint names an action the player could take right now; a mode that does not
+> offer that action must not advertise it.
+
+Readouts are explicitly **not** covered by this and keep their existing rule
+(`ViewMode.shows_readouts`, true in both modes): the minimap, the meters and
+the message stack report what is true, they do not offer an action, and the
+mode that is laying out a settlement is the one that most needs to know where
+it is.
+
+The charge meter goes with the hints rather than the readouts — it is the
+charge on a held stone, which is an RPG-mode action in progress.
+
+`_any_gameplay_window_open()` is **not** touched by any of this. It is
+Escape's notion of "a modal is open", and the palette is not a modal: Escape
+must not close the palette and strand a player in planner mode with no
+controls. The mode gate composes with the window gate at each call site
+instead — `world_hint_visible_for(can_show and shows_world_hints(mode), ...)`
+— so the two questions stay separate.
+
 That predicate is deliberately **not** widened:
 
 - The **settings overlay** pauses the tree (`get_tree().paused`), so
@@ -484,6 +529,44 @@ player reads them when debugging worldgen — while a frame counter is
 something you want visible while the thing it measures is going wrong,
 which is exactly when you are not thinking to press F3.
 
+### A panel occupies space; it does not choose coordinates
+
+Reported with both open: *"The Town Panel and Warehouse / Building panel
+overlap.. a panel should occupy space and make other panels render below
+it.. don't use fixed coords"*.
+
+The column system already said this in its own doc comment — *"each builder
+simply adds to the column it belongs in and never positions itself against
+its neighbour's height"* — and the building readout was the one card that
+never joined. It sat at `PRESET_CENTER_RIGHT`, a hand-picked 24px from the
+edge and 180px tall whatever it held, while the right column grew down from
+the minimap straight into it. The settlement card landing in that column is
+what finally made the collision visible; the panel had been placed against
+nothing all along.
+
+The rule, now pinned rather than merely written down:
+
+> A control that joins a HUD column is positioned **by** that column.
+> `_add_hud_card` and `offset_top`/`offset_bottom` in the same builder is a
+> contradiction, and `test_no_card_that_joins_a_column_also_places_itself`
+> fails on it — for every builder, not just the one that was reported.
+
+Two properties fall out of the container rather than being arranged, and
+both are tested against a real `HousePanel` in a real `VBoxContainer`
+(`test_hud_panel_flow.gd`) instead of asserted about constants:
+
+- **A taller card above pushes the one below further down.** That is what
+  "occupies space" means, and it is exactly what a hand-picked offset
+  cannot do.
+- **A closed panel leaves no hole.** A hidden child of a `VBox` takes no
+  room — the same property the message stack above already relies on — so
+  the building readout costs nothing while it is shut.
+
+Ordering within the column is a judgement, not a constraint: the standing
+readouts (where you are, when you are, what this place is doing) come
+first, and the readout a *click* opens comes last, so it appears beneath
+them rather than shoving them about.
+
 ## Status
 
 - ✅ **The settlement card** (`src/ui/settlement_readout.gd`, 17 tests) —
@@ -536,6 +619,14 @@ which is exactly when you are not thinking to press F3.
   minimap, top-right. `World.karma_display_text`/`karma_display_color`
   are the pure, tested halves (`test_world_hud.gd`): a signed number,
   coloured gold/red/neutral by sign.
+- ✅ **Every HUD card is laid out by its column** (2026-09-20) — the
+  building readout joined the right-hand column; it was the last card
+  placed by hand, and it overlapped the settlement card. See "A panel
+  occupies space" above. Pinned three ways: the real stacking behaviour
+  against a real `HousePanel`, a source-contract check on the builder, and
+  a generalised one over *every* builder that adds a card, so the next one
+  cannot reintroduce it. `test_hud_panel_flow.gd` 6/6; rendered for a look
+  with `tools/probe_hud_column_flow.gd`.
 - ✅ **One shared mark for "this one is selected"** (2026-09-20) —
   `UiTheme.selected_button_stylebox` / `BUTTON_SELECTED`, pinned by
   `test_ui_theme.gd` against the measured failure it replaced: the
@@ -590,6 +681,13 @@ which is exactly when you are not thinking to press F3.
   what the geometry tests could not: inside a row the track stretched and
   stopped being a pill, now pinned by
   `test_the_switch_keeps_its_own_height_inside_a_row`.
+- ✅ **Nothing is drawn over the build palette** (2026-09-20, reported with a
+  screenshot) — `ViewMode.shows_world_hints` gates the interaction prompt,
+  the hover tooltip and the charge meter; the held-item card follows
+  `ViewMode.shows_hotbar`, the strip it lives in. `_any_gameplay_window_open`
+  is untouched, so Escape still cannot close the palette. Tested
+  (`test_view_mode.gd`, `test_world_planner_mode_wiring.gd`) and rendered
+  (`tools/probe_hud_layout.gd -- 1.0 planner`).
 - 🚧 **Not verified in a live session.** Every check above is headless: unit
   tests plus offscreen renders of the real builders. Nobody has yet pressed
   F3, dragged the scale slider or watched a chip appear in a running game.

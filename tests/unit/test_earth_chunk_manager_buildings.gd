@@ -492,6 +492,7 @@ func test_a_taller_building_still_overhangs_north_of_its_footprint():
 # up marking something other than what a player actually walks into.
 
 const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 
 
 func _building_child_named(origin_local: Vector2i, child_name: String) -> Node:
@@ -558,3 +559,113 @@ func test_the_kerb_is_drawn_beneath_the_building_it_marks():
 		node.get_children().find(kerb), node.get_children().find(art),
 		"a kerb drawn over the walls would be a box round the house, not a plot marked on the ground"
 	)
+
+
+# -- a farmhouse stands in its own yard -------------------------------------
+#
+# Asked for directly, with the art dropped in: *"I added
+# farmhouse_bg_overlay.png which should be rendered as background behind the
+# 3x2 farmhouse it should use a random variation so that each farmhouses bg
+# looks different"*. See docs/concept/building.md, "A building's own yard,
+# drawn behind it".
+
+
+func test_a_farmhouse_draws_a_yard_behind_it():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var yard := _building_child_named(_origin, "Yard")
+	assert_not_null(yard, "a farmhouse stands in a yard")
+	assert_true(yard is Sprite2D)
+	assert_not_null((yard as Sprite2D).texture, "...with real art in it")
+
+
+## Order is the whole point of calling it a BACKGROUND: children paint in
+## tree order, so the yard lies on the ground the kerb marks out and the
+## house stands on top of it.
+func test_the_yard_paints_under_the_house_and_over_the_kerb():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(_origin)
+	var kerb_at := node.get_node("FootprintKerb").get_index()
+	var yard_at := node.get_node("Yard").get_index()
+	var art_at := node.get_node("Art").get_index()
+	assert_lt(kerb_at, yard_at, "the kerb is the ground, so it paints first")
+	assert_lt(yard_at, art_at, "the yard is behind the house, not in front of it")
+
+
+## A building with no yard declared is untouched -- which is what makes it
+## safe to wire this without auditing every building in the catalog.
+func test_a_building_with_no_yard_declared_grows_no_yard_node():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	assert_null(_building_child_named(_origin, "Yard"), "no yard art, no yard node")
+
+
+## The yard is the plot's, so it is drawn to the same width the house is --
+## never wider than the ground it stands on.
+func test_the_yard_is_drawn_to_the_same_width_as_the_house():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var yard: Sprite2D = _building_child_named(_origin, "Yard")
+	var art: Sprite2D = _building_child_named(_origin, "Art")
+	assert_almost_eq(
+		yard.texture.get_width() * yard.scale.x,
+		float(art.texture.get_width()) * art.scale.x, 1.0,
+		"the yard covers the plot the house covers"
+	)
+
+
+## A yard is the ground a building stands IN (BuildingCatalog.background_
+## sheet_for, added in parallel with this kerb), and it is drawn AFTER the
+## kerb -- children paint in tree order, so the yard is over the line round
+## the plot. The only reason the kerb is still visible under it is that the
+## yard art never reaches the plot's own edge: measured on
+## farmhouse_bg_overlay.png, 0 of 5118 pixels in the outer three-pixel band
+## are opaque.
+##
+## Pinned rather than assumed, and pinned HERE rather than reordering the
+## two: yard art delivered one day with its scene bled to the edge would
+## quietly erase the kerb of every building that stands in one, and the
+## first anybody would know is a screenshot.
+func test_a_yard_never_paints_over_the_kerb_at_the_plots_own_edge():
+	var sheet := BuildingCatalog.background_sheet_for("farmhouse", 5)
+	assert_false(sheet.is_empty(), "precondition: a farmhouse really stands in a yard")
+	var frame: Image = IllustratedStructureSprite.new().sheet_frame_image(
+		String(sheet["path"]), int(sheet["columns"]), int(sheet["rows"]),
+		int(sheet["row"]), int(sheet["column"])
+	)
+	assert_not_null(frame, "precondition: the yard art is really on disk")
+	var width := frame.get_width()
+	var height := frame.get_height()
+	var opaque := 0
+	var sampled := 0
+	for x in width:
+		for y in [0, 1, 2, height - 3, height - 2, height - 1]:
+			sampled += 1
+			opaque += 1 if frame.get_pixel(x, int(y)).a > 0.5 else 0
+	for y in height:
+		for x in [0, 1, 2, width - 3, width - 2, width - 1]:
+			sampled += 1
+			opaque += 1 if frame.get_pixel(int(x), y).a > 0.5 else 0
+	assert_lt(
+		float(opaque) / float(sampled), 0.01,
+		"a yard drawn to the plot's edge hides the kerb that marks the hitbox"
+	)
+
+
+## And the kerb still lies under the BUILDING, which is what keeps it a
+## plot marked on the ground rather than a box round the walls.
+func test_the_kerb_is_drawn_beneath_the_yard_and_the_building_alike():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(_origin)
+	var kerb := _building_child_named(_origin, "FootprintKerb")
+	var art := _building_child_named(_origin, "Art")
+	assert_lt(node.get_children().find(kerb), node.get_children().find(art))
+
+
+## End to end, because a catalog answer nothing draws is a comment: a hut
+## placed in the world really grows the yard node it borrows.
+func test_a_placed_fisher_hut_stands_in_a_borrowed_yard():
+	assert_true(manager.place_building(_chunk_coord, _origin, "fisher_hut", Vector2i(0, 1), 5, ""))
+	assert_not_null(
+		_building_child_named(_origin, "Yard"),
+		"a hut drawn as a farmhouse must stand in a farmhouse's yard"
+	)
+	var art := _building_child_named(_origin, "Art") as Sprite2D
+	assert_not_null(art, "and still draw the building itself")

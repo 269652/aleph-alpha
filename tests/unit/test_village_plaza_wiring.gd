@@ -121,11 +121,20 @@ func test_the_squares_props_are_sited_by_the_same_water_rule():
 	var source := FileAccess.get_file_as_string("res://src/rendering/village_renderer.gd")
 	var at := source.find("_settlement_generator.generate_settlement(")
 	assert_gt(at, -1, "the premise: the renderer still generates settlements")
-	var call_text := source.substr(at, 700)
-	assert_false(
-		call_text.contains("_is_buildable_local("),
-		"the square's props are sited by ground that MOVES: %s" % call_text
-	)
+	# EVERY call site, not the first. Founding is not the only one: the
+	# newcomer pass re-derives the same settlement to place arrivals, and a
+	# second call site reading the other predicate is exactly the drift this
+	# test exists to catch -- it landed once already, in a merge.
+	var seen := 0
+	while at > -1:
+		seen += 1
+		var call_text := source.substr(at, 700)
+		assert_false(
+			call_text.contains("_is_buildable_local("),
+			"the square's props are sited by ground that MOVES: %s" % call_text
+		)
+		at = source.find("_settlement_generator.generate_settlement(", at + 1)
+	assert_gt(seen, 0, "the premise: the renderer still generates settlements")
 
 
 ## Both memos are per-village scratch (the square does not move while one is
@@ -138,3 +147,17 @@ func test_every_per_village_memo_is_cleared_together():
 			source.contains("%s.clear()" % memo),
 			"%s is never cleared, so it leaks across villages" % memo
 		)
+	# ...and cleared TOGETHER, wherever one of them is: a pass that resets
+	# the ground answers but keeps the square's is a pass that reasons about
+	# two different villages at once.
+	var at := source.find("_buildable_memo.clear()")
+	var seen := 0
+	while at > -1:
+		seen += 1
+		var nearby := source.substr(at, 120)
+		assert_true(
+			nearby.contains("_dry_memo.clear()") and nearby.contains("_skeleton_memo.clear()"),
+			"a memo reset that forgets the others: %s" % nearby
+		)
+		at = source.find("_buildable_memo.clear()", at + 1)
+	assert_gt(seen, 0, "the premise: the ground answers are still memoised per village")

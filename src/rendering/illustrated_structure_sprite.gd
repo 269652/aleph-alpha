@@ -305,11 +305,105 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	# side wall's own scale (the vertical run it caps), so its timber is
 	# exactly as thick as the run it meets; scaling it by its own length
 	# instead is what turned a post into a whole tile of rail.
+	# A straight run is scaled by the distance between its own two POST
+	# CENTRES, not by the length of its wood. Every cell of fence.png is a
+	# whole panel -- a post at EACH end -- so two panels whose wood merely
+	# MEETS put two posts at every junction a few pixels apart, reported with
+	# an enclosure in shot: *"the enclosures render unnecessary vertical
+	# rails"*. One tile between a panel's own posts puts them on its tile's
+	# two edges, where the neighbour's near post lands too, and the pair draw
+	# as one. See docs/concept/village_farms.md, "Consecutive rails SHARE a
+	# post".
+	#
+	# A CORNER takes this same rule, and must: its art IS the side column's
+	# art, so measuring that column's post spacing gives it exactly the side
+	# wall's own scale -- which is the rule the corner already had, stated
+	# against the wall rather than against its own length, and is what keeps
+	# its timber as thick as the run it meets.
+	var vertical_run := inner.x != 0
+	var spacing := _post_spacing_of(subject, image, vertical_run)
+	if spacing > 0.0:
+		return float(tile_size) / spacing
+	# No two post bands found: fall back to the older wood-spans-a-tile rule
+	# rather than returning a nonsense scale for art this cannot read. The
+	# corner keeps its own fallback, the side wall's rather than its own
+	# length's -- scaling a post as if it were a run is what once turned a
+	# corner into a whole tile of rail.
 	if inner.x != 0 and inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.y, 1))
 	if inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.x, 1))
 	return float(tile_size) / float(maxi(art.size.y, 1))
+
+
+## Measured once per subject: scanning a whole source cell per rail spawn
+## would be real work repeated for every rail in every enclosure.
+static var _post_spacing_cache: Dictionary = {}
+
+
+## How far apart a rail panel's two POST CENTRES are, along the axis its run
+## travels, in the source image's own pixels -- or 0.0 when two post bands
+## cannot be told apart, which the caller treats as "measurement failed".
+##
+## A post spans the panel's whole cross-axis and the rails between span only
+## their own bars, so posts stand out as slices of higher coverage. Reading
+## that reliably needs two guards, BOTH load-bearing and both found by
+## measuring the real sheet rather than reasoned about:
+##
+## - The threshold sits between the RAIL level (the median of the slices
+##   carrying content) and a robust high percentile, never at a fixed
+##   multiple of either. The front views' posts cover about twice their
+##   rails (0.53 vs 0.27), but the top views' end caps only about 1.3x their
+##   bar (0.13 vs 0.10) -- one fixed multiple cannot read both.
+## - The percentile is robust, not the plain maximum, and a band must be at
+##   least 2% of the run wide. The trimmed cells carry stray edge slices --
+##   including one FULLY OPAQUE column at the far end -- which own the
+##   maximum and otherwise swallow the entire run between them.
+static func _post_spacing_of(subject: String, image: Image, vertical_run: bool) -> float:
+	if _post_spacing_cache.has(subject):
+		return _post_spacing_cache[subject]
+	var along := image.get_height() if vertical_run else image.get_width()
+	var across := image.get_width() if vertical_run else image.get_height()
+	var coverage: Array[float] = []
+	var content: Array[float] = []
+	for i in range(along):
+		var opaque := 0
+		for j in range(across):
+			var pixel := image.get_pixel(j, i) if vertical_run else image.get_pixel(i, j)
+			if pixel.a > 0.5:
+				opaque += 1
+		var value := float(opaque) / float(maxi(across, 1))
+		coverage.append(value)
+		if value > 0.02:
+			content.append(value)
+	var spacing := 0.0
+	if content.size() >= 3:
+		content.sort()
+		var rail_level: float = content[content.size() / 2]
+		var high: float = content[mini(int(float(content.size()) * 0.9), content.size() - 1)]
+		var threshold: float = rail_level + (high - rail_level) * 0.4
+		var min_width: int = maxi(2, int(round(float(along) * 0.02)))
+		var bands: Array = []
+		var run_start := -1
+		for i in range(along):
+			var is_post: bool = coverage[i] >= threshold
+			if is_post and run_start < 0:
+				run_start = i
+			if (not is_post) and run_start >= 0:
+				if i - run_start >= min_width:
+					bands.append([run_start, i - 1])
+				run_start = -1
+		if run_start >= 0 and along - run_start >= min_width:
+			bands.append([run_start, along - 1])
+		if bands.size() >= 2:
+			var first: Array = bands[0]
+			var last: Array = bands[bands.size() - 1]
+			spacing = (
+				(float(last[0]) + float(last[1])) * 0.5
+				- (float(first[0]) + float(first[1])) * 0.5
+			)
+	_post_spacing_cache[subject] = spacing
+	return spacing
 
 
 ## Where a subject's footprint_texture really stands INSIDE its own tile, as
@@ -513,7 +607,10 @@ func explicit_frame_image(
 	var frame := image.get_region(rect)
 	if frame.get_format() != Image.FORMAT_RGBA8:
 		frame.convert(Image.FORMAT_RGBA8)
-	_key_and_despill(frame, true)
+	if _CHECKERBOARD_SHEETS.has(path):
+		_flood_off_checkerboard(frame)
+	else:
+		_key_and_despill(frame, true)
 	_sheet_frame_cache[key] = frame
 	return frame
 
@@ -554,7 +651,10 @@ func _frame_image(path: String, columns: int, rows: int, row: int, column: int, 
 	var frame := image.get_region(rect)
 	if frame.get_format() != Image.FORMAT_RGBA8:
 		frame.convert(Image.FORMAT_RGBA8)
-	_key_and_despill(frame, true)
+	if _CHECKERBOARD_SHEETS.has(path):
+		_flood_off_checkerboard(frame)
+	else:
+		_key_and_despill(frame, true)
 	_sheet_frame_cache[key] = frame
 	return frame
 
@@ -809,6 +909,160 @@ static func even_cell_crop(
 		cell.position.y + inset,
 		maxi(1, cell.size.x - inset * 2),
 		maxi(1, cell.size.y - inset * 2)
+	)
+
+
+## Sheets whose transparency is a painted grey-and-white CHECKERBOARD rather
+## than a flat key colour -- delivered with no alpha channel at all (see
+## docs/concept/building.md, "A building's own yard, drawn behind it").
+##
+## Listed by path rather than threaded through footprint_frame_texture as a
+## parameter: which key a SHEET needs is a fact about that file, the same way
+## IllustratedTerrainSprite keeps soil.png's own gutter colour with the
+## sheet rather than at the call site.
+const _CHECKERBOARD_SHEETS := {
+	"res://assets/sprites/buildings/farmhouse_bg_overlay.png": true,
+}
+
+## How unsaturated and how bright a pixel must be to be checkerboard at all.
+## The checker's two tones measure (253, 253, 253) and about (213, 213, 213),
+## so both clear these comfortably while the art's own lightest real colour
+## -- the sandy path -- does not, being visibly warm.
+const _CHECKER_MAX_CHANNEL_SPREAD := 0.06
+const _CHECKER_MIN_CHANNEL := 0.78
+
+## The checker's two squares are anti-aliased into each other, and into the
+## art, so the pixels along every square's edge land at everything between
+## the two tones and below. The seed threshold above cannot be loosened to
+## take those -- at that width it would also swallow a grey rock -- so the
+## flood WIDENS by a bounded few pixels from background it has already
+## cleared, under a looser rule. Anti-aliasing is one or two pixels wide, so
+## a bounded widening cannot reach a rock's interior however grey it is.
+##
+## Measured before it: 338 opaque unsaturated pixels survived in one yard,
+## about 40 of them real white flower highlights; pinned now by
+## test_no_grey_checkerboard_fringe_survives_around_a_yard.
+const _CHECKER_FRINGE_MIN_CHANNEL := 0.55
+const _CHECKER_FRINGE_MAX_CHANNEL_SPREAD := 0.09
+const _CHECKER_FRINGE_DEPTH := 2
+
+## The checker's DARKER square, which is a safe seed anywhere in the cell --
+## not only at the border. Its two tones measure about 253 and 213: a white
+## flower highlight sits at 235 and above, so nothing in the art is this
+## particular grey. Seeding from it as well as from the border is what
+## clears the checker seen through small gaps in the foliage, which is
+## enclosed by art and so is never reachable from the cell's own edge.
+## Measured: 86 such pixels in one cell.
+const _CHECKER_DARK_MIN_CHANNEL := 0.76
+const _CHECKER_DARK_MAX_CHANNEL := 0.91
+
+
+## Clears the checkerboard a yard sheet paints instead of transparency, by
+## flooding inward from the cell's own edges.
+##
+## A FLOOD, not a flat key, and the difference is the whole point: the
+## checker's lighter square and the art's white flower highlights are THE
+## SAME COLOUR. The tones measure about 253 and 213; a flower highlight sits
+## at 235 and above. Measured, one source cell holds 46,354 near-white
+## pixels, almost all of them checker, and 63 survive keying at drawn size
+## -- those are the flowers, and a flat key takes every one of them.
+##
+## What separates them is connectivity, not colour: the checker reaches the
+## cell's own edge and a flower enclosed in foliage does not.
+##
+## Unlike IllustratedCharacterSprite's own flood (head.png), this one steps
+## between the checker's two tones freely rather than within a per-step
+## tolerance: those differ by about 40/255, far wider than any tolerance
+## would allow, because what is followed here is a KNOWN two-tone pattern
+## rather than an unknown gradient into the art.
+static func _flood_off_checkerboard(image: Image) -> void:
+	var width := image.get_width()
+	var height := image.get_height()
+	if width <= 0 or height <= 0:
+		return
+	var cleared := {}
+	var queue: Array[Vector2i] = []
+	for x in range(width):
+		for y in [0, height - 1]:
+			var edge := Vector2i(x, y)
+			if not cleared.has(edge) and _is_checkerboard(image.get_pixelv(edge)):
+				cleared[edge] = true
+				queue.append(edge)
+	for y in range(height):
+		for x in [0, width - 1]:
+			var edge := Vector2i(x, y)
+			if not cleared.has(edge) and _is_checkerboard(image.get_pixelv(edge)):
+				cleared[edge] = true
+				queue.append(edge)
+	# ...and from the darker square anywhere in the cell, which no part of
+	# the art shares, so checker showing through a gap in the foliage is
+	# cleared even though it cannot be reached from the edge.
+	for y in range(height):
+		for x in range(width):
+			var inside := Vector2i(x, y)
+			if not cleared.has(inside) and _is_dark_checker(image.get_pixelv(inside)):
+				cleared[inside] = true
+				queue.append(inside)
+	var head := 0
+	while head < queue.size():
+		var at: Vector2i = queue[head]
+		head += 1
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = at + step
+			if next.x < 0 or next.y < 0 or next.x >= width or next.y >= height:
+				continue
+			if cleared.has(next) or not _is_checkerboard(image.get_pixelv(next)):
+				continue
+			cleared[next] = true
+			queue.append(next)
+	# ...then widen by a bounded depth, so the checker's anti-aliased edges
+	# go with it without the seed rule having to be loose enough to eat art.
+	var frontier: Array[Vector2i] = queue
+	for _depth in range(_CHECKER_FRINGE_DEPTH):
+		var next_frontier: Array[Vector2i] = []
+		for at in frontier:
+			for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var near: Vector2i = at + step
+				if near.x < 0 or near.y < 0 or near.x >= width or near.y >= height:
+					continue
+				if cleared.has(near) or not _is_checker_fringe(image.get_pixelv(near)):
+					continue
+				cleared[near] = true
+				next_frontier.append(near)
+		frontier = next_frontier
+
+	for cell in cleared:
+		image.set_pixelv(cell, Color(0, 0, 0, 0))
+
+
+## The looser rule the bounded widening uses -- grey, and bright enough to
+## be a checker edge rather than a shadow, but reachable only from
+## background already cleared and only _CHECKER_FRINGE_DEPTH pixels deep.
+static func _is_checker_fringe(color: Color) -> bool:
+	var lowest: float = minf(color.r, minf(color.g, color.b))
+	var highest: float = maxf(color.r, maxf(color.g, color.b))
+	return (
+		lowest >= _CHECKER_FRINGE_MIN_CHANNEL
+		and highest - lowest <= _CHECKER_FRINGE_MAX_CHANNEL_SPREAD
+	)
+
+
+static func _is_dark_checker(color: Color) -> bool:
+	var lowest: float = minf(color.r, minf(color.g, color.b))
+	var highest: float = maxf(color.r, maxf(color.g, color.b))
+	return (
+		lowest >= _CHECKER_DARK_MIN_CHANNEL
+		and lowest <= _CHECKER_DARK_MAX_CHANNEL
+		and highest - lowest <= _CHECKER_MAX_CHANNEL_SPREAD
+	)
+
+
+static func _is_checkerboard(color: Color) -> bool:
+	var lowest: float = minf(color.r, minf(color.g, color.b))
+	var highest: float = maxf(color.r, maxf(color.g, color.b))
+	return (
+		lowest >= _CHECKER_MIN_CHANNEL
+		and highest - lowest <= _CHECKER_MAX_CHANNEL_SPREAD
 	)
 
 

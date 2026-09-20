@@ -220,6 +220,42 @@ rails/posts and plant_fibre (4) lashing them".
   axes of a corner, so the frame touches the crop on every side without ever
   covering it.
 
+- **Consecutive rails SHARE a post — they do not merely meet.** Reported
+  with a finished enclosure in shot: *"the enclosures render unnecessary
+  vertical rails"*.
+
+  Every cell of `fence.png` is a whole panel: a post at **each** end with
+  rails between (the sheet's four columns are North/South front views and
+  East/West top views, all the same design). An earlier pass — *"also
+  scale"* — made a rail's wood span exactly one tile so that consecutive
+  rails MEET with no gap. That closed the gaps and left the real problem
+  untouched: two whole panels meeting put **two posts** at every junction, a
+  few pixels apart, which is what reads as a doubled or unnecessary rail.
+
+  A run of six rails should show seven posts, not twelve. So a rail is
+  scaled so the distance between **its own two post centres** is exactly one
+  tile, rather than so its whole wood is. Its two posts then land precisely
+  on its tile's two edges, the neighbour's near post lands on the same
+  point, and the two draw over each other as one — the outer half of each
+  end post overhanging into the next tile is the same post that tile draws
+  for itself.
+
+  The number is MEASURED from the art, never assumed: `_post_spacing_of`
+  classifies each slice of the panel against the **rail** level (the median
+  of the slices carrying any content) rather than against the peak, and
+  requires a post band to be at least 2% of the run wide. Both guards are
+  load-bearing — the trimmed cells carry stray edge slices, including one
+  fully opaque column at the far end, that own the peak and otherwise
+  swallow the whole run. Measured this way all four facings agree, at source
+  resolution and at drawn resolution alike: the posts sit about 0.62–0.65 of
+  the run apart, which at a 16px tile had them **12.5–13.0px apart inside a
+  16px tile**.
+
+  The consequence, stated plainly: the timber is drawn about a quarter
+  thicker than before, because the scale is uniform on both axes (this
+  project does not stretch art along one axis to fit). A fence that shares
+  its posts is necessarily a little heavier than one that merely abuts.
+
 - **A corner post has a ground POINT, not a ground line.** Reported with all
   three visible corners crossed out (*"the fences still aren't optimal"*).
   A corner knew only which side WALL it capped, so its art was placed as a
@@ -811,6 +847,31 @@ again.
   time.
 - **[village_growth.md](village_growth.md)** — the farmhouse is already on
   the growth ladder; this gives it a worker and a purpose.
+
+### The rail's own hitbox
+
+Every walker but one already respected the rails: `rails_block_step` is an
+ask-before-you-step query, and a marker is a `Sprite2D` that asks it. The
+**player** is a real `CharacterBody2D`, which cannot ask anything -- it needs
+something in the world to hit, and a rail is not a `BuildingPiece`, so
+nothing was ever spawned for it. The player walked through every fence in the
+game (reported, and carried open for several rounds).
+
+The fix is an **edge** body, never a tile-sized one, because a rail stands on
+the inner edge of its cell and the rest of that cell is street.
+`fence_collider_normal` and `fence_collider_rect` own it, reading the same
+inner edge `rails_block_step` shuts -- so what stops the player and what
+stops everybody else cannot drift apart.
+
+A **corner post gets none.** Its inner direction is diagonal, so an edge
+collider would lie along one of the two runs it caps, and walling either
+would shut the walkable ring -- the same thing `_rail_stops_step` already
+refuses for the same reason. The diagonal it blocks is closed by the two
+neighbouring runs' colliders meeting at the shared corner.
+
+`FENCE_COLLIDER_THICKNESS_PX` is derived and test-bounded on both sides: at
+least one 60Hz tick of the fastest the player can be (a maximum-fitness
+mount, 3.0 px), and at most a quarter tile so it stays a line.
 
 ## Status
 

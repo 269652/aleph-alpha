@@ -115,7 +115,14 @@ static func min_households_for(building_id: String) -> int:
 ## _present_structure_ids_for_settlement_chunk) -- anything not in it is
 ## treated as unbuilt, which is exactly the right reading for a rung that
 ## burned down or was never raised.
-static func next_building(household_count: int, housed_count: int, present_building_ids: Array) -> String:
+## `spare_house_capacity` is how many places stand empty in houses that are
+## already built. It defaults to 1 -- "there is already room" -- so a caller
+## that does not know or care gets exactly the ladder it always got, rather
+## than the lowest rung firing for everybody.
+static func next_building(
+	household_count: int, housed_count: int, present_building_ids: Array,
+	spare_house_capacity: int = 1
+) -> String:
 	if household_count <= 0:
 		return ""
 	if housed_count < household_count:
@@ -125,6 +132,20 @@ static func next_building(household_count: int, housed_count: int, present_build
 			continue
 		if household_count >= min_households_for(building_id):
 			return building_id
+	# The lowest rung: a house for nobody in particular.
+	#
+	# A household only moves in where a real empty house already stands
+	# (VillageImmigration.arrivals), and priority 1 above only ever fires for
+	# somebody who is ALREADY here with nowhere to live. So a village whose
+	# people are all housed would owe itself nothing, build nothing, and
+	# never have the spare roof an arrival needs -- it would stop growing for
+	# good the moment it caught up with itself. Room is made first and moved
+	# into afterwards.
+	#
+	# Below the civic and production rungs on purpose: a village finishes
+	# what it already owes itself before it makes room for strangers.
+	if spare_house_capacity <= 0:
+		return BuildingCatalog.BUILDING_IDS[0]
 	return ""
 
 

@@ -534,16 +534,33 @@ func test_every_rail_is_moved_off_the_middle_of_its_tile():
 		)
 
 
-## And it moves TOWARD the beds, never away from them.
-func test_the_offset_moves_the_art_toward_the_beds():
+## And the art ends up against the edge facing the beds.
+##
+## **Rewritten 2026-09-20.** This used to assert that the OFFSET VECTOR
+## points toward the beds, which only holds while the art is SMALLER than
+## its tile. A rail is scaled by its own post spacing now (see "consecutive
+## rails share a post" below), so it is drawn larger than its tile: the
+## band already starts outside the tile, and landing it flush against the
+## edge facing the beds means pushing it back the other way. The offset's
+## sign stopped meaning what this asserted; where the wood LANDS is what the
+## rule was always about, and it is unchanged.
+##
+## Corners are held to both of their axes, which is the whole point of
+## naming both sides (`corner_nw`/`ne`/`sw`/`se`).
+func test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds():
 	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
-		var offset: Vector2 = sprite.footprint_offset(subject, _TILE)
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
-		assert_gt(
-			offset.dot(Vector2(inner)), 0.0,
-			"%s's art must move toward its own beds, not away from them" % subject
-		)
+		var placed := _placed_wood_rect(subject)
+		if inner.x > 0:
+			assert_almost_eq(placed.end.x, float(_TILE), _EDGE_TOLERANCE, subject)
+		elif inner.x < 0:
+			assert_almost_eq(placed.position.x, 0.0, _EDGE_TOLERANCE, subject)
+		if inner.y > 0:
+			assert_almost_eq(placed.end.y, float(_TILE), _EDGE_TOLERANCE, subject)
+		elif inner.y < 0:
+			assert_almost_eq(placed.position.y, 0.0, _EDGE_TOLERANCE, subject)
+
 
 
 ## Everything that is a whole building standing on its own tile is
@@ -564,22 +581,33 @@ func test_every_other_subject_still_stands_in_the_middle_of_its_tile():
 # exactly one tile along the direction its run travels.
 
 
-func test_a_broadside_runs_wood_spans_exactly_one_tile_across():
+## **Rewritten 2026-09-20**, and the old rule is worth stating because it was
+## deliberate: a rail's wood used to span EXACTLY one tile, so consecutive
+## rails met "with no gap and no overlap". That closed the gaps and left the
+## real defect standing -- two whole panels meeting put TWO posts at every
+## junction, reported with an enclosure in shot: *"the enclosures render
+## unnecessary vertical rails"*.
+##
+## A rail now overlaps its neighbour by exactly the post they SHARE, so its
+## wood spans one tile plus one post rather than one tile. The post spacing
+## is the property that matters and is pinned directly above; this pins the
+## consequence, and that the overlap is a post's width rather than anything
+## larger.
+func test_a_broadside_runs_wood_spans_one_tile_plus_the_post_it_shares():
 	for facing in ["north", "south"]:
 		var placed := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
-		assert_almost_eq(
-			placed.size.x, float(_TILE), _EDGE_TOLERANCE,
-			"a %s run must meet the next one along its row, with no gap and no overlap" % facing
+		assert_gt(placed.size.x, float(_TILE), "a %s run overlaps its neighbour" % facing)
+		assert_lt(
+			placed.size.x, float(_TILE) * 1.5,
+			"...by one shared post, not by half a rail" % []
 		)
 
 
-func test_a_top_view_runs_wood_spans_exactly_one_tile_down():
+func test_a_top_view_runs_wood_spans_one_tile_plus_the_post_it_shares():
 	for facing in ["east", "west"]:
 		var placed := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
-		assert_almost_eq(
-			placed.size.y, float(_TILE), _EDGE_TOLERANCE,
-			"a %s run must meet the next one down its column" % facing
-		)
+		assert_gt(placed.size.y, float(_TILE), "a %s run overlaps its neighbour" % facing)
+		assert_lt(placed.size.y, float(_TILE) * 1.5, "...by one shared post")
 
 
 ## Scaling by the run must not break where the run SITS -- flush against its
@@ -921,3 +949,227 @@ func _is_rule_line_row(image: Image, y: int) -> bool:
 	if opaque < int(float(width) * 0.8):
 		return false
 	return float(pale) / float(maxi(opaque, 1)) >= 0.5
+
+
+# -- and consecutive rails SHARE a post, rather than merely meeting ---------
+#
+# Reported with a finished enclosure in shot: *"the enclosures render
+# unnecessary vertical rails"*.
+#
+# Every cell of fence.png is a whole panel -- a post at EACH end with rails
+# between. Making a rail's wood span exactly one tile (the "also scale" pass
+# above) closed the gaps between rails and left this untouched: two whole
+# panels meeting put TWO posts at every junction, a few pixels apart, which
+# is what reads as a doubled rail. A run of six rails showed twelve posts
+# where it should show seven.
+#
+# The fix is one number, and it is measured from the art rather than assumed
+# (see _post_spacing_of): a rail is scaled so its own two POST CENTRES sit
+# exactly one tile apart. Its posts then land on its tile's two edges, the
+# neighbour's near post lands on the same point, and the two draw as one.
+
+
+## The distance between the drawn panel's two post centres, along the axis
+## its run travels -- measured on the DRAWN texture, so this checks the
+## result a player sees rather than the arithmetic that produced it. Uses
+## IllustratedStructureSprite's own reader, since inventing a second one here
+## would just be a second thing to get wrong; the reader ITSELF is pinned
+## against the real sheet by the art-fact test below.
+func _drawn_post_spacing(subject: String) -> float:
+	var image := sprite.footprint_texture(subject, _TILE).get_image()
+	var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
+	# a fresh key per call: the production cache is keyed by SUBJECT, and the
+	# drawn image is not the source one it was measured from
+	return IllustratedStructureSprite._post_spacing_of(
+		"drawn:%s:%d" % [subject, _TILE], image, inner.x != 0
+	)
+
+
+## The reader is only trustworthy if it finds real posts in the real sheet,
+## so pin what it measures at SOURCE resolution: all four facings are the
+## same panel design, and their posts sit around 0.62-0.65 of the run apart.
+## If the art is ever redrawn or re-exported this fails and says so, rather
+## than silently rescaling every fence in the world.
+func test_the_post_reader_finds_two_posts_about_two_thirds_of_the_run_apart():
+	for facing in ["north", "south", "east", "west"]:
+		var subject := VillageFarm.fence_tile_for(facing)
+		var source := sprite.idle_texture(subject).get_image()
+		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
+		var vertical_run: bool = inner.x != 0
+		var along := source.get_height() if vertical_run else source.get_width()
+		var spacing: float = IllustratedStructureSprite._post_spacing_of(
+			"source:%s" % subject, source, vertical_run
+		)
+		assert_between(
+			spacing / float(along), 0.55, 0.72,
+			"%s: two posts, about two thirds of the run apart" % facing
+		)
+
+
+## The reported defect itself, on every facing: one tile between a rail's own
+## two posts is what makes the next rail's post land on the same spot.
+func test_consecutive_rails_share_a_post_rather_than_doubling_it():
+	for facing in ["north", "south", "east", "west"]:
+		var subject := VillageFarm.fence_tile_for(facing)
+		assert_almost_eq(
+			_drawn_post_spacing(subject), float(_TILE), 1.0,
+			"a %s rail's posts must sit one tile apart, so the next rail shares one" % facing
+		)
+
+
+## Six rails in a row show SEVEN posts -- the property stated the way a
+## player counts it, and checked by actually laying six rails out and
+## counting, rather than by deriving a number from the spacing above.
+##
+## Composited exactly as EarthChunkManager._spawn_structure_art_for places
+## them: each panel centred on its own tile, bottom-anchored, shifted by
+## footprint_offset. The end posts come out a shade narrower than the inner
+## ones because half of each hangs past the end of the run, which is what an
+## end post should do.
+func test_a_run_of_six_rails_really_shows_seven_posts():
+	const RUN := 6
+	var subject := "farm_fence_north"
+	var panel := sprite.footprint_texture(subject, _TILE).get_image()
+	var offset: Vector2 = sprite.footprint_offset(subject, _TILE)
+	var canvas := Image.create(
+		RUN * _TILE + panel.get_width(), _TILE * 2, false, Image.FORMAT_RGBA8
+	)
+	for i in range(RUN):
+		var centre_x := float(i) * _TILE + _TILE * 0.5
+		var left := int(round(centre_x - float(panel.get_width()) * 0.5 + offset.x))
+		var top := int(round(float(_TILE) - float(panel.get_height()) + offset.y)) + _TILE / 2
+		canvas.blend_rect(
+			panel, Rect2i(Vector2i.ZERO, panel.get_size()),
+			Vector2i(left + panel.get_width() / 2, maxi(top, 0))
+		)
+	assert_eq(_posts_across(canvas), RUN + 1, "one post per tile boundary, and one at each end")
+
+
+## How many posts a composited run really shows: columns standing above the
+## rail level, in bands wide enough not to be a stray.
+func _posts_across(canvas: Image) -> int:
+	var coverage: Array[float] = []
+	var content: Array[float] = []
+	for x in range(canvas.get_width()):
+		var opaque := 0
+		for y in range(canvas.get_height()):
+			if canvas.get_pixel(x, y).a > 0.5:
+				opaque += 1
+		var v := float(opaque) / float(canvas.get_height())
+		coverage.append(v)
+		if v > 0.02:
+			content.append(v)
+	if content.size() < 3:
+		return 0
+	content.sort()
+	var rail_level: float = content[content.size() / 2]
+	var high: float = content[mini(int(float(content.size()) * 0.9), content.size() - 1)]
+	var threshold: float = rail_level + (high - rail_level) * 0.4
+	var posts := 0
+	var run_start := -1
+	for x in range(canvas.get_width()):
+		var is_post: bool = coverage[x] >= threshold
+		if is_post and run_start < 0:
+			run_start = x
+		if (not is_post) and run_start >= 0:
+			if x - run_start >= 3:
+				posts += 1
+			run_start = -1
+	if run_start >= 0 and canvas.get_width() - run_start >= 3:
+		posts += 1
+	return posts
+
+
+# -- a yard sheet's checkerboard is flooded off, not keyed off --------------
+#
+# farmhouse_bg_overlay.png (see docs/concept/building.md, "A building's own
+# yard, drawn behind it") has no alpha channel and paints its transparency as
+# a grey-and-white CHECKERBOARD -- a new problem here, since every other
+# sheet in this project keys flat magenta or near-black.
+#
+# A flat colour key cannot separate it from the art: the checker's lighter
+# square and the art's white flower highlights are the same colour -- the
+# tones measure about 253 and 213, a flower highlight sits at 235 and above.
+# Measured, one source cell holds 46,354 near-white pixels, almost all of
+# them checker, and 63 survive keying at drawn size; those are the flowers,
+# and a flat key takes every one. Connectivity is what separates them: the
+# checker reaches the cell's edge and a flower in foliage does not.
+
+const _YARD_SHEET := "res://assets/sprites/buildings/farmhouse_bg_overlay.png"
+
+
+## The outside is gone: a yard's own corners are background, so they must
+## come back fully transparent.
+func test_a_yards_checkerboard_corners_are_keyed_away():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	assert_not_null(texture, "the yard sheet loads")
+	var image := texture.get_image()
+	for corner in [
+		Vector2i(0, 0), Vector2i(image.get_width() - 1, 0),
+		Vector2i(0, image.get_height() - 1),
+		Vector2i(image.get_width() - 1, image.get_height() - 1),
+	]:
+		assert_almost_eq(
+			image.get_pixelv(corner).a, 0.0, 0.01,
+			"a yard's corner is background, not checkerboard"
+		)
+
+
+## And the inside survives: the art is still most of the cell. A flat
+## near-white key would take the flowers with it, so this fails loudly if
+## anyone ever swaps the flood for one.
+func test_a_yards_own_art_survives_the_key():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	var image := texture.get_image()
+	var opaque := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			if image.get_pixel(x, y).a > 0.5:
+				opaque += 1
+	var fraction := float(opaque) / float(image.get_width() * image.get_height())
+	assert_between(fraction, 0.3, 0.75, "a yard is a real scene, not a cleared square")
+
+
+## The flowers in particular: white, unsaturated, and NOT connected to the
+## cell's edge, so a flood can never reach them however white they are.
+func test_the_white_flowers_inside_a_yard_are_not_keyed_away():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	var image := texture.get_image()
+	var bright_kept := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			var pixel := image.get_pixel(x, y)
+			var channels := [pixel.r, pixel.g, pixel.b]
+			channels.sort()
+			var unsaturated: bool = channels[2] - channels[0] <= 0.08
+			if pixel.a > 0.5 and channels[0] >= 0.72 and unsaturated:
+				bright_kept += 1
+	assert_gt(bright_kept, 0, "white flowers are kept, being unreachable from the edge")
+
+
+## The checker's EDGES, not just its squares. Its two tones measure 253 and
+## 213, so the pixels where one square meets the next are anti-aliased to
+## everything in between -- and below, where a square meets the art. The
+## strict seed threshold cannot take those without also being loose enough
+## to eat a grey rock, so the flood widens by a bounded two pixels from
+## background it has already cleared.
+##
+## Measured before the widening: 82 px of grey fringe survived in one yard.
+## Only the GREYS are counted -- a near-white leftover is a flower highlight
+## and belongs there, which is what the test above guards.
+func test_no_grey_checkerboard_fringe_survives_around_a_yard():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	var image := texture.get_image()
+	var fringe := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			var lowest: float = minf(pixel.r, minf(pixel.g, pixel.b))
+			var highest: float = maxf(pixel.r, maxf(pixel.g, pixel.b))
+			# grey, bright, and NOT the near-white a flower highlight is
+			if highest - lowest <= 0.12 and lowest >= 0.58 and lowest < 0.97:
+				fringe += 1
+	var of_cell := float(fringe) / float(image.get_width() * image.get_height())
+	assert_lt(of_cell, 0.002, "a yard keeps no grey checker fringe (%d px)" % fringe)

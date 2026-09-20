@@ -436,6 +436,87 @@ beside a PAVED plot still blends toward it as though it were open ground
 arise today, since a paved plot is by definition ringed by paving rather
 than by earth.
 
+### A building's own yard, drawn behind it
+
+Asked for directly, with the art dropped in: *"I added
+farmhouse_bg_overlay.png which should be rendered as background behind the
+3x2 farmhouse it should use a random variation so that each farmhouses bg
+looks different"*.
+
+The kerb above says where a plot *is*. This says what stands on it. A
+farmhouse is a working yard as much as a building — a woodpile, a barrel, a
+bench, a washing line, a beaten path through the grass — and none of that is
+in the building's own sheet, which draws only the house.
+
+- **A yard is one sheet of whole scenes, not props to place.** The delivered
+  `farmhouse_bg_overlay.png` is a 3×3 grid of nine finished yards, each drawn
+  at the plot's own 3:2 shape. Picking one picture is a far smaller mechanism
+  than scattering props and deciding what may overlap what, and it is the
+  same "one sheet, seeded cell" shape `BuildingLifecycleSheet` already uses
+  to make a street of cottages a street of DIFFERENT cottages.
+- **Which yard is seeded from the building's own seed**, the same
+  `record["seed"]` its house variant is already picked from, salted so the
+  two axes cannot move together. Two farmhouses in one village differ; one
+  farmhouse looks the same on every reload.
+- **It is drawn BETWEEN the kerb and the house.** Children paint in tree
+  order (see `_spawn_building_node`), so the yard lies on the ground the kerb
+  marks out and the house stands on top of it. Same width as the house's own
+  art, by the same `drawn_plot_width_tiles` rule, so the yard is the plot's
+  and never wider than it.
+- **It is an overlay like everything else here.** A building with no yard
+  sheet declared draws exactly what it drew before; the wiring is per
+  building id (`BuildingCatalog.background_sheet_for`), so the farmhouse
+  having one costs nothing anywhere else.
+- **A building that borrows art borrows the yard with it.** `draws_as` (see
+  the asset contract) hands over the whole picture, so the fisher's hut,
+  drawn as a farmhouse, stands in a farmhouse's yard — asked for directly:
+  *"the fisher hut should get a yard too"*. Its OWN seed still picks which
+  of the nine, so the hut by the pond and the farmhouse up the street are
+  different pictures. Borrowing art is the only way to inherit a yard; a
+  building that declares neither still stands on bare plot
+  (`test_a_building_that_borrows_nothing_inherits_no_yard`).
+- **And the kerb survives underneath it**, though it is painted first:
+  measured on the delivered sheet, 0 of 5118 pixels in the yard's outer
+  three-pixel band are opaque, so the line round the plot is never covered.
+  Pinned by `test_a_yard_never_paints_over_the_kerb_at_the_plots_own_edge`
+  rather than left to luck — yard art bled to the edge would quietly erase
+  the kerb of every building that stands in one.
+
+**The background must be flooded off, not keyed off.** This sheet has no
+alpha channel and its transparency is a painted grey-and-white
+**checkerboard**, which is a new problem here: every other sheet in this
+project keys flat magenta or near-black.
+
+A flat colour key cannot separate it from the art, because the checker's
+lighter square and the art's **white flower highlights are the same colour**
+— the tones measure about 253 and 213, and a flower highlight sits at 235
+and above. Measured: one source cell holds 46,354 near-white pixels, almost
+all of them checker; 63 survive keying at drawn size, and those are the
+flowers. A flat key takes every one of them.
+
+What separates them is **connectivity**, not colour: the checker reaches the
+cell's own edge, and a flower enclosed in foliage does not. So the key
+floods inward from the edge over checker-coloured pixels — the same shape
+`IllustratedCharacterSprite._remove_background_by_flood` already uses on
+`head.png`, for the same reason. Unlike the head's flood it steps between
+the checker's two tones freely (they differ by about 40/255, far more than
+a per-step tolerance would allow) because what is followed here is a KNOWN
+two-tone pattern rather than an unknown gradient into the art.
+
+Two refinements, each measured on the real sheet rather than reasoned about:
+
+- **The darker square is a safe seed anywhere in the cell**, not only at the
+  edge, since nothing in the art is that particular grey. That is what
+  clears checker showing through a gap in the foliage, which is enclosed by
+  art and so can never be reached from the edge — 86 such pixels in one
+  cell.
+- **The flood then widens by a bounded two pixels** under a looser grey
+  rule, which takes the anti-aliased edges where one square meets the next
+  and where a square meets the art. The seed rule cannot be loosened that
+  far without also swallowing a grey rock; bounding the widening to the one
+  or two pixels anti-aliasing actually spans cannot reach a rock's interior
+  however grey it is. Measured: 82 px of grey fringe survived before it.
+
 ### When the ground says no: water, a split spine, and a drowned square
 
 `BiomeClassifier` knows nothing of hydrology, so a lake still reads as
@@ -547,6 +628,26 @@ Everything below lights up by dropping the file in and bumping
 `TerrainRenderer.ATLAS_VERSION` (tiles) or simply relaunching (sheets);
 there is no registry to edit. Until a file exists, a procedural placeholder
 draws so the system is playable and testable without art.
+
+**Or a borrowed sheet, where a placeholder box is too little.** A catalog
+entry may name another building's art with `draws_as`, which borrows the
+whole picture -- the building's sheet AND the yard it stands in (see "A
+building's own yard, drawn behind it"), since a borrowed house on bare
+plot beside the real thing in its finished yard reads as forgotten rather
+than as a stand-in. The borrowed sheet
+becomes the LAST link of its own chain (`BuildingCatalog.draws_as_of`,
+`finished_sheet_chain`): the building draws as its stand-in until its own
+file lands, and the day it does, it wins with no code change at all —
+removing the one line is then pure tidying. Asked for directly, for the
+fisher's hut: *"use farmhouse sprite until illustration exists"*
+([village_ponds.md](village_ponds.md), "The hut on the bank"). Read with
+the SHEET's own grid, never the borrower's, since farmhouse.png has six
+columns where every other contract sheet has eight. Pinned by
+`test_a_borrowed_sheet_never_hides_the_buildings_own` and
+`test_a_borrowed_sheet_is_read_with_its_own_grid`. A building whose
+stand-in is a plain box still gets the procedural placeholder above; this
+is for the case where "it should look like a farmhouse" is the real
+answer.
 
 **Building sheets** — `assets/sprites/buildings/<building_id>.png`
 (`house_small`, `house_medium`, `house_large`, `city_hall` …), 1536×1024,

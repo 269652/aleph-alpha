@@ -120,6 +120,13 @@ var water_errand := WaterErrand.AT_HOME
 ## would let a villager change their mind halfway across the square when
 ## the other tank crossed its own threshold, and the bucket in their hand
 ## would silently change what it was for.
+## Which settlement this villager belongs to (EntityRef.for_settlement),
+## set by VillageRenderer, which is the only thing that knows. "" for a
+## villager nobody is simulating a village for -- a test fixture, or a
+## marker built without one -- who then simply dies without anybody being
+## told (docs/concept/village_mortality.md mechanism 2).
+var settlement_id := ""
+
 var _errand_target: Dictionary = {}
 
 ## The nearest this leg has brought them to where the bucket is going, how
@@ -483,12 +490,18 @@ func setup_economy(market, household_wallet = null) -> void:
 ## every marker built by a test sets no warehouse_position, so carry_limit
 ## stayed 0 and every existing assertion passed.
 ##
-## The channel, the drive, the wiring, the carried load and all of their
-## tests stay exactly as they are. What is switched off is only the caller
-## that opts a REAL villager in. Raising this to NpcEconomy.CARRY_LIMIT is
-## the whole of switching hauling back on, once delivery is proven to
-## complete in a running village rather than in a unit test.
-const HAULING_CARRY_LIMIT := 0.0
+## **Switched on, 2026-09-20**, against the condition this note set for
+## itself: delivery is proven to complete, in a unit test (the round trip
+## and the return to work are pinned in test_npc_marker.gd's "hauling"
+## block) AND in a running village (tools/probe_village_famine.gd watches
+## a real market and its people's hunger).
+##
+## Why it had to be switched on: with it at 0.0 a harvest accumulated on
+## the farmhouse shelf and reached nobody. Measured on a real village --
+## 234 units of food across three farmhouses, hunger pinned at 1.00, the
+## worst-off villager 174 of 200 through the starvation window, and a
+## market holding nothing. The village was starving beside its own crop.
+const HAULING_CARRY_LIMIT := NpcEconomy.CARRY_LIMIT
 
 
 ## A villager with a store to carry to holds their take until they reach it;
@@ -533,6 +546,13 @@ func _process(delta: float) -> void:
 	# after it: a starving villager puts the bucket down, because thirst
 	# answered from a household tank is never as urgent as having nothing
 	# to eat.
+	# Before anything else this frame: a villager who has starved to death
+	# has no day left to plan (docs/concept/village_mortality.md mechanism
+	# 2). Checked after condition.advance above, so the hunger that killed
+	# them is this frame's hunger and not last frame's.
+	if _step_starvation():
+		return
+
 	_step_water_errand(delta)
 	_sync_carried_item()
 	if WaterErrand.overrides_schedule(water_errand):
@@ -907,13 +927,11 @@ func _shape_a_beam(delta: float) -> void:
 	):
 		return
 	_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1)
-	# Paid at the saw when the village has a store to cart it to
-	# (docs/concept/village_warehouse.md, Mechanism 7) -- the beam stays on
-	# the mill's shelf for the carter, so the village is credited when it
-	# really arrives at the store rather than here. The same pay, for the
-	# same work; what moved is where the beam is.
-	if economy != null and _village_has_a_store():
-		economy.record_harvest_wage("beam", 1)
+	# No pay at the saw. A sawyer's work earns the village a BEAM, and the
+	# beam is paid for when a merchant buys it out of the village's stock
+	# (docs/concept/traveling_merchants.md, "The merchant is the ONLY
+	# faucet"). Paying here as well would be minting a coin on top of the
+	# goods -- the conjured faucet that doc exists to close.
 
 
 ## Carries the mill's finished BEAMS into the village's own stock -- the
@@ -1113,6 +1131,34 @@ func _put_the_bucket_down(retry_in: float) -> void:
 	_errand_closest_px = INF
 	_errand_stalled_seconds = 0.0
 	_errand_retry_in = maxf(_errand_retry_in, retry_in)
+
+
+## One frame of dying of hunger. True when this villager is gone, and the
+## caller must stop touching them.
+##
+## A villager does not vanish on a die roll: they have spent
+## Starvation.seconds_to_die at the top of their own hunger drive, having
+## visibly failed to find food that whole time (pillar 2). The village is
+## told so the household leaves the roster with them
+## (EarthChunkManager.record_villager_death) -- a marker that simply
+## disappeared would leave exactly the ghost owner village_growth.md
+## already had to fix.
+##
+## No corpse: a villager is not a creature, and carrion.md's loot table is
+## not the right vocabulary for a person. What a dead villager leaves
+## behind is a question death.md has not answered for NPCs yet.
+func _step_starvation() -> bool:
+	if economy == null or not economy.needs.has_starved_to_death():
+		return false
+	if (
+		_world != null
+		and settlement_id != ""
+		and identity != null
+		and _world.has_method("record_villager_death")
+	):
+		_world.record_villager_death(settlement_id, identity.seed_value)
+	queue_free()
+	return true
 
 
 ## The building this villager must fetch water for right now, or {} when
@@ -1918,13 +1964,11 @@ func _store_harvest(crop_id: String, count: int) -> void:
 		and _world.has_method("deposit_to_structure_at")
 	):
 		_world.deposit_to_structure_at(stock_building_cell.x, stock_building_cell.y, crop_id, count)
-		# Paid at the scythe when the village has a store to cart it to
-		# (docs/concept/village_warehouse.md, Mechanism 7): the crop stays
-		# on this shelf for the carter, so the village is credited when the
-		# goods really arrive there rather than here. The same pay, at the
-		# same moment, either way -- what moved is where the goods are.
-		if economy != null and _village_has_a_store():
-			economy.record_harvest_wage(crop_id, count)
+		# No pay at the scythe. A farmer's work earns the village a CROP,
+		# and the crop is paid for when a merchant buys it out of the
+		# village's stock (docs/concept/traveling_merchants.md, "The
+		# merchant is the ONLY faucet"). Paying here as well would be
+		# minting a coin on top of the goods.
 		return
 	if economy != null:
 		economy.record_real_harvest(crop_id, count)

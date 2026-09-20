@@ -37,6 +37,18 @@ const _RATE_BY_ITEM := {
 }
 
 
+## Every item id spare hands really gather, read off the same _RATE_BY_ITEM
+## material_delta works from. Public because MerchantVisit derives what a
+## village can SELL from what it actually makes, and a second copy of this
+## list would be free to drift from this one -- which is exactly how a
+## village's gathered stone and plant fibre became unsellable.
+static func gathered_item_ids() -> Array[String]:
+	var ids: Array[String] = Array([], TYPE_STRING, "", null)
+	for item_id in _RATE_BY_ITEM:
+		ids.append(String(item_id))
+	return ids
+
+
 ## What `spare_capacity` households gather over `seconds`, on top of the
 ## sub-unit `carry` left from the previous step: {"stock_delta": {item_id ->
 ## whole units to add now}, "carry": {item_id -> the fraction still owed}}.

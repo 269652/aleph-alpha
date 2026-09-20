@@ -193,6 +193,12 @@ const BUILDING_OVERLAY_TILE_IDS: Array[String] = [
 	"city_hall", "warehouse",
 	"sawmill", "farmhouse", "blacksmith", "brewery",
 	"trade_hall", "mage_guild",
+	# The fisher's hut, raised over a dug pond (docs/concept/
+	# village_ponds.md, "The hut on the bank"). Caught by the test below
+	# rather than by inspection, which is what that test is for: a hut
+	# missing from this list paints the same brown square under itself
+	# that the report this list came from was about.
+	"fisher_hut",
 ]
 
 const OVERLAY_ONLY_TILE_IDS: Array[String] = [

@@ -282,8 +282,15 @@ func test_every_ladder_building_is_a_real_catalog_entity_nobody_lives_in():
 		assert_ne(BuildingCatalog.interior_family_of(building_id), "", "%s needs an interior family" % building_id)
 
 
-func test_the_production_building_ids_list_is_exactly_the_non_civic_ladder():
-	assert_eq(BuildingCatalog.PRODUCTION_BUILDING_IDS, ["sawmill", "farmhouse", "blacksmith", "brewery"] as Array[String])
+## The works, which is the ladder's own non-civic rungs PLUS the fisher's
+## hut -- a works a village raises over a dug pond rather than climbs to
+## (docs/concept/village_ponds.md, "The hut on the bank"). The ladder keeps
+## its own list, so the two can differ without either lying.
+func test_the_production_building_ids_list_is_the_non_civic_ladder_plus_the_fishers_hut():
+	assert_eq(
+		BuildingCatalog.PRODUCTION_BUILDING_IDS,
+		["sawmill", "farmhouse", "blacksmith", "brewery", "fisher_hut"] as Array[String]
+	)
 	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("warehouse"), "a warehouse is a commons, not a trade")
 	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("city_hall"))
 
@@ -908,3 +915,158 @@ func test_a_building_with_no_scale_of_its_own_is_unchanged():
 func test_a_cottage_still_covers_most_of_its_own_plot():
 	var drawn := BuildingCatalog.drawn_plot_width_tiles(2, "house_small")
 	assert_gt(drawn / 2.0, 0.6, "a cottage that covers less than this is a model of a cottage")
+
+
+# -- a farmhouse has a yard behind it ---------------------------------------
+#
+# Asked for directly, with the art dropped in: *"I added
+# farmhouse_bg_overlay.png which should be rendered as background behind the
+# 3x2 farmhouse it should use a random variation so that each farmhouses bg
+# looks different"*.
+#
+# See docs/concept/building.md, "A building's own yard, drawn behind it".
+
+
+func test_a_farmhouse_has_a_yard_sheet_and_other_buildings_do_not():
+	var yard := BuildingCatalog.background_sheet_for("farmhouse", 1)
+	assert_false(yard.is_empty(), "the farmhouse's yard art is declared")
+	assert_eq(String(yard["path"]), "res://assets/sprites/buildings/farmhouse_bg_overlay.png")
+	for building_id in ["sawmill", "warehouse", "blacksmith", "brewery", "city_hall"]:
+		assert_true(
+			BuildingCatalog.background_sheet_for(building_id, 1).is_empty(),
+			"%s has no yard declared, so nothing changes for it" % building_id
+		)
+
+
+## The whole point of the ask: two farmhouses do not look the same. Across a
+## spread of seeds every one of the sheet's nine yards must come up, or the
+## variation is narrower than the art paid for.
+func test_every_one_of_the_nine_yards_is_reachable_by_some_seed():
+	var seen := {}
+	for seed_value in range(400):
+		var yard := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		seen["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(seen.size(), 9, "all nine yards are used: %s" % str(seen.keys()))
+
+
+## ...and one farmhouse looks the same every reload, like every other seeded
+## art pick in this codebase.
+func test_the_same_seed_always_picks_the_same_yard():
+	for seed_value in [0, 7, 4242, -19]:
+		var once := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		var twice := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		assert_eq(once["row"], twice["row"], "seed %d" % seed_value)
+		assert_eq(once["column"], twice["column"], "seed %d" % seed_value)
+
+
+## The two axes are picked from independent hashes, so the pair covers the
+## grid instead of walking a diagonal of it -- the exact failure
+## variant_cell_for's own doc comment names, and the reason both of these
+## take two salts rather than splitting one index into nine.
+func test_the_yard_covers_the_grid_rather_than_walking_a_diagonal():
+	var columns := {}
+	var rows := {}
+	var off_diagonal := 0
+	for seed_value in range(200):
+		var yard := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		columns[int(yard["column"])] = true
+		rows[int(yard["row"])] = true
+		if int(yard["column"]) != int(yard["row"]):
+			off_diagonal += 1
+	assert_eq(columns.size(), 3, "every column is used")
+	assert_eq(rows.size(), 3, "every row is used")
+	assert_gt(off_diagonal, 100, "the pair is not just (n, n) -- the axes are independent")
+
+
+## Worth stating because it is what makes this art matter: a farmhouse has
+## no variant sheet of its own (only house_small/house_medium do), so every
+## farmhouse in the world draws the SAME house picture. Its yard is the only
+## thing that tells one from another.
+func test_a_farmhouse_has_no_house_variant_so_the_yard_is_its_whole_variety():
+	assert_eq(
+		BuildingCatalog.variant_sheet_of("farmhouse"), "",
+		"a farmhouse draws one house picture"
+	)
+	var yards := {}
+	for seed_value in range(200):
+		var yard := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		yards["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(yards.size(), 9, "...and nine yards to stand it in")
+
+# -- borrowed art (docs/concept/building.md, "Asset contract") -------------
+#
+# "use farmhouse sprite until illustration exists" -- asked for directly,
+# for the fisher's hut. A building may name another's sheet to be drawn
+# from, and that borrowed sheet is the LAST link of its chain, so the day
+# its own file lands it wins with no code change at all.
+
+func test_a_fisher_hut_is_drawn_from_the_farmhouses_sheet_until_its_own_lands():
+	assert_eq(BuildingCatalog.draws_as_of("fisher_hut"), "farmhouse")
+	var paths: Array = []
+	for entry in BuildingCatalog.finished_sheet_chain("fisher_hut", 7):
+		paths.append(entry["path"])
+	assert_true(
+		paths.has(BuildingCatalog.sheet_of("farmhouse")),
+		"a hut with no art of its own must still be a building, not a box"
+	)
+
+
+## Its OWN sheet comes first, so dropping fisher_hut.png in is the whole of
+## replacing the placeholder -- the borrowed link simply stops being
+## reached.
+func test_a_borrowed_sheet_never_hides_the_buildings_own():
+	for building_id in BuildingCatalog.all_building_ids():
+		var borrowed := BuildingCatalog.draws_as_of(building_id)
+		if borrowed == "":
+			continue
+		var paths: Array = []
+		for entry in BuildingCatalog.finished_sheet_chain(building_id, 3):
+			paths.append(entry["path"])
+		assert_lt(
+			paths.find(BuildingCatalog.sheet_of(building_id)),
+			paths.find(BuildingCatalog.sheet_of(borrowed)),
+			"%s must try its own sheet before %s's" % [building_id, borrowed]
+		)
+
+
+## And a borrowed sheet is read with the SHEET's own grid, not the
+## borrower's -- farmhouse.png has six columns where every other contract
+## sheet has eight, and eight columns read off six would walk two of them
+## off the end of the row.
+func test_a_borrowed_sheet_is_read_with_its_own_grid():
+	for entry in BuildingCatalog.finished_sheet_chain("fisher_hut", 7):
+		if entry["path"] == BuildingCatalog.sheet_of("farmhouse"):
+			assert_eq(int(entry["columns"]), BuildingCatalog.sheet_columns_of("farmhouse"))
+
+
+## A borrowed building comes with the ground it stands in. Asked for
+## directly, once the hut was standing beside its pond: *"the fisher hut
+## should get a yard too"* -- it is drawn as a farmhouse (`draws_as`), and
+## a farmhouse in a yard beside a hut on bare plot reads as one building
+## finished and the other forgotten.
+func test_a_building_drawn_as_another_stands_in_that_ones_yard_too():
+	var yard := BuildingCatalog.background_sheet_for("fisher_hut", 11)
+	assert_false(yard.is_empty(), "a hut drawn as a farmhouse stands in a farmhouse's yard")
+	assert_eq(
+		String(yard["path"]),
+		String(BuildingCatalog.background_sheet_for("farmhouse", 11)["path"]),
+		"and it is the same yard art, not a second copy of it"
+	)
+
+
+## Its OWN seed picks it, so the hut by the pond and the farmhouse up the
+## street are not the same picture -- the whole point of nine yards.
+func test_a_borrowed_yard_still_varies_across_every_one_of_the_nine():
+	var seen := {}
+	for seed_value in range(400):
+		var yard := BuildingCatalog.background_sheet_for("fisher_hut", seed_value)
+		seen["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(seen.size(), 9, "all nine yards are used: %s" % str(seen.keys()))
+
+
+## And borrowing art is the ONLY way to inherit a yard -- a building that
+## borrows nothing and declares nothing still stands on its own plot.
+func test_a_building_that_borrows_nothing_inherits_no_yard():
+	for building_id in ["sawmill", "warehouse", "blacksmith", "brewery", "city_hall"]:
+		assert_eq(BuildingCatalog.draws_as_of(building_id), "", "precondition: %s borrows nothing" % building_id)
+		assert_true(BuildingCatalog.background_sheet_for(building_id, 1).is_empty())

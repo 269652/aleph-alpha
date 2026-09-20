@@ -4440,3 +4440,68 @@ func test_open_ground_ahead_of_a_house_lets_the_animal_through():
 	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
 	assert_false(marker._building_blocks_movement(Vector2.RIGHT))
 	assert_eq(world.asked, [Vector2i(1, 0)], "it asks about the tile it is stepping into")
+
+
+# -- the gate is only worth what USES it ------------------------------------
+#
+# Reported live, twice: "Horses still aren't blocked by houses", then
+# "Creatures and NPCs also walk through houses". The gate itself was fixed
+# and tested by the block above -- _building_blocks_movement answers
+# correctly. What nobody checked is that every BEHAVIOUR goes through it.
+#
+# Three did not: "attack", "hunt" and "scavenge" call the ungated _advance
+# directly, so a predator chasing prey ignored walls, fences and impassable
+# terrain alike, while the very same animal wandering a moment earlier went
+# round them. These tests pin the APPLICATION of the gate rather than the
+# gate, which is why they live beside _apply_decision and not beside
+# _building_blocks_movement.
+
+
+## Walks the creature east into the wall at tile (1, 0) in small steps, and
+## reports whether it was ever STANDING IN that tile.
+##
+## "It must not move east" would be the wrong assertion and the first draft
+## made it: deflecting round a wall legitimately changes x, and the gate
+## rightly turned the animal 60 degrees down-and-right to go past. The real
+## property is that the wall's own tile is never occupied. Small steps
+## (~1px each) so walking straight through cannot be missed between samples
+## -- the ungated code crossed two whole tiles in one 0.5s step.
+func _ever_stands_in_the_wall(intent: String) -> bool:
+	var world := StubWorldWithWall.new()
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
+	for _step in 40:
+		marker._apply_decision({"intent": intent, "direction": Vector2.RIGHT}, 0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if tile == Vector2i(1, 0):
+			return true
+	return false
+
+
+func test_a_hunting_predator_never_stands_inside_a_wall():
+	assert_false(
+		_ever_stands_in_the_wall("hunt"),
+		"a wall stops a hunt exactly as it stops a wander"
+	)
+
+
+func test_an_attacking_creature_never_stands_inside_a_wall():
+	assert_false(_ever_stands_in_the_wall("attack"))
+
+
+func test_a_scavenging_creature_never_stands_inside_a_wall():
+	assert_false(_ever_stands_in_the_wall("scavenge"))
+
+
+## The control: gating a hunt must not stop a hunt across OPEN ground, or
+## the fix would simply have broken predation instead of fixing anything.
+func test_a_hunt_across_open_ground_still_closes_on_its_prey():
+	var world := StubWorldWithWall.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
+	var before := marker.position
+	marker._apply_decision({"intent": "hunt", "direction": Vector2.RIGHT}, 0.5)
+	assert_gt(marker.position.x, before.x, "a predator must still be able to hunt")

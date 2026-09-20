@@ -442,3 +442,48 @@ func test_the_palette_is_re_measured_when_the_ui_scale_changes():
 		_function_body("_apply_ui_scale").contains("_blueprint_palette.refresh()"),
 		_function_body("_apply_ui_scale")
 	)
+
+
+# -- nothing is drawn over the build palette --------------------------------
+
+## Reported live with a screenshot: the palette open, with the interaction
+## prompt, the hover tooltip and the held-item card drawn straight over it.
+##
+## The held-item card names what the hotbar's hand is holding and sits in the
+## hotbar's own bottom-centre strip -- the strip planner mode gives to the
+## palette. It reads the same predicate the hotbar does.
+func test_the_held_item_card_follows_the_hotbar_it_belongs_to():
+	var body := _function_body("_apply_view_mode")
+	assert_true(
+		body.contains("_held_item_card"),
+		"the card lives in the hotbar's strip and must go where the hotbar goes: %s" % body
+	)
+
+
+## The affordance hints are gated on the MODE, not on whether they happen to
+## overlap the palette's rectangle: "Chop (Space)" is wrong in planner mode
+## wherever it is drawn, because planner mode does not chop.
+func test_the_interaction_prompt_is_gated_on_the_mode():
+	assert_true(
+		_function_body("_update_interaction_prompt").contains("shows_world_hints")
+		or _function_body("_maybe_update_interaction_prompt").contains("shows_world_hints"),
+		"the prompt must ask the mode whether its action exists at all"
+	)
+
+
+func test_the_hover_tooltip_is_gated_on_the_mode():
+	assert_true(
+		_function_body("_update_hover_tooltip").contains("shows_world_hints"),
+		"a tooltip about something you cannot act on is noise"
+	)
+
+
+## ...and the palette is NOT swept into Escape's notion of a modal. Escape
+## closing the palette would strand the player in planner mode with no
+## controls at all.
+func test_the_palette_is_not_a_modal_escape_would_close():
+	var body := _function_body("_any_gameplay_window_open")
+	assert_false(
+		body.contains("_blueprint_palette"),
+		"the palette is planner mode's controls, not a modal: %s" % body
+	)

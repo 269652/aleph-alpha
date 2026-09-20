@@ -340,6 +340,10 @@ func spawn_village(
 	var fisher_ponds := _dig_fisher_ponds_if_missing(
 		chunk_coord, chunk_size, world, pond_reserved
 	)
+	# And the works over that water, the way a farmhouse stands over its own
+	# beds -- after the dig, because a hut stands on the bank of a pond that
+	# is already there.
+	_place_fisher_huts_if_missing(chunk_coord, chunk_size, world, fisher_ponds)
 	# Where this village's market really is: cells OF its square, one per
 	# merchant (see VillageLayout.market_stand_cells). Worked out before the
 	# landmark loop because the square's own stall IS the first of them --
@@ -374,6 +378,10 @@ func spawn_village(
 		var npc_marker := _build_npc(
 			settlement, i, door_positions[i], workspot, tile_size, parent, world, market, warehouse_door
 		)
+		# Which village they belong to, so a death reaches the right roster
+		# (docs/concept/village_mortality.md mechanism 2). Set here rather
+		# than inside _build_npc because this is where chunk_coord is.
+		npc_marker.settlement_id = EntityRef.for_settlement(chunk_coord)
 		spawned.append(npc_marker)
 		npc_markers.append(npc_marker)
 		# A merchant trades at their OWN stand, on the village square (see
@@ -449,6 +457,107 @@ func spawn_village(
 ## player walks out -- a cart is not a node this renderer leaks behind. That
 ## is not hypothetical: a porter and a cart left alive on every load/unload
 ## cycle is the measured cause of the reported framerate decay.
+## Brings the villagers standing in an already-built village into line with
+## the settlement's real roster (docs/concept/village_mortality.md
+## mechanism 4). Returns the village's nodes, newcomers included.
+##
+## Asked for directly: *"now make the npcs move in"*. Until this, the
+## villagers in a chunk were a SNAPSHOT: _population_for reads the real
+## roster, but only at spawn time, so a household admitted while the
+## player stood there got nobody and the settlement card and the street
+## disagreed until the chunk reloaded.
+##
+## Additive only, on purpose. A villager who dies removes themselves
+## (NpcMarker._step_starvation), which is the removal that has a cause a
+## player watched; culling markers here to match a shrunken roster would
+## have to pick somebody arbitrary, and the one it picked would be as
+## likely to be the farmer you were watching as anybody. See the doc's
+## Status for that gap stated plainly.
+##
+## **A newcomer gets a home, a market and their own settlement, but not a
+## specialist's ground**: fields, ponds and the carter's round are handed
+## out in bulk passes over the whole village, and re-running those against
+## a village mid-life is a different change from this one. A newcomer
+## works the village's general trades until the chunk next reloads, which
+## is honest rather than invisible.
+func reconcile_villagers(
+	parent: Node2D, chunk_coord: Vector2i, chunk_origin_tiles: Vector2i,
+	chunk_size: int, tile_size: int, world, nodes: Array
+) -> Array[Node2D]:
+	var standing: Array[Node2D] = []
+	var villagers: Array = []
+	for node in nodes:
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue  # somebody who has already died out from under us
+		standing.append(node)
+		if node is NpcMarker:
+			villagers.append(node)
+
+	# The REAL roster, read directly rather than through _population_for.
+	# That helper reads 0 as "this settlement was never recorded, fall back
+	# to the founding roster" -- exactly right when spawning a village for
+	# the first time, and badly wrong here: a village whose last household
+	# died looks identical to one that was never written down, so the
+	# fallback resurrects it. Measured before it was fixed
+	# (tools/probe_village_famine.gd): a village fell to a roster of 0 and
+	# this put ten villagers back on the street, who starved, forever.
+	#
+	# A world that cannot answer is left exactly as it is. Reconciling
+	# against a number nobody supplied is the invented number this
+	# project's rules forbid.
+	if world == null or not world.has_method("household_count_for_settlement"):
+		return standing
+	var roster: int = world.household_count_for_settlement(
+		EntityRef.for_settlement(chunk_coord)
+	)
+	if roster <= villagers.size():
+		return standing
+
+	# The market this village already trades in -- taken from somebody who
+	# is already standing here rather than made fresh, or a newcomer would
+	# buy and sell in a market of their own that nobody else can see.
+	var market = null
+	for villager in villagers:
+		if villager.economy != null and villager.economy.market != null:
+			market = villager.economy.market
+			break
+	if market == null:
+		return standing  # nothing to join; a reload will build them properly
+
+	# One set of ground answers, exactly as spawn_village does.
+	_buildable_memo.clear()
+	_dry_memo.clear()
+	_skeleton_memo.clear()
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size, roster,
+		# The square's own siting, as at founding -- the GENERATED world's
+		# water, so a newcomer's anchors are derived from the SAME square
+		# the paving was laid on (see _is_dry_local).
+		_is_dry_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		(
+			world.seeded_region_for_chunk(chunk_coord)
+			if world != null and world.has_method("seeded_region_for_chunk") else null
+		)
+	)
+	var warehouse_door = _warehouse_door(chunk_coord, chunk_size, tile_size, world)
+
+	for i in range(villagers.size(), mini(roster, settlement.house_positions.size())):
+		# They arrive WITHOUT a house (village_growth.md mechanism 3: the
+		# village then owes them one), so their anchor is the founding
+		# ring's own fallback position -- the same one a villager whose
+		# plot fit nowhere already keeps.
+		var home: Vector2 = settlement.house_positions[i]
+		var workspot = _grounded_position(
+			home + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
+		)
+		var newcomer := _build_npc(
+			settlement, i, home, workspot, tile_size, parent, world, market, warehouse_door
+		)
+		newcomer.settlement_id = EntityRef.for_settlement(chunk_coord)
+		standing.append(newcomer)
+	return standing
+
+
 func _hand_out_the_store_round(
 	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world,
 	parent: Node2D, spawned: Array[Node2D]
@@ -1313,6 +1422,51 @@ func _dig_fisher_ponds_if_missing(
 			var g: Vector2i = chunk_coord * chunk_size + cell
 			world.build_at_global(g.x, g.y, tile_id)
 	return ponds
+
+
+## Raises the hut that stands over a fisher's own water (docs/concept/
+## village_ponds.md, "The hut on the bank"). Reported live with a
+## screenshot of a dug, fenced, EMPTY enclosure: "it's missing a fisher hut
+## (use farmhouse sprite until illustration exists)" -- the half of "the
+## same shape as a field" that was never built, since a farmer's beds have
+## a farmhouse over them and a fisher's water had nothing at all.
+##
+## Sited on the BANK rather than on street frontage: the hut belongs to the
+## water, and the water is already dug and fenced by the time this runs, so
+## there is one obvious right place for it and no search of the chunk to
+## do. Idempotent the way everything else here is, and asked of the ground
+## rather than of a record: a hut already standing on this pond's bank is
+## this pond's hut, so a reload raises nothing.
+func _place_fisher_huts_if_missing(
+	chunk_coord: Vector2i, chunk_size: int, world, ponds: Dictionary
+) -> void:
+	if world == null or ponds.is_empty() or not world.has_method("place_building"):
+		return
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_free := func(cell: Vector2i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	var standing: Array = []
+	if world.has_method("buildings_in_chunk"):
+		for record in world.buildings_in_chunk(chunk_coord):
+			if record.get("id", "") == VillagePond.HUT_BUILDING_ID:
+				standing.append(record.get("origin_local", Vector2i.ZERO))
+	for house_origin in ponds:
+		var water: Array = ponds[house_origin]
+		if water.is_empty() or VillagePond.hut_stands_by(water, standing):
+			continue
+		var origin = VillagePond.hut_origin(water, is_free)
+		if origin == null:
+			continue  # no bank clear enough to build on -- honestly, no hut
+		var building_seed := hash("%d_%d_fisher_hut_%d_%d" % [
+			chunk_coord.x, chunk_coord.y, (house_origin as Vector2i).x, (house_origin as Vector2i).y
+		])
+		if world.place_building(
+			chunk_coord, origin, VillagePond.HUT_BUILDING_ID, Vector2i(0, 1), building_seed, ""
+		):
+			standing.append(origin)
 
 
 ## The water already standing in this house's own reach, in the same local

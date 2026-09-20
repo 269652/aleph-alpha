@@ -2529,6 +2529,59 @@ func _connected_groups(cells: Array) -> Array:
 	return groups
 
 
+## And a HUT stands on its bank, the way a farmhouse stands over its own
+## beds -- reported live with a screenshot of a dug, fenced, EMPTY
+## enclosure: "it's missing a fisher hut (use farmhouse sprite until
+## illustration exists)".
+func test_every_fishers_pond_gets_a_hut_on_its_own_bank():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: the village's fisher dug a pond")
+
+	var huts: Array = []
+	for call in world.place_calls:
+		if call["building_id"] == VillagePond.HUT_BUILDING_ID:
+			huts.append(call["origin_local"])
+	for pond in _connected_groups(water):
+		assert_true(
+			VillagePond.hut_stands_by(pond, huts),
+			"the pond at %s has no hut on its bank" % str(pond[0])
+		)
+
+
+## One hut per pond, on every reload -- a village walked past twice must
+## not grow a second hut beside the same water.
+func test_a_reload_does_not_raise_a_second_hut_over_the_same_water():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var first := 0
+	for call in world.place_calls:
+		if call["building_id"] == VillagePond.HUT_BUILDING_ID:
+			first += 1
+	assert_gt(first, 0, "precondition: at least one hut went up")
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	var total := 0
+	for call in world.place_calls:
+		if call["building_id"] == VillagePond.HUT_BUILDING_ID:
+			total += 1
+	assert_eq(total, first, "a second visit raised another hut over water that already had one")
+
+
 ## And it is FENCED, like the field it is modelled on -- the ask says "a
 ## similar 3x2 enclosure", and an enclosure is the frame.
 func test_a_fishers_pond_is_fenced_like_a_field():
@@ -3830,3 +3883,154 @@ func test_every_village_paves_the_square_it_planned_apart_from_the_seat_on_it():
 		"%d of %d villages left real holes in their square: %s"
 			% [unpaved_villages.size(), checked, str(unpaved_villages.slice(0, 6))]
 	)
+
+
+# -- villagers follow the roster (docs/concept/village_mortality.md ---------
+#    mechanism 4)
+#
+# Asked for directly: *"now make the npcs move in"*. The villagers
+# standing in a chunk used to be a snapshot taken when it was rendered --
+# _population_for reads the REAL roster, but only at spawn time -- so a
+# household admitted while the player stood there got nobody, and the
+# settlement card and the street disagreed until the chunk reloaded.
+# Reported live: *"there still run around more NPCs than the number
+# displays"*.
+
+func _villagers_among(nodes: Array) -> int:
+	var count := 0
+	for node in nodes:
+		if is_instance_valid(node) and node is NpcMarker:
+			count += 1
+	return count
+
+
+func _a_village_of(world: StubWorld, coord: Vector2i, roster: int) -> Array:
+	world.household_count = roster
+	return renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+
+func test_a_household_that_moves_in_gets_a_villager_without_a_reload():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	assert_eq(_villagers_among(nodes), 10, "precondition: ten live here")
+
+	world.household_count = 12  # two moved in while the player stood there
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+	)
+	assert_eq(_villagers_among(after), 12, "the newcomers never showed up")
+
+
+func test_a_roster_that_has_not_changed_spawns_nobody():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+	)
+	assert_eq(_villagers_among(after), 10, "the village spawned a second copy of itself")
+
+
+## Reconciling repeatedly must not keep adding people -- it runs every
+## settlement step.
+func test_reconciling_again_and_again_is_idempotent():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	world.household_count = 11
+	for i in 5:
+		nodes = renderer.reconcile_villagers(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+		)
+	assert_eq(_villagers_among(nodes), 11)
+
+
+## A newcomer is a real villager of THIS village, not a marker at the
+## world origin: they stand in the chunk, they know which settlement they
+## belong to (so their death reaches the right roster), and they have a
+## market to buy food from.
+func test_a_newcomer_is_a_real_villager_of_this_village():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	world.household_count = 11
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+	)
+
+	var newcomer: NpcMarker = null
+	for node in after:
+		if node is NpcMarker and not nodes.has(node):
+			newcomer = node
+	assert_not_null(newcomer, "precondition: somebody moved in")
+
+	var chunk_origin := Vector2(coord * CHUNK_SIZE) * float(TILE_SIZE)
+	var chunk_span := float(CHUNK_SIZE * TILE_SIZE)
+	assert_between(newcomer.position.x, chunk_origin.x, chunk_origin.x + chunk_span)
+	assert_between(newcomer.position.y, chunk_origin.y, chunk_origin.y + chunk_span)
+	assert_ne(newcomer.settlement_id, "", "a newcomer who dies would tell nobody")
+	assert_not_null(newcomer.economy, "a newcomer with no market can never buy food")
+
+
+## Who arrives is deterministic: the same village reconciled to the same
+## roster produces the same person, so a reload does not swap them.
+func test_who_moves_in_is_the_same_person_every_time():
+	var coord := _find_settlement_chunk("grassland")
+	var seeds: Array = []
+	for attempt in 2:
+		var world := StubWorld.new()
+		var nodes := _a_village_of(world, coord, 10)
+		world.household_count = 11
+		var after: Array = renderer.reconcile_villagers(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+		)
+		for node in after:
+			if node is NpcMarker and not nodes.has(node):
+				seeds.append(node.identity.seed_value)
+	assert_eq(seeds.size(), 2, "precondition: somebody moved in both times")
+	assert_eq(seeds[0], seeds[1], "a different person arrived on the second run")
+
+
+## An EXTINCT village must stay extinct. _population_for reads a roster of
+## 0 as "this settlement was never recorded, fall back to the founding
+## roster" -- exactly right when spawning a village for the first time,
+## and badly wrong here, because a village whose last household died looks
+## identical to one that was never written down.
+##
+## Measured before it was fixed (tools/probe_village_famine.gd): a village
+## fell to a roster of 0, and the reconcile put ten villagers back on the
+## street, who starved, forever.
+func test_an_extinct_village_is_not_repopulated():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	# Everybody died: the markers are gone and the roster is empty.
+	var survivors: Array = []
+	var freed := 0
+	for node in nodes:
+		if node is NpcMarker and freed < 8:
+			freed += 1
+			node.queue_free()
+			continue
+		survivors.append(node)
+	world.household_count = 0
+
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, survivors
+	)
+	assert_eq(_villagers_among(after), 2, "an extinct village refilled itself off the street")
+
+
+## ...and a world that cannot answer at all is left exactly as it is,
+## rather than being guessed at.
+func test_a_world_that_cannot_say_leaves_the_village_alone():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, null, nodes
+	)
+	assert_eq(_villagers_among(after), 10)

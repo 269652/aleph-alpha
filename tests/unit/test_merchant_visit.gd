@@ -15,15 +15,15 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 
-const _DAY := 3600.0
+const _DAY := MerchantVisit.SECONDS_PER_DAY
 
 
 # -- the buy list is real goods at grounded prices -------------------------
 
 func test_every_buyable_good_is_a_real_item_the_village_can_actually_make():
 	var catalog := ItemCatalog.new()
-	assert_false(MerchantVisit.BUY_LIST.is_empty())
-	for item_id in MerchantVisit.BUY_LIST:
+	assert_false(MerchantVisit.buy_list().is_empty())
+	for item_id in MerchantVisit.buy_list():
 		assert_true(catalog.has(item_id), "%s is not a real item" % item_id)
 		assert_gt(MerchantVisit.price_of(item_id), 0, "%s must be worth something" % item_id)
 
@@ -218,3 +218,203 @@ func test_a_merchant_still_walks_to_a_village_with_a_real_surplus():
 		1.0e6, {"wood": 40.0}, 0.0, {"wood": 12}
 	)
 	assert_true(result["arrived"])
+
+
+# -- which clock a visit is paced on --------------------------------------
+#
+# MEASURED (tools/probe_village_famine.gd, before and after): closing the
+# conjured gold faucet so the merchant is a village's only income killed 7
+# of 10 villagers inside 300 seconds, where the same village had survived
+# and grown to 12. The merchant is not too stingy -- he is too SLOW. His
+# day was ConstructionCatchup.SECONDS_PER_DAY (3600), the deliberately
+# conservative rate for integrating an UNLOADED chunk, while hunger kills
+# in Starvation.seconds_to_die (200) of the day the village actually lives
+# on. The soonest he could possibly call was 18x the window in which
+# everyone who could not feed themselves was already dead.
+#
+# The same defect, and the same fix, as the raised build that "ran on the
+# game's own day" (docs/concept/planner_mode.md): a thing the player is
+# WATCHING is paced by the day they live in; a background integration over
+# absence keeps the catch-up rate.
+
+const Starvation = preload("res://src/emergence/starvation.gd")
+
+
+func test_a_visit_is_paced_on_whatever_day_the_caller_names():
+	var stock := {"fish": 100.0}
+	var slow: Dictionary = MerchantVisit.arrivals(60.0, stock, 0.0, {}, 3600.0)
+	var lived: Dictionary = MerchantVisit.arrivals(60.0, stock, 0.0, {}, 60.0)
+	assert_false(bool(slow["arrived"]), "a minute of a 3600-second day buys no visit")
+	assert_true(bool(lived["arrived"]), "a minute of a 60-second day is a whole day's draw")
+
+
+## The rule that matters, stated against the two real numbers: a village
+## with goods to sell must be able to see a merchant INSIDE the window in
+## which its people starve, or its only income arrives after the funeral.
+func test_a_merchant_can_reach_a_village_before_its_people_starve():
+	var stock := {"fish": 100.0}  # plenty to sell: the best draw there is
+	var carry := 0.0
+	var elapsed := 0.0
+	var step := 5.0
+	while elapsed < Starvation.seconds_to_die():
+		var result: Dictionary = MerchantVisit.arrivals(
+			step, stock, carry, {}, MerchantVisit.SECONDS_PER_DAY
+		)
+		carry = float(result["carry"])
+		elapsed += step
+		if bool(result["arrived"]):
+			break
+	assert_lt(
+		elapsed, Starvation.seconds_to_die(),
+		"the merchant arrives %.0fs into a %.0fs starvation window" % [
+			elapsed, Starvation.seconds_to_die()
+		]
+	)
+
+
+## And the day he is paced on is the one the village lives in, not the
+## offscreen catch-up rate.
+func test_the_merchants_day_is_the_day_the_village_lives_in():
+	assert_eq(
+		MerchantVisit.SECONDS_PER_DAY, 60.0,
+		"the same day NpcMarker's schedule, the ecosystem step and the day/night cycle run on"
+	)
+
+
+# -- he must buy what a village actually makes ----------------------------
+#
+# MEASURED (tools/probe_village_famine.gd, with the purse and wallet
+# columns): purse 0.0 and wallets 0 at EVERY sample, in a village holding
+# 38 sellable food in its market and 187 across its shelves. The merchant
+# was being offered the stock every settlement step and refusing all of it.
+#
+# BUY_LIST was beam/plank/hide/wood/fish/meat/fruit. A village's fields
+# grow herb/carrot/potato/wheat (VillageCropChoice.SOWABLE). The two sets
+# did not intersect AT ALL, so the only faucet for gold could never open,
+# so nobody could buy a meal, so they starved standing on food.
+
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
+
+
+## The rule, generalised so the next crop cannot reintroduce the famine: a
+## village must be able to SELL what its own fields are told to grow.
+func test_a_merchant_buys_every_crop_a_village_can_be_told_to_grow():
+	var refused: Array = []
+	for crop_id in VillageCropChoice.sowable_crops():
+		if not MerchantVisit.buy_list().has(crop_id):
+			refused.append(crop_id)
+	assert_eq(refused, [], "the fields grow what he will not buy: %s" % str(refused))
+
+
+## And every one of them has a real price, or he would take it for nothing.
+func test_every_crop_he_buys_fetches_something():
+	for crop_id in VillageCropChoice.sowable_crops():
+		assert_gt(
+			MerchantVisit.price_of(crop_id), 0,
+			"%s sells for nothing" % crop_id
+		)
+
+
+## Raw produce is priced like the raw food already on the list -- not above
+## it, since preparing food is what adds the value (see FARM_GATE_PRICES).
+func test_raw_produce_is_priced_like_the_raw_food_already_on_the_list():
+	for crop_id in VillageCropChoice.sowable_crops():
+		assert_eq(
+			MerchantVisit.price_of(crop_id), MerchantVisit.price_of("fruit"),
+			"%s is raw produce and fetches what raw produce fetches" % crop_id
+		)
+
+
+# -- nothing the village makes is unsellable -------------------------------
+#
+# This file's own doc states it as design pillar 3: *"They buy what a
+# village actually produces... nothing the village makes is unsellable."*
+# It was not true. The buy list was hand-written and the village kept growing
+# past it -- a herbalist's crop, a farmer's wheat, a felled log, gathered
+# stone and plant fibre all arrived after it was written and none was ever
+# added.
+#
+# Measured (tools/probe_village_purse.gd) on a real village after 1200
+# simulated seconds, standing where _step_merchant_visits stands:
+#
+#     herb               117  kind=food       merchant refuses
+#     log                 24  kind=material   merchant refuses
+#     wheat                5  kind=material   merchant refuses
+#     stone                5  kind=material   merchant refuses
+#     plant_fibre          1  kind=material   merchant refuses
+#     wood                10  kind=material   merchant BUYS @1
+#     sellable after reserve : 0     (reserve {"wood": 12})
+#     villagers' purse 0.0 gold | merchant's purse 0.0 gold
+#
+# One of nine ids was sellable, and all ten of those units were spoken for
+# by the village's own next house. A merchant is the ONLY faucet gold has,
+# so a village that makes nothing he buys has no income at all, forever --
+# which is exactly what "all villagers have 0 gold" was reported as.
+
+const NpcProduction = preload("res://src/world/npc_production.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
+
+
+## The invariant itself, made structural rather than aspirational.
+func test_everything_a_villages_own_producers_make_is_sellable():
+	var produce: Array = MerchantVisit.village_produce()
+	assert_false(produce.is_empty(), "the premise: a village makes something")
+	for item_id in produce:
+		assert_true(
+			MerchantVisit.buy_list().has(item_id),
+			"a village makes %s and no merchant will buy it" % item_id
+		)
+		assert_gt(MerchantVisit.price_of(item_id), 0, "%s must be worth something" % item_id)
+
+
+## ...and the produce list is read off the producers' OWN maps, never a
+## second hand-written list, because a second list is precisely what drifted.
+func test_the_produce_list_is_the_producers_own_maps():
+	var produce: Array = MerchantVisit.village_produce()
+	for occupation in NpcProduction.PRODUCER_ITEM_BY_OCCUPATION:
+		assert_true(
+			produce.has(String(NpcProduction.PRODUCER_ITEM_BY_OCCUPATION[occupation])),
+			"a %s's take is village produce" % occupation
+		)
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		assert_true(
+			produce.has(String(VillageFarm.CROP_BY_OCCUPATION[occupation])),
+			"a %s's crop is village produce" % occupation
+		)
+	for item_id in SettlementGathering.gathered_item_ids():
+		assert_true(produce.has(String(item_id)), "gathered %s is village produce" % item_id)
+
+
+## The five ids the drift actually cost that village, named so the
+## regression has a shape a later reader can check against.
+func test_the_goods_a_real_village_was_sitting_on_are_sellable():
+	for item_id in ["herb", "wheat", "log", "stone", "plant_fibre"]:
+		assert_gt(
+			MerchantVisit.price_of(item_id), 0,
+			"a real village held %s and could not turn it into a coin" % item_id
+		)
+
+
+## Raw produce is all worth the same base unit -- the rule already latent
+## in the old table, where wood, fish, meat and fruit were every one of them
+## LOG_PRICE. Stated once here so a new crop needs no new number.
+func test_raw_produce_is_all_worth_the_base_unit():
+	for item_id in MerchantVisit.village_produce():
+		if MerchantVisit.KEEPING_GOOD_PRICES.has(item_id):
+			continue
+		assert_eq(
+			MerchantVisit.price_of(item_id), MerchantVisit.LOG_PRICE,
+			"%s is raw produce and prices at the base unit" % item_id
+		)
+
+
+## And the goods that KEEP are still dearer than the produce that spoils --
+## the doc's own grounding ("He buys what travels") and the reason a
+## merchant walks the circuit at all.
+func test_goods_that_keep_are_worth_more_than_raw_produce():
+	for item_id in MerchantVisit.KEEPING_GOOD_PRICES:
+		assert_gt(
+			MerchantVisit.price_of(String(item_id)), MerchantVisit.LOG_PRICE,
+			"%s keeps and travels, so it beats the farm gate" % item_id
+		)

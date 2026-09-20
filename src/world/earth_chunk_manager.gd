@@ -188,6 +188,7 @@ const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -2601,15 +2602,64 @@ func _settlement_status_for(settlement_id: String) -> String:
 ## bread its Bakery bakes and its Storage holds.
 func _settlement_capacity(settlement_id: String, market, village_market) -> int:
 	return SettlementFood.carrying_capacity(
-		market, village_market, _item_catalog, _settlement_structure_stocks(settlement_id)
+		market, village_market, _item_catalog, _settlement_larder_stocks(settlement_id)
 	)
 
 
-## Every StructureStock standing in `settlement_id`'s own chunk (a settlement
-## IS its chunk -- EntityRef.for_settlement) -- the third food container
-## SettlementFood counts. Keys are "%d_%d" global tiles (see
-## _structure_stock_key), so the chunk each belongs to is a plain divide.
+## Every container this settlement really keeps GOODS in: the
+## StructureStock of each shelf standing in its chunk, whatever building
+## it belongs to -- the warehouse a carter fills, the farmhouse a harvest
+## waits in, the bakery's own shelf.
+##
+## This is what a MERCHANT is shown (docs/concept/traveling_merchants.md,
+## "A merchant buys the whole village, not one of its cupboards"), and it
+## deliberately is NOT the same answer as _settlement_larder_stocks: what
+## a village can SELL and what its people can EAT are different questions
+## about the same shelves. Answering both with the narrow one closed the
+## only gold faucet the game has -- measured (tools/probe_village_purse.gd)
+## on a real village holding 99 units on the stall and 117 on its shelves,
+## with BOTH purses at 0.0 gold and 8 of 8 villagers broke.
 func _settlement_structure_stocks(settlement_id: String) -> Array:
+	return _shelves_in_settlement_chunk(settlement_id, [])
+
+
+## The settlement's own LARDER: of those shelves, the ones its people can
+## actually EAT off -- STRUCTURE_MEAL_SOURCE_IDS, which is the contract
+## SettlementFood.food_stock states for its argument in its own words, "a
+## Storage holding hauled bread, a Bakery with loaves still on its shelf".
+##
+## A farmhouse is where a harvest waits for the carter, not a place anybody
+## eats, and handing every shelf to a FOOD reading is what let a village
+## judge itself richly fed while its people starved. Measured before this
+## split (tools/probe_village_famine.gd) on a real village whose hunger was
+## pinned at 1.00 and whose worst-off villager was 174 of 200 through the
+## starvation window:
+##
+##     settlement Market : 0
+##     VillageMarket     : 0
+##     structure shelves : 234   (three farmhouses; nobody could eat any)
+##
+## 234 units over twelve households is 19.5 each against
+## VillageImmigration.FED_THRESHOLD of 2.0, so the village read as richly
+## fed and kept drawing households into a famine.
+##
+## Kept apart from _settlement_structure_stocks because they answer
+## DIFFERENT QUESTIONS about the same shelves. Collapsing them into the one
+## narrow answer closed the merchant's eyes to the very container the
+## carter's round fills, and a merchant is the only faucet gold has: the
+## same village measured 99 units on the stall and 117 on its shelves with
+## BOTH purses at 0.0 gold and every villager broke.
+func _settlement_larder_stocks(settlement_id: String) -> Array:
+	return _shelves_in_settlement_chunk(settlement_id, STRUCTURE_MEAL_SOURCE_IDS)
+
+
+## Every StructureStock standing in this settlement's chunk, optionally
+## narrowed to a set of structure ids. `structure_ids` empty means every
+## shelf, whatever building it belongs to.
+##
+## Keys are "%d_%d" global tiles (see _structure_stock_key), so the chunk
+## each belongs to is a plain divide.
+func _shelves_in_settlement_chunk(settlement_id: String, structure_ids: Array) -> Array:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var stocks: Array = []
 	for instance_key in _structure_stocks.instance_keys():
@@ -2617,8 +2667,12 @@ func _settlement_structure_stocks(settlement_id: String) -> Array:
 		if parts.size() != 2:
 			continue
 		var tile := Vector2i(int(parts[0]), int(parts[1]))
-		if _chunk_coord_for_tile(tile) == chunk_coord:
-			stocks.append(_structure_stocks.stock_for(instance_key))
+		if _chunk_coord_for_tile(tile) != chunk_coord:
+			continue
+		if not structure_ids.is_empty():
+			if not structure_ids.has(modification_at_global(tile.x, tile.y)):
+				continue
+		stocks.append(_structure_stocks.stock_for(instance_key))
 	return stocks
 
 
@@ -3803,7 +3857,7 @@ func step_settlements(delta_seconds: float) -> void:
 		# (docs/concept/traveling_merchants.md) -- BEFORE the build and
 		# immigration steps, so gold that arrives this tick is gold the
 		# village can act on this tick.
-		_step_merchant_visits(settlement_id, market)
+		_step_merchant_visits(settlement_id, market, village_market)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
@@ -3826,6 +3880,12 @@ func step_settlements(delta_seconds: float) -> void:
 		)
 		# ...and every one of them has a pail by the door to fetch it with.
 		stock_household_buckets_in(RegionalTrade.chunk_coord_of(settlement_id))
+		# ...and the villagers standing there follow the roster, so a
+		# household that moved in this step is somebody you can SEE
+		# (docs/concept/village_mortality.md mechanism 4). Runs after
+		# immigration, on purpose: a newcomer admitted this tick gets a
+		# villager this tick rather than one step later.
+		_reconcile_village_villagers(RegionalTrade.chunk_coord_of(settlement_id))
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -4562,6 +4622,45 @@ func _record_household_departure(settlement_id: String, household) -> void:
 	_memory_store.witness_event(departed, _world_age_seconds)
 
 
+## The villagers standing in a loaded village catch up with its roster
+## (docs/concept/village_mortality.md mechanism 4).
+##
+## Only a LOADED village: an unloaded one has no markers to reconcile, and
+## spawning people into a chunk nobody is looking at is the same invented
+## number immigration already refuses to guess at.
+func _reconcile_village_villagers(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	_loaded_villages[chunk_coord] = _village_renderer.reconcile_villagers(
+		_creatures_parent, chunk_coord, chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self, _loaded_villages[chunk_coord]
+	)
+
+
+## A villager has starved to death (docs/concept/village_mortality.md
+## mechanism 3). True when somebody really was taken off the roster.
+##
+## A death is a DEPARTURE WITH A REASON, not a second mechanism beside it:
+## it goes out through the same `npc_departed` event the estate exodus
+## already appends, so _households_in_settlement, the census, the tier,
+## the growth ladder and the settlement card all see it with no new
+## plumbing -- and the roof they owned stops counting as one of ours,
+## exactly as VillageCensus' roster rule arranges.
+##
+## False for a villager who does not live here, and for one already gone:
+## a death that fired twice would cost the village two households for one
+## person, and a marker can be freed on the same frame the settlement
+## step notices it.
+func record_villager_death(settlement_id: String, seed_value: int) -> bool:
+	var household = _household_store.household_for(EntityRef.for_npc(seed_value))
+	if household == null:
+		return false
+	if not _households_in_settlement(settlement_id).has(household.id):
+		return false
+	_record_household_departure(settlement_id, household)
+	return true
+
+
 ## docs/concept/village_estates.md mechanism 6: the households pay into the
 ## SAME purse VillageWages already pays the subsistence wage out of, which
 ## is what closes the loop on machinery that already exists rather than
@@ -4583,10 +4682,48 @@ func _collect_estate_tax(
 			EstateConsumption.subsistence_satisfaction(estate, satisfaction),
 			EstateConsumption.station_satisfaction(estate, satisfaction)
 		)
-	var take := VillageWages.estate_tax_for(census, provision, days)
-	if take > 0.0:
-		NpcEconomy.deposit_to_purse(market, take)
+	# A TRANSFER, not a faucet (docs/concept/traveling_merchants.md, "The
+	# merchant is the ONLY faucet"). This used to credit the purse and debit
+	# nobody, which made it a second place gold came from nothing -- the
+	# very thing that doc's opening claims to have closed.
+	#
+	# Whole coins only, with the remainder carried: a Wallet holds integer
+	# gold and a kossaet owes 0.25 a day, so collecting per step would
+	# either forgive a real debt or charge it four times over. Same
+	# carry-until-it-crosses-a-whole-unit idiom the rest of this economy
+	# runs on.
+	var owed: float = (
+		VillageWages.estate_tax_for(census, provision, days)
+		+ float(_settlement_tax_carry.get(settlement_id, 0.0))
+	)
+	var demand := int(floor(owed))
+	_settlement_tax_carry[settlement_id] = owed - float(demand)
+	if demand <= 0:
+		return
+	var households: Array = []
+	var balances: Array = []
+	for household_id in _households_in_settlement(settlement_id):
+		var household = _household_store.household_for(household_id)
+		if household == null or household.wallet == null:
+			continue
+		households.append(household)
+		balances.append(int(household.wallet.balance))
+	var debits: Array = VillageWages.tax_debits(balances, demand)
+	var collected := 0
+	for index in debits.size():
+		var debit := int(debits[index])
+		if debit <= 0:
+			continue
+		if households[index].wallet.spend(debit):
+			collected += debit
+	if collected > 0:
+		NpcEconomy.deposit_to_purse(market, float(collected))
 
+
+## settlement_id -> the fraction of a coin this village is owed in tax but
+## cannot yet collect, since a Wallet holds only whole gold. Carried rather
+## than rounded (see _collect_estate_tax).
+var _settlement_tax_carry: Dictionary = {}
 
 ## settlement_id -> StaffedProduction's own per-recipe batch remainder.
 var _settlement_staffed_production_carry: Dictionary = {}
@@ -4742,24 +4879,106 @@ var _settlement_merchant_carry: Dictionary = {}
 ## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
 ## needs only the market's own stock, which is persisted, so a village goes
 ## on trading while the player is away.
-func _step_merchant_visits(settlement_id: String, market) -> void:
+func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
 	var reserved := _construction_reserve_for(settlement_id)
+	# Every container this settlement really keeps goods in, market FIRST
+	# (docs/concept/traveling_merchants.md). He used to price market.stock
+	# alone while SettlementFood counted the shelves too, so a village that
+	# hauled its harvest into the warehouse -- which is the whole point of
+	# the carter's round -- put it beyond the reach of its own only income.
+	# Reported as "way too much food and the NPCs don't have an income",
+	# which is one fault, not two.
+	var shelves: Array = _settlement_structure_stocks(settlement_id)
+	# The LIVE market first, then the persisted ledger, then the shelves.
+	#
+	# `market` here is _market_store's persisted emergence Market, and the
+	# comment beside its lookup in step_settlements says what that means:
+	# "live play essentially never stocks that one". The villagers' own
+	# VillageMarket is where the food they gathered actually is. Measured
+	# with it missing (tools/probe_village_famine.gd): purse 0.0 at every
+	# sample of a 1200-second watch.
+	var views: Array = []
+	if village_market != null:
+		views.append(village_market.stock)
+	views.append(market.stock)
+	for shelf in shelves:
+		views.append(shelf.stock)
+	# And the LARDER. `reserved` already holds back what the village's next
+	# BUILDING needs; nobody was holding back what its PEOPLE eat, so a
+	# merchant carried off the food and left the gold. Measured
+	# (tools/probe_village_famine.gd): purse climbing 21 -> 24 -> 25 with
+	# market food 0 at every sample, and the village dead by t=900.
+	#
+	# The cover is DERIVED, not picked: he calls at most VISITS_PER_DAY
+	# times a day when a village is barely worth the detour, so 1 /
+	# VISITS_PER_DAY days is exactly the longest a village may have to wait
+	# between sales -- the food it must still have when he next appears.
+	var census := _household_store.estate_census(_households_in_settlement(settlement_id))
+	if not census.is_empty():
+		var cover_days := 1.0 / MerchantVisit.VISITS_PER_DAY
+		var season := SeasonCycle.new().season_at(_world_age_seconds)
+		var eaten: float = float(
+			EstateConsumption.demand_for(census, cover_days, season)
+				.get(VillageEstates.FOOD_KIND_TOKEN, 0.0)
+		)
+		if eaten > 0.0:
+			var larder := SettlementSurplus.larder_reserve(
+				views, _merchant_food_ids(), int(ceil(eaten))
+			)
+			for item_id in larder:
+				reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
+	var surplus := SettlementSurplus.combined(views)
+
 	var result: Dictionary = MerchantVisit.arrivals(
-		SETTLEMENT_STEP_INTERVAL, market.stock,
+		SETTLEMENT_STEP_INTERVAL, surplus,
 		float(_settlement_merchant_carry.get(settlement_id, 0.0)), reserved
 	)
 	_settlement_merchant_carry[settlement_id] = result["carry"]
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(market.stock, reserved)
+	var sale: Dictionary = MerchantVisit.purchase(surplus, reserved)
 	if int(sale["paid"]) <= 0:
 		return
-	for item_id in sale["bought"]:
-		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
-	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
+	# Out of the real containers the goods were actually in: paying for
+	# warehouse fish and taking them out of the market would invent goods in
+	# one place and destroy them in another.
+	var plan: Array = SettlementSurplus.allocate(sale["bought"], views)
+	var next := 0
+	if village_market != null:
+		var from_village: Dictionary = plan[next]
+		for item_id in from_village:
+			village_market.remove_stock(str(item_id), float(from_village[item_id]))
+		next += 1
+	var from_market: Dictionary = plan[next]
+	for item_id in from_market:
+		market.remove_stock(str(item_id), float(from_market[item_id]))
+	next += 1
+	for index in shelves.size():
+		var taken: Dictionary = plan[next + index]
+		for item_id in taken:
+			shelves[index].remove_stock(str(item_id), int(floor(float(taken[item_id]))))
+	# Into the purse the WAGE is drawn from. The purse is metadata on a
+	# market OBJECT (NpcEconomy._set_purse), and every villager reads theirs
+	# off the live VillageMarket -- so paying the persisted ledger put the
+	# gold somewhere nobody could ever spend it.
+	var purse_market = village_market if village_market != null else market
+	NpcEconomy.deposit_to_purse(purse_market, float(sale["paid"]))
+
+
+## The food on the merchant's own buy list, in the order he would take it.
+##
+## Read off buy_list() and the real ItemCatalog rather than listed here, so a
+## crop added to one is held back by the other without a second table to
+## keep in step.
+func _merchant_food_ids() -> Array:
+	var ids: Array = []
+	for item_id in MerchantVisit.buy_list():
+		if _item_catalog.kind_of(item_id) == "food":
+			ids.append(item_id)
+	return ids
 
 
 ## What this village is SAVING FOR: item_id -> whole units its own next
@@ -4790,7 +5009,8 @@ func _construction_reserve_for(settlement_id: String) -> Dictionary:
 	var census := _village_census_for(chunk_coord, household_ids)
 	var next_building: String = VillageGrowth.next_building(
 		household_ids.size(), int(census["housed_count"]),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
+		_present_structure_ids_for_settlement_chunk(chunk_coord),
+		int(census["spare_house_capacity"])
 	)
 	if next_building == "":
 		return {}
@@ -4818,11 +5038,14 @@ func _step_village_immigration(settlement_id: String, market, household_ids: Arr
 		return
 
 	var census := _village_census_for(chunk_coord, household_ids)
+	# No frontage term any more: a household moves into a house that really
+	# stands, never onto the promise of one (see VillageImmigration.arrivals
+	# -- the old allowance was granted again on every step, so households
+	# piled up under no roof at all). Making the room is the LADDER's job.
 	var result: Dictionary = VillageImmigration.arrivals(
 		SETTLEMENT_STEP_INTERVAL,
 		_food_per_household(settlement_id, market, household_ids.size()),
 		int(census["spare_house_capacity"]),
-		_growth_site_for(chunk_coord, BuildingCatalog.BUILDING_IDS[0]) != null,
 		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
 		float(_settlement_immigration_carry.get(settlement_id, 0.0))
 	)
@@ -4890,7 +5113,63 @@ func admit_household(chunk_coord: Vector2i) -> String:
 	settled.witnesses = [settlement_id]
 	_event_store.append(settled)
 	_memory_store.witness_event(settled, _world_age_seconds)
-	return _household_store.form_household(npc_id).id
+	var household_id: String = _household_store.form_household(npc_id).id
+	# Somebody you can actually see. Reported live with the town panel in
+	# shot: *"despite showing 20 population only 10 NPCs are there"*.
+	_respawn_village(chunk_coord)
+	return household_id
+
+
+## Re-derives the village standing in `chunk_coord`, so the people on screen
+## are the households that really live there.
+##
+## `spawn_village` runs only from `_load_chunk`, which fixes the villager
+## roster at the moment the chunk loaded -- while admit_household goes on
+## adding to the settlement's household count. A household that moved in
+## while the player stood in the village therefore had no villager at all
+## until the chunk was unloaded and loaded again.
+##
+## A whole re-derivation rather than appending one marker, because a
+## villager is not just a marker: they need their farmhouse's field, their
+## pond, their market stand, their store round, their workspot prop -- all
+## handed out together by spawn_village against the roster as a whole. One
+## villager bolted on afterwards would be the only one in the village
+## missing all of it.
+##
+## Safe to re-run because everything spawn_village does to the WORLD is
+## already idempotent -- every building, fence, pond and paved cell goes
+## through a `_if_missing` check, precisely so a chunk reload never raises a
+## second village on top of the first. What is rebuilt is the scene nodes,
+## which is exactly what a reload rebuilds too.
+##
+## The cost is real and worth naming: a villager mid-errand restarts it. An
+## arrival happens once per house the village actually raises, so that is
+## rare, and it is the same thing the player already causes every time they
+## walk far enough away to unload the chunk.
+##
+## A no-op unless this chunk's village is really on screen -- which is what
+## makes it safe to call from admit_household, since settle_up_to_founding_
+## roster admits households during _load_chunk BEFORE the village is spawned
+## at all.
+func _respawn_village(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for node in _loaded_villages[chunk_coord]:
+		if is_instance_valid(node):
+			node.free()
+	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
+		_creatures_parent,
+		chunk_coord,
+		chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE,
+		TerrainRenderer.TILE_SIZE,
+		_biome_classifier.dominant_biome(chunk.biome),
+		self,
+		_current_sun_elevation_deg
+	)
 
 
 ## This settlement's own mean household productivity (HouseholdWellbeing),
@@ -5060,7 +5339,7 @@ func _food_per_household(settlement_id: String, market, household_count: int) ->
 		return 0.0
 	var stock := SettlementFood.food_stock(
 		market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
-		_item_catalog, _settlement_structure_stocks(settlement_id)
+		_item_catalog, _settlement_larder_stocks(settlement_id)
 	)
 	return float(stock) / float(household_count)
 
@@ -7839,25 +8118,43 @@ const LAKE_PAINT_ACROSS := 1.6
 ## reads these values back as cm to size each rock's radius, and the push
 ## reach, the eyot, the shoal, the foam and the wake all scale from that
 ## radius.
-## The cross-section reading for a cell of a dug pond: how close it is to
-## the pond's own bank, in the same across-fraction units every other kind
-## of water writes (|across| under 1 is water, 1 is the bank line).
+## Whether a DRY cell is on the bank of a dug pond -- the ring, diagonals
+## included, that decides where the pond's own waterline falls.
 ##
-## A pond has no channel and no spill to solve a contour from -- it is a
-## flat-bottomed hole of a fixed size -- so its rim is read straight off
-## its own shape: a cell with dry ground orthogonally beside it is a bank
-## cell and reads near the waterline, a cell surrounded by its own water
-## reads as open water. On a 3x2 pond every cell is a rim cell, which is
-## correct: a pond that small IS all shore.
-const POND_RIM_ACROSS := 0.75
+## The waterline is the contour where the surface's across field crosses 1,
+## and that field is reconstructed by INTERPOLATING between cell centres:
+## what the dry cells round the water carry is therefore half of where the
+## water's edge lands, and leaving them at whatever the nearest river wrote
+## (tens of tiles' worth) crossed the contour a few pixels out from each
+## pond cell's own centre. That is the puddle-in-a-brown-rectangle the
+## screenshot showed. See VillagePond.WATER_ACROSS/BANK_ACROSS for the two
+## numbers and the half-tile they put the edge at.
+##
+## The across a DRY cell should carry: the pond's own bank where one is
+## beside it, else whatever the river field already said.
+##
+## The larger of the two never wins, and that is the rule: a cell caught
+## between a pond and a real river belongs to whichever water is NEARER,
+## and a smaller across is nearer water. So a pond cannot pull a river's
+## waterline outward, and a river running past a pond keeps its own.
+func _across_or_pond_bank(global: Vector2i, river_across: float) -> float:
+	if not _is_pond_bank(global):
+		return river_across
+	return river_across if absf(river_across) < VillagePond.BANK_ACROSS else VillagePond.BANK_ACROSS
 
 
-func _pond_across_at(global: Vector2i) -> float:
-	for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		var neighbour: Vector2i = global + step
-		if not is_pond_at_global(neighbour.x, neighbour.y):
-			return POND_RIM_ACROSS
-	return 0.0
+## Diagonals included: the reconstruction is 2D, so a corner texel pulls on
+## the water just as a cardinal one does.
+func _is_pond_bank(global: Vector2i) -> bool:
+	if is_pond_at_global(global.x, global.y):
+		return false
+	for dy in [-1, 0, 1]:
+		for dx in [-1, 0, 1]:
+			if dx == 0 and dy == 0:
+				continue
+			if is_pond_at_global(global.x + dx, global.y + dy):
+				return true
+	return false
 
 
 func _collect_flow_boulder(global: Vector2i) -> void:
@@ -7868,12 +8165,46 @@ func _collect_flow_boulder(global: Vector2i) -> void:
 		_river_flow_boulder_tiles.erase(global)
 
 
-func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
+## Repaints the water surface over a cell whose pond-ness just changed, and
+## over the cells round it.
+##
+## The surface is painted ONCE per chunk load, and the village that digs a
+## fisher's pond runs LATER in that same load (spawn_village) -- so the
+## overlay pass had already been and gone, and a pond dug on the visit that
+## founded the village showed no water at all until the chunk was next
+## reloaded. What was left on screen is the bare `pond_water` modification,
+## which the painter has no tile of its own for and falls through to flat
+## earth: reported live with a screenshot, "the built pond renders as earth
+## instead of water", fish swimming on the brown.
+##
+## Its NEIGHBOURS too, because a pond's own cross-section is read off them
+## (_pond_across_at): a cell that was rim water becomes open water the
+## moment the cell beside it is dug. Scoped to those five rather than the
+## whole chunk -- the surface pass probes hydrology per cell, and a pond is
+## dug one cell at a time.
+func _repaint_water_surface_around(chunk_coord: Vector2i, chunk: Chunk, local: Vector2i) -> void:
+	if _river_flow_layer == null:
+		return
+	var cells: Array = [local]
+	for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var neighbour: Vector2i = local + step
+		if neighbour.x >= 0 and neighbour.y >= 0 and neighbour.x < chunk.width and neighbour.y < chunk.height:
+			cells.append(neighbour)
+	_paint_river_flow_overlay(chunk_coord, chunk, cells)
+
+
+## `only_cells` (LOCAL cells) repaints just those and leaves the rest of
+## the chunk's surface alone -- what a single dug or filled pond cell needs
+## (see _repaint_water_surface_around). Empty, the default, is the whole
+## chunk, exactly as every existing caller means.
+func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk, only_cells: Array = []) -> void:
 	if _river_flow_layer == null:
 		return
 	var origin := chunk_coord * CHUNK_SIZE
 	for y in chunk.height:
 		for x in chunk.width:
+			if not only_cells.is_empty() and not only_cells.has(Vector2i(x, y)):
+				continue
 			var global := origin + Vector2i(x, y)
 			# ONE WATER SURFACE (docs/concept/hydrology.md): rivers, lakes
 			# and the sea all ride this overlay. A river tile (including a
@@ -7897,7 +8228,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# shore feather and ripples.
 			if is_pond_at_global(global.x, global.y):
 				_write_flow_across_texel(
-					global, _pond_across_at(global), 0.0, 0.0,
+					global, VillagePond.WATER_ACROSS, 0.0, 0.0,
 					RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.0
 				)
 				_collect_flow_boulder(global)
@@ -7968,7 +8299,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				)
 				_write_flow_across_texel(
 					global,
-					nearest.signed_across_tiles / half_width,
+					_across_or_pond_bank(global, nearest.signed_across_tiles / half_width),
 					nearest.course_bearing_deg,
 					far_hydraulics.velocity_m_s,
 					half_width,
@@ -7986,7 +8317,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				)
 				_write_flow_across_texel(
 					global,
-					nearest.signed_across_tiles / half_width,
+					_across_or_pond_bank(global, nearest.signed_across_tiles / half_width),
 					nearest.course_bearing_deg,
 					apron_hydraulics.velocity_m_s,
 					half_width,
@@ -14978,6 +15309,10 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 		chunk.structural_checked_at.erase(local)
 	_sync_statics(chunk_coord, chunk, local)
 	_sync_flow_boulder(Vector2i(global_x, global_y))
+	# Water dug now is water on screen now (see _repaint_water_surface_
+	# around) -- not water after the next reload.
+	if VillagePond.is_pond_tile(tile_id) or VillagePond.is_pond_tile(previous_tile_id):
+		_repaint_water_surface_around(chunk_coord, chunk, local)
 	return true
 
 
@@ -15012,6 +15347,9 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	chunk.structural_instability.erase(local)
 	chunk.structural_checked_at.erase(local)
 	_sync_statics(chunk_coord, chunk, local)
+	# ... and ground filled in now stops being water now, the same way.
+	if VillagePond.is_pond_tile(previous_tile_id):
+		_repaint_water_surface_around(chunk_coord, chunk, local)
 	return true
 
 
@@ -15646,6 +15984,28 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	kerb.position = Vector2(0, -footprint_px.y * 0.5)
 	node.add_child(kerb)
 
+	# The yard the building stands in, between the kerb and the house: on the
+	# ground the kerb marks out, under the walls (children paint in tree
+	# order). A woodpile, a barrel, a bench, a beaten path -- none of it in
+	# the building's own sheet, which draws the house alone. See
+	# docs/concept/building.md, "A building's own yard, drawn behind it".
+	#
+	# Seeded from the building's own seed through BuildingCatalog's own
+	# salts, so two farmhouses in a village differ and one looks the same on
+	# every reload. A building with no yard declared grows no node at all.
+	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
+	if not yard_sheet.is_empty():
+		var yard_texture := _first_texture_of([yard_sheet], footprint.x, building_id)
+		if yard_texture != null:
+			var yard := Sprite2D.new()
+			yard.name = "Yard"
+			yard.texture = yard_texture
+			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+			yard.position = Vector2(
+				0, -float(yard_texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE
+			)
+			node.add_child(yard)
+
 	var sprite := Sprite2D.new()
 	sprite.name = "Art"
 	# Which picture a FINISHED building has is BuildingCatalog's call (see
@@ -15906,6 +16266,23 @@ func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	_remove_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
 		_spawn_piece_collision(global_cell, tile_id)
+		return
+	# A village farm's rail is the one solid thing here that is NOT a
+	# building piece, and it is why the player walked through every fence in
+	# the game while every animal and villager respected them: rails_block_step
+	# is an ask-before-you-step rule, markers ask it, and a CharacterBody2D
+	# cannot -- it needs something in the world to hit.
+	#
+	# An EDGE body, not a tile one: a rail stands on the inner edge of its
+	# cell and the rest of that cell is street you may walk (docs/concept/
+	# village_farms.md, "The rail stands on the inner edge"). VillageFarm owns
+	# which edge and how thick, so physics and the step rule read the same
+	# source.
+	var rail := VillageFarm.fence_collider_rect(
+		tile_id, float(TerrainRenderer.TILE_SIZE), VillageFarm.FENCE_COLLIDER_THICKNESS_PX
+	)
+	if rail.size != Vector2.ZERO:
+		_spawn_rail_collision(global_cell, rail)
 
 
 func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
@@ -15918,6 +16295,28 @@ func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
 	var shape := CollisionShape2D.new()
 	var rect := RectangleShape2D.new()
 	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
+	shape.shape = rect
+	body.add_child(shape)
+	_entities_parent.add_child(body)
+	var chunk_coord := _chunk_coord_for_tile(global_cell)
+	if not _piece_collision_bodies.has(chunk_coord):
+		_piece_collision_bodies[chunk_coord] = {}
+	_piece_collision_bodies[chunk_coord][global_cell] = body
+
+
+## A rail's edge body. Deliberately stored in _piece_collision_bodies beside
+## the tile-sized ones: chunk unload already frees everything in there, and a
+## second per-chunk dictionary would be a second thing to remember to free
+## (see test_unloading_a_chunk_frees_its_wall_collision_bodies).
+func _spawn_rail_collision(global_cell: Vector2i, local_rect: Rect2) -> void:
+	var body := StaticBody2D.new()
+	body.name = "RailCollision"
+	var tile_origin := Vector2(global_cell) * float(TerrainRenderer.TILE_SIZE)
+	body.position = tile_origin + local_rect.position + local_rect.size * 0.5
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = local_rect.size
 	shape.shape = rect
 	body.add_child(shape)
 	_entities_parent.add_child(body)
@@ -16993,8 +17392,17 @@ const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 ## behaviour that matters -- what the settlement counts as food is what its
 ## people can eat -- so the next store added here fails a test rather than
 ## starving a village quietly.
+## The FARMHOUSE was the next one down the same chain, and it stranded the
+## harvest the same way the warehouse once did. Measured
+## (tools/probe_village_famine.gd's own food breakdown): 97 units of a
+## village's own crop, in its own three farmhouses, that its own people
+## could not eat -- while they starved to death around them. A farmer's
+## crop is PUT in the farmhouse (NpcMarker._work_field_cell ->
+## deposit_to_structure_at) and only becomes warehouse food once a carter
+## has fetched it; a village whose carter is slow, or which has no store at
+## all, keeps every bite of its harvest there.
 const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = [
-	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID
+	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID, VillageFarm.FARM_BUILDING_ID
 ]
 
 
@@ -17946,7 +18354,7 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 	# bread -> bakery -> flour -> mill -> wheat -> farm with no new code.
 	var food_shortfall := SettlementFood.food_shortfall_for(
 		household_ids.size(), market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
-		_item_catalog, _settlement_structure_stocks(settlement_id)
+		_item_catalog, _settlement_larder_stocks(settlement_id)
 	)
 	if not food_shortfall.is_empty():
 		shortfalls.append(food_shortfall)

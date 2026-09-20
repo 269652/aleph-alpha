@@ -2135,16 +2135,27 @@ func _apply_decision(decision: Dictionary, delta: float) -> void:
 			# has to go around a tree, but must not be talked out of running
 			# by the very thing it is running from.
 			_advance_gated(_flee_direction, FLEE_SPEED, delta, false)
+		# Obstacle-gated, exactly like the flee branch above and for the
+		# mirror-image reason: a predator still has to go round a wall, but
+		# must not be talked out of its hunt by the animal it is hunting
+		# (avoid_threats = false).
+		#
+		# These three called the UNGATED _advance until 2026-09-20, which is
+		# why "creatures walk through houses" survived the gate being fixed:
+		# the gate was right, and the three behaviours most likely to be
+		# watched -- a predator closing on prey -- were the ones not using
+		# it. Measured at the time: a wall one tile ahead, and the animal
+		# crossed two full tiles through it in a single 0.5s step.
 		"attack":
-			_advance(decision.direction, HUNT_SPEED, delta)
+			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
 			_try_attack(_stimulus_node(decision))
 			_current_action = "attack"
 		"hunt":
-			_advance(decision.direction, HUNT_SPEED, delta)
+			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
 			_try_eat(_stimulus_node(decision))
 			_current_action = "attack"
 		"scavenge":
-			_advance(decision.direction, HUNT_SPEED, delta)
+			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
 			_try_scavenge(_stimulus_node(decision))
 			_current_action = "attack"
 		"seek_water":
@@ -2403,6 +2414,35 @@ func _building_blocks_movement(heading: Vector2) -> bool:
 	return _world.piece_blocks_movement_at_global(tile.x, tile.y)
 
 
+## Whether THIS FRAME'S step would land the animal inside a solid piece.
+##
+## _building_blocks_movement above looks a fixed MOVEMENT_LOOKAHEAD (14px,
+## roughly a tile) ahead, which is what lets a creature start going round a
+## wall before it is standing on one. That is necessary and not sufficient:
+## a heading the look-ahead CLEARS can still pass through a solid tile on
+## the way, because one frame's step is a fraction of a pixel while the
+## look-ahead point is fourteen of them away.
+##
+## Measured while fixing "creatures walk through houses": a predator
+## correctly deflected 60 degrees to go round a wall then walked diagonally
+## into that wall's own tile, one 0.9px step at a time, because every one of
+## those steps had a look-ahead point that cleared the far corner.
+##
+## This is the same question NpcMarker._blocked_step has always asked -- the
+## tile the walker will actually be IN -- which is why a villager never had
+## this bug and an animal did.
+func _building_blocks_arrival(heading: Vector2, speed: float, delta: float) -> bool:
+	if (
+		_world == null
+		or not _world.has_method("piece_blocks_movement_at_global")
+		or heading.length() < 0.01
+	):
+		return false
+	var arrival := position + heading.normalized() * speed * delta
+	var tile := Vector2i(floori(arrival.x / _tile_size), floori(arrival.y / _tile_size))
+	return _world.piece_blocks_movement_at_global(tile.x, tile.y)
+
+
 func _fence_blocks_movement(heading: Vector2) -> bool:
 	if _world == null or not _world.has_method("fence_blocks_step_global") or heading.length() < 0.01:
 		return false
@@ -2460,6 +2500,7 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 		_terrain_blocks_movement(heading)
 		or _fence_blocks_movement(heading)
 		or _building_blocks_movement(heading)
+		or _building_blocks_arrival(heading, speed, delta)
 	):
 		heading = Vector2.ZERO
 	_last_gated_heading = heading

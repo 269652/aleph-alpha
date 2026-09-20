@@ -1,5 +1,7 @@
 extends GutTest
 
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
 ## Where a villager may actually EAT from.
 ##
 ## Reported live with the panel open and a stocked store in shot: *"there's
@@ -81,7 +83,7 @@ func test_a_villager_can_eat_from_the_village_warehouse():
 ## village starves next to its own full store.
 func test_what_the_settlement_counts_as_food_is_what_its_people_can_eat():
 	_a_stocked(VillageLayout.WAREHOUSE_BUILDING_ID, "cooked_meat", 5)
-	var stocks: Array = manager._settlement_structure_stocks(
+	var stocks: Array = manager._settlement_larder_stocks(
 		manager.EntityRef.for_settlement(_chunk_coord)
 	)
 	assert_false(stocks.is_empty(), "precondition: the settlement counts this shelf at all")
@@ -102,3 +104,134 @@ func test_an_empty_warehouse_feeds_nobody():
 func test_a_warehouse_holding_no_food_feeds_nobody():
 	_a_stocked(VillageLayout.WAREHOUSE_BUILDING_ID, "wood", 20)
 	assert_false(manager.has_village_meal_near(_pixel_of(_store)))
+
+
+# -- the village's larder is what its people can eat ------------------------
+#
+# Reported as a village that kept drawing households while everybody in it
+# starved. Measured (tools/probe_village_famine.gd) on a real village at
+# t=1200, with hunger pinned at 1.00 and the worst-off villager 174 of 200
+# through the starvation window:
+#
+#     settlement Market : 0
+#     VillageMarket     : 0
+#     structure shelves : 234
+#       farmhouse  holds  68 food -- a villager there CANNOT eat it
+#       farmhouse  holds  68 food -- a villager there CANNOT eat it
+#       farmhouse  holds  96 food -- a villager there CANNOT eat it
+#
+# 234 units over twelve households is 19.5 each against a FED_THRESHOLD of
+# 2.0, so VillageImmigration read the place as richly fed and kept sending
+# people into a famine.
+#
+# SettlementFood.food_stock documents this argument as "a Storage holding
+# hauled bread, a Bakery with loaves still on its shelf" -- shelves people
+# eat off. _settlement_structure_stocks handed it EVERY shelf in the
+# chunk. The caller was breaking its own parameter's contract.
+
+func _settlement_larder() -> int:
+	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
+	var catalog = ItemCatalog.new()
+	var total := 0
+	for stock in manager._settlement_larder_stocks(
+		manager.EntityRef.for_settlement(_chunk_coord)
+	):
+		for item_id in stock.stock:
+			if catalog.kind_of(String(item_id)) == "food":
+				total += int(stock.stock[item_id])
+	return total
+
+
+## A farmhouse full of grain IS the village's larder now, and this test has
+## been turned round rather than deleted.
+##
+## It used to read "a farmhouse is where a harvest waits for the carter;
+## nobody eats off it" -- a coherent rule, and the wrong side of the line
+## once measured. tools/probe_village_famine.gd's own food breakdown, on a
+## village dying out:
+##
+##     farmhouse holds 37 food -- a villager there CANNOT eat it
+##     farmhouse holds 56 food -- a villager there CANNOT eat it
+##     farmhouse holds  4 food -- a villager there CANNOT eat it
+##
+## Ninety-seven units of the village's own crop, in its own farmhouses,
+## while its own people starved around them. A harvest waiting for a carter
+## who is slow, or for a store the village has not built yet, is food; the
+## people standing in the farmyard may eat it.
+##
+## The INVARIANT this file exists for is untouched: what the settlement
+## counts as food is exactly what its people can eat. That held with the
+## farmhouse outside both sets and it holds with it inside both -- what
+## moved is the boundary, not the rule.
+func test_a_farmhouse_shelf_is_the_villages_larder_too():
+	_a_stocked("farmhouse", "cooked_meat", 50)
+	assert_true(
+		manager.has_village_meal_near(_pixel_of(_store)),
+		"the harvest in the farmyard is food the village can eat"
+	)
+	assert_eq(_settlement_larder(), 50, "and the village counts exactly what it can eat")
+
+
+func test_a_warehouse_shelf_is_the_villages_larder():
+	_a_stocked(VillageLayout.WAREHOUSE_BUILDING_ID, "cooked_meat", 50)
+	assert_eq(_settlement_larder(), 50)
+
+
+## The two the parameter's own documentation names.
+func test_a_storage_is_still_the_villages_larder():
+	_a_stocked("storage", "cooked_meat", 7)
+	assert_eq(_settlement_larder(), 7)
+
+
+func test_a_bakery_is_still_the_villages_larder():
+	_a_stocked("bakery", "bread", 9)
+	assert_eq(_settlement_larder(), 9)
+
+
+## The invariant, stated once: every unit the settlement counts is on a
+## shelf somebody standing there could eat from.
+func test_every_unit_the_village_counts_is_one_its_people_could_eat():
+	_a_stocked("farmhouse", "cooked_meat", 50)
+	if _settlement_larder() > 0:
+		assert_true(
+			manager.has_village_meal_near(_pixel_of(_store)),
+			"the village counted a shelf its own people cannot reach"
+		)
+	else:
+		assert_eq(_settlement_larder(), 0)
+
+
+## MEASURED (tools/probe_village_famine.gd, its own food breakdown):
+##
+##     settlement Market : 0
+##     VillageMarket     : 0
+##     structure shelves : 0
+##       farmhouse    holds  37 food -- a villager there CANNOT eat it
+##       farmhouse    holds  56 food -- a villager there CANNOT eat it
+##       farmhouse    holds   4 food -- a villager there CANNOT eat it
+##
+## Ninety-seven units of the village's own harvest, in the village's own
+## farmhouses, that the village's own people could not eat -- while they
+## starved. STRUCTURE_MEAL_SOURCE_IDS named the bakery, the storage and the
+## warehouse, and a farmhouse is where a farmer's crop is PUT
+## (NpcMarker._work_field_cell -> deposit_to_structure_at); it only becomes
+## warehouse food once a carter has fetched it.
+##
+## Exactly the defect this list's own doc comment was written about -- "the
+## village was fed on paper and its people could not eat" -- one store
+## further down the chain.
+func test_a_village_can_eat_the_crop_its_own_farmhouse_is_holding():
+	assert_true(
+		EarthChunkManager.STRUCTURE_MEAL_SOURCE_IDS.has(VillageFarm.FARM_BUILDING_ID),
+		"a farmhouse holds the harvest before the carter comes, and people must be able to eat it"
+	)
+
+
+## The generalisation, so the next store cannot strand food silently: every
+## building a village PUTS food into has to be one it can eat out of.
+func test_every_building_a_village_stores_food_in_can_be_eaten_from():
+	var stranded: Array = []
+	for building_id in [VillageFarm.FARM_BUILDING_ID, VillageLayout.WAREHOUSE_BUILDING_ID]:
+		if not EarthChunkManager.STRUCTURE_MEAL_SOURCE_IDS.has(building_id):
+			stranded.append(building_id)
+	assert_eq(stranded, [], "food goes in and cannot come out: %s" % str(stranded))

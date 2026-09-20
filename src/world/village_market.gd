@@ -149,6 +149,15 @@ func _is_food(item_id: String) -> bool:
 	return item_catalog.kind_of(item_id) == FOOD_KIND
 
 
+## Whether `item_id` is something a villager can eat -- _is_food in
+## public, so a caller holding food OUTSIDE this market (a villager's own
+## load, see NpcEconomy._eat_from_the_load) tests it exactly the same way
+## rather than growing the second hand-maintained food list _is_food's own
+## note warns against.
+func is_food(item_id: String) -> bool:
+	return _is_food(item_id)
+
+
 func can_buy_meal() -> bool:
 	for item_id in stock:
 		if stock[item_id] >= FOOD_UNITS_PER_MEAL and _is_food(item_id):
