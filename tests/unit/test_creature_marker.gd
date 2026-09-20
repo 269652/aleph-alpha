@@ -4505,3 +4505,77 @@ func test_a_hunt_across_open_ground_still_closes_on_its_prey():
 	var before := marker.position
 	marker._apply_decision({"intent": "hunt", "direction": Vector2.RIGHT}, 0.5)
 	assert_gt(marker.position.x, before.x, "a predator must still be able to hunt")
+
+
+# -- a bear is not a boar (docs/concept/predator_profiles.md) ------------
+#
+# Measured before SpeciesBite existed: every species in the game bit for
+# one ATTACK_DAMAGE (6.0) on one ATTACK_COOLDOWN (0.8 s), sensed at one
+# radius and fled below half health, so the only difference between a
+# mouse and a bear was the sprite and the hit points. That is why the
+# world's difficulty rings gated nothing a player could feel.
+
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+
+
+func _bite_of(species: String) -> float:
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new(species)
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	add_child(victim)
+	biter._try_attack(victim)
+	var dealt: float = victim.damage_taken
+	biter.queue_free()
+	victim.queue_free()
+	return dealt
+
+
+func test_each_species_bites_for_its_own_profile_not_one_shared_number():
+	for species in ["wolf", "bear", "boar"]:
+		if not SpeciesBite.has_profile(species):
+			continue
+		assert_almost_eq(
+			_bite_of(species), SpeciesBite.bite_damage_for(species), 0.001,
+			"%s must bite for its own profile" % species
+		)
+
+
+func test_a_bear_bites_harder_than_a_boar():
+	if not (SpeciesBite.has_profile("bear") and SpeciesBite.has_profile("boar")):
+		pass_test("both profiles are needed for this comparison")
+		return
+	assert_gt(_bite_of("bear"), _bite_of("boar"), "the animal the rings gate you from hits harder")
+
+
+func test_a_species_with_no_profile_still_bites_the_shared_default():
+	assert_almost_eq(
+		_bite_of("not_a_real_species"), CreatureMarker.ATTACK_DAMAGE, 0.001,
+		"an unknown species falls back rather than dealing zero"
+	)
+
+
+func test_the_cooldown_between_bites_is_the_species_own():
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new("bear")
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	add_child(victim)
+	biter._try_attack(victim)
+	if SpeciesBite.has_profile("bear"):
+		assert_almost_eq(
+			biter._attack_cooldown_remaining,
+			SpeciesBite.bite_cooldown_seconds_for("bear"), 0.001
+		)
+	biter._try_attack(victim)
+	assert_eq(victim.damage_taken, _bite_of("bear"), "a second bite inside the cooldown lands nothing")
+	biter.queue_free()
+	victim.queue_free()
