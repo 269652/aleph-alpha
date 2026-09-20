@@ -114,6 +114,21 @@ func _sample() -> void:
 	_lines.append("  markers with no world at all : %d" % no_world)
 	_lines.append("  markers with no wall predicate: %d" % no_predicate)
 
+	# Making a whole footprint solid can only hurt one way: a villager whose
+	# TARGET sits on a building cell can no longer arrive, and would stand
+	# there for good. So movement is measured beside trespass -- a fix that
+	# freezes half the village is not a fix.
+	var frozen := 0
+	# "Still moving at the end" separates the two things a shorter total
+	# distance can mean: a villager who ROUTES AROUND a house spends some
+	# frames standing while the route is replanned but is still walking at
+	# the end of the run, while one WEDGED against a wall it cannot get
+	# round stops and never starts again.
+	var stalled_at_end := 0
+	var stalled_touching_a_house := 0
+	var standing_frames := 0
+	var travelled := 0.0
+	var targets_on_a_building := 0
 	var inside_frames := 0
 	var total_frames := 0
 	var worst_name := ""
@@ -125,8 +140,24 @@ func _sample() -> void:
 	var pieces_agreeing := 0
 	for villager in villagers:
 		var mine := 0
+		var start: Vector2 = villager.position
+		var walked := 0.0
+		var previous: Vector2 = villager.position
+		var tail := 0.0
+		var workspot = villager.workspot_position if villager.has_method("workspot_position") else null
+		if workspot != null:
+			var wcell := Vector2i(floori(workspot.x / TILE), floori(workspot.y / TILE))
+			if _manager.has_building_at_global(wcell.x, wcell.y):
+				targets_on_a_building += 1
 		for frame in FRAMES:
 			villager._process(SLICE)
+			var stepped := previous.distance_to(villager.position)
+			walked += stepped
+			if stepped < 0.01:
+				standing_frames += 1
+			if frame >= FRAMES - 90:
+				tail += stepped
+			previous = villager.position
 			var cell := _cell_of(villager)
 			total_frames += 1
 			if not _manager.has_building_at_global(cell.x, cell.y):
@@ -135,6 +166,50 @@ func _sample() -> void:
 			inside_frames += 1
 			if _manager.piece_blocks_movement_at_global(cell.x, cell.y):
 				pieces_agreeing += 1
+		travelled += walked
+		if walked < 1.0:
+			frozen += 1
+		if tail < 1.0:
+			stalled_at_end += 1
+			# Wedged, or simply idle? A villager that stops with a house in
+			# a neighbouring cell is the one worth worrying about; one that
+			# stops in open ground is doing what villagers do between jobs,
+			# and does it in the baseline run too.
+			var cell := _cell_of(villager)
+			var touching := false
+			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var n: Vector2i = cell + offset
+				if _manager.has_building_at_global(n.x, n.y):
+					touching = true
+			if touching:
+				stalled_touching_a_house += 1
+				# A doorstep TOUCHES its house by construction
+				# (BuildingCatalog.doorstep_of), so a villager who got home
+				# and is idling there looks exactly like one pressed
+				# against a wall -- until you ask which it is.
+				# Wedged means EVERY way out is refused. Asked directly
+				# rather than inferred from "it stopped moving": a villager
+				# waiting on a schedule and one pressed into a corner both
+				# stand still, and only one of them is a bug.
+				var open_ways := 0
+				var step := 1.5  # roughly one frame of walking
+				for offset in [
+					Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1),
+					Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1),
+				]:
+					var to: Vector2 = villager.position + offset.normalized() * step
+					if villager._slid_along_walls(villager.position, to) != villager.position:
+						open_ways += 1
+				_lines.append(
+					"    stopped by a house: %s, at_home=%s, tag=%s, route=%d, ways out=%d/8"
+					% [
+						str(villager.identity.occupation) if villager.identity != null else "?",
+						str(villager._at_home),
+						str(villager.current_location_tag()),
+						villager._route.size() if "_route" in villager else -1,
+						open_ways,
+					]
+				)
 		if mine > 0:
 			ever_inside += 1
 		if mine > worst:
@@ -150,3 +225,13 @@ func _sample() -> void:
 	_lines.append(
 		"  ...of which the PIECE question would also have refused: %d" % pieces_agreeing
 	)
+	_lines.append("  villagers that never moved at all: %d / %d" % [frozen, villagers.size()])
+	_lines.append("  mean distance walked            : %.0f px" % (travelled / float(villagers.size())))
+	_lines.append("  workspots sitting on a building : %d" % targets_on_a_building)
+	_lines.append("  still walking in the last 90 fr : %d / %d" % [
+		villagers.size() - stalled_at_end, villagers.size()
+	])
+	_lines.append("  ...of those, stopped touching a house: %d" % stalled_touching_a_house)
+	_lines.append("  frames spent standing still     : %d / %d (%.1f%%)" % [
+		standing_frames, total_frames, 100.0 * float(standing_frames) / maxf(1.0, float(total_frames))
+	])

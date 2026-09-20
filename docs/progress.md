@@ -27493,12 +27493,29 @@ walkable DOOR and FLOOR -- but it defended the wrong thing.
 | villagers ever inside one | **9 / 10** | **0 / 10** |
 | worst offender | carter, 621 frames | — |
 | ...of which the PIECE question would also have refused | **0** | — |
+| villagers that never moved at all | 0 / 10 | 0 / 10 |
+| still walking in the last 90 frames | 9 / 10 | 7 / 10 |
+| frames spent standing still | 5310 (59.0%) | 6498 (72.2%) |
+| mean distance walked | 375 px | 256 px |
 
-That last row is the diagnosis in one number: not one of the 1818 cells a
+The fourth row is the diagnosis in one number: not one of the 1818 cells a
 villager stood on inside a house was a cell the old question would have
 refused, because a house entity has no `BuildingPiece` in it. Every marker
 had a world and a valid wall predicate the whole time — the gate was never
 missing, it was asking about the wrong kind of building.
+
+**The cost, stated rather than glossed:** villagers stand still more
+(72% of frames against 59%) and cover less ground in the same window,
+because a route around a house is not a line through one. Three ended the
+run stopped next to a house, against one before — so each was asked
+**directly** whether it had any way out, by offering it all eight
+directions through its own slide. All three had 4–5 open, none was wedged,
+and none was frozen for the whole run. The standing is villagers being
+villagers; the baseline already spent 59% of its frames that way.
+
+**Probe caveat:** it drives `villager._process` without stepping the world
+clock, so schedules do not advance as they would live. The numbers are
+sound as a *comparison* between the two runs, which is what they are for.
 
 **TDD:** new `test_marker_gates_block_buildings.gd` (10 tests) works on a
 REAL `house_medium` in a real Berlin chunk rather than a stub -- a stub can
