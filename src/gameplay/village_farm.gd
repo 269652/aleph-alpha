@@ -324,9 +324,34 @@ static func action_for(plot) -> String:
 ## bed costs one trip; losing it costs the entire growth cycle.
 static func next_action(plots: Array) -> int:
 	for kind in ["harvest", "water", "plant"]:
+		var first := -1
 		for i in plots.size():
-			if action_for(plots[i]) == kind:
+			if action_for(plots[i]) != kind:
+				continue
+			# Unbroken ground first, among beds asking for the same thing.
+			# Reported live with the field in shot: *"the NPC only sows 4 / 6
+			# tiles"*, and measured (tools/probe_village_farming.gd): every
+			# field in the sample held six cells, five cycling normally and
+			# the sixth reporting "no marker, never tilled" after a full
+			# 600-second work block -- the same bed, for both farmers in the
+			# village.
+			#
+			# Ground nobody has tilled asks to be planted, and so does a bed
+			# that was sown, ripened and harvested. Returning the first match
+			# meant that once the earlier beds started cycling, one of them
+			# was always an earlier "plant" than the ground at the end, and
+			# the last bed was never broken at all. A farmer sows the FIELD
+			# before sowing any of it twice.
+			#
+			# Only ever reorders beds wanting the SAME thing: a null plot's
+			# action is "plant" and nothing else, so a ripe crop and a dying
+			# bed still come first, which is what the kind order is for.
+			if plots[i] == null:
 				return i
+			if first == -1:
+				first = i
+		if first != -1:
+			return first
 	# Nothing ripe, nothing dying, nothing bare -- so tend the THIRSTIEST
 	# bed rather than stand still. A farmer in their own field always has
 	# something to do, and this is what keeps a field alive: measured with
