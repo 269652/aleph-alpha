@@ -93,17 +93,22 @@ func _draw_mallet(image: Image, center: Vector2) -> void:
 	_draw_oval(image, center + Vector2(4.0, -4.0), 1.0, 0.7, HEAD_COLOR)
 
 
-## A bundle of boards up on one shoulder, and the arm holding it there.
-## Three planks rather than one bar: a single line reads as a stick, and
-## what a builder walks back from the store with is an armful. Drawn
-## rising to the right, from inside the body out past the shoulder, so it
-## is attached to the man by construction -- the same lesson the mallet
-## above already had to learn once.
+## A bundle of boards carried under the arm. Three planks rather than one
+## bar: a single line reads as a stick, and what a builder walks back from
+## the store with is an armful. Drawn from inside the body out past his
+## side, so it is attached to the man by construction -- the same lesson
+## the mallet above already had to learn once.
+##
+## At CHEST height, deliberately, and that is the second lesson. Drawn up
+## on the shoulder (measured on a real render at the game's own zoom,
+## tools/probe_construction_haul.gd) the bundle sat exactly where the head
+## is, and sawn timber and skin are near enough in tone that the two
+## merged into one pale mass over a brown body. Carried lower, the dark
+## apron runs between the head and the load and both read.
 func _draw_load(image: Image, center: Vector2) -> void:
-	_draw_line(image, center + Vector2(1.5, 0.5), center + Vector2(3.0, -1.5), SKIN_COLOR)
-	for plank in [-2.0, -1.0, 0.0]:
+	for plank in [0.0, 1.0, 2.0]:
 		_draw_line(
-			image, center + Vector2(0.5, plank), center + Vector2(5.5, plank - 3.0), LOAD_COLOR
+			image, center + Vector2(1.0, plank), center + Vector2(5.5, plank - 1.0), LOAD_COLOR
 		)
 
 

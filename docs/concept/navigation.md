@@ -179,6 +179,19 @@ observation, not an optimisation.
   test that actually mattered: not "never inside a house", which sliding
   already passed, but **arrives at a doorstep with a house squarely in the
   way**, which sliding failed at 89px out.
+- ✅ **The site's builder routes too** (2026-09-20). He used to work one
+  plot and never leave it, so the question never arose; carrying material
+  from the village store (see [building.md](building.md), "And he carries
+  the material") sends him across the square, and the first real village
+  he was let loose in caught it exactly as this doc would predict —
+  measured with `tools/probe_construction_haul.gd`, he walked 68 px toward
+  the store's door, pressed into the corner of a building 25 px short of
+  it, and stood there for the remaining 230 simulated seconds.
+  `ConstructionWorkerMarker` steers the same way `NpcMarker` does, on the
+  same node budget and recompute throttle (pinned to that marker's own
+  constants by test). One addition: a route that runs OUT while he is
+  still short of his goal is recomputed, because a leg that ends short is
+  that same stall by another road.
 - ✅ **The slide stays underneath the router.** A route can go stale — a
   house raised across it mid-walk — and `_slid_along_walls` is what
   guarantees a stale route still never ends inside a wall.

@@ -76,6 +76,17 @@ const LOAD_SECONDS := WORK_SECONDS
 const ROUTE_NODE_BUDGET := 1500
 const ROUTE_RECOMPUTE_SECONDS := 0.5
 
+## How long he waits before asking again for a route that could not be
+## found AT ALL. A failed search is the expensive one -- it spends the
+## whole node budget before giving up -- and a site ringed by buildings
+## would otherwise pay that twice a second for as long as it stands.
+## Longer than the ordinary throttle, and only for the failing case: a
+## route he simply walked to the end of is recomputed at once, because a
+## leg that ends short of its goal is the stall this seam exists to
+## prevent. Pinned by test_a_builder_who_cannot_reach_the_store_does_not_
+## search_for_ever.
+const ROUTE_RETRY_SECONDS := 5.0
+
 ## How many spells of work one delivered load is worth before he goes back
 ## for the next. One would mean a man who walks far more than he builds;
 ## the site would read as a road. Pinned by
@@ -153,6 +164,11 @@ var _route_cost := Callable()
 var _route: Array = []
 var _route_goal_tile := Vector2i(2147483647, 2147483647)
 var _route_age := ROUTE_RECOMPUTE_SECONDS
+## Whether the last search came back with nothing, and how many searches
+## this builder has run at all -- the second is what pins the back-off
+## above, since "how often does it search" is otherwise unobservable.
+var _route_search_failed := false
+var _route_searches := 0
 
 
 func _ready() -> void:
@@ -293,10 +309,13 @@ func _steer_toward(target: Vector2, delta: float) -> Vector2:
 	var goal := _tile_of(target)
 	if here == goal:
 		return target  # final approach, inside the destination tile
-	if (goal != _route_goal_tile or _route.is_empty()) and _route_age >= ROUTE_RECOMPUTE_SECONDS:
+	var wait := ROUTE_RETRY_SECONDS if _route_search_failed else ROUTE_RECOMPUTE_SECONDS
+	if (goal != _route_goal_tile or _route.is_empty()) and _route_age >= wait:
 		_route_goal_tile = goal
 		_route_age = 0.0
+		_route_searches += 1
 		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET, _route_cost)
+		_route_search_failed = _route.is_empty()
 	# Drop whatever has already been walked.
 	while not _route.is_empty() and _tile_of(position) == _route[0]:
 		_route.remove_at(0)

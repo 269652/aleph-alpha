@@ -297,3 +297,39 @@ func test_he_walks_round_a_building_standing_between_him_and_the_store():
 func test_a_builder_routes_on_the_same_terms_a_villager_does():
 	assert_eq(ConstructionWorkerMarker.ROUTE_NODE_BUDGET, NpcMarker.ROUTE_NODE_BUDGET)
 	assert_eq(ConstructionWorkerMarker.ROUTE_RECOMPUTE_SECONDS, NpcMarker.ROUTE_RECOMPUTE_SECONDS)
+
+
+## A site nothing can be reached FROM: the plot ringed by buildings, the
+## plot itself open. A search that fails costs its whole node budget, and
+## a builder who asked again twice a second would spend that budget on
+## nothing for as long as the site stands. He walks straight at the store
+## meanwhile -- the gate still keeps him out of walls -- and asks again in
+## a while.
+class SealedSite:
+	extends RefCounted
+
+	func has_building_at_global(x: int, y: int) -> bool:
+		var tile := Vector2i(x, y)
+		if tile.x >= 6 and tile.x <= 8 and tile.y >= 12 and tile.y <= 14:
+			return false  # the plot itself
+		return tile.x >= 5 and tile.x <= 9 and tile.y >= 11 and tile.y <= 15
+
+
+func test_a_builder_who_cannot_reach_the_store_does_not_search_for_ever():
+	_stock_the_round()
+	worker.earth = SealedSite.new()
+	_work(10.0)
+	assert_gt(worker._route_searches, 0, "precondition: he really tried to find a way out")
+	var flat_out := int(10.0 / ConstructionWorkerMarker.ROUTE_RECOMPUTE_SECONDS)
+	assert_lt(
+		worker._route_searches, flat_out / 2,
+		"%d searches in ten seconds -- a failed search costs the whole budget" % worker._route_searches
+	)
+
+
+## And the back-off is only for a search that FAILED: a route he simply
+## walked to the end of is recomputed at the ordinary throttle, because a
+## leg that ends short of the goal is the stall this whole seam exists to
+## prevent.
+func test_the_back_off_is_only_for_a_search_that_failed():
+	assert_gt(ConstructionWorkerMarker.ROUTE_RETRY_SECONDS, ConstructionWorkerMarker.ROUTE_RECOMPUTE_SECONDS)

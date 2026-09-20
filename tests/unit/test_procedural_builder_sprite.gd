@@ -229,20 +229,25 @@ func test_the_load_rests_on_him_rather_than_floating_beside_him():
 	assert_true(touching, "the load has to be attached to the man, or it is a slab in the air")
 
 
-## And it sits on his shoulder: above the waist of a figure whose whole
-## height is fourteen pixels, because a load drawn at his feet is a crate
-## on the ground.
-func test_the_load_sits_on_his_shoulder():
+## And it rides above his waist, because a load drawn at his feet is a
+## crate on the ground. Measured against the MAN -- the middle of his own
+## apron -- rather than against the middle of the canvas, which says
+## nothing about where a body happens to stand on it.
+func test_the_load_rides_above_his_waist():
 	var loaded := _carrying()
+	var load_middle := _middle_row_of(loaded, ProceduralBuilderSprite.LOAD_COLOR)
+	var waist := _middle_row_of(loaded, ProceduralBuilderSprite.APRON_COLOR)
+	assert_gt(waist, 0.0, "precondition: there is a man to carry it")
+	assert_lt(load_middle, waist, "the load's middle is above his own")
+
+
+func _middle_row_of(image: Image, color: Color) -> float:
 	var rows := 0.0
 	var count := 0.0
-	for y in ProceduralBuilderSprite.SIZE:
-		for x in ProceduralBuilderSprite.SIZE:
-			if _is_load(loaded, x, y):
-				rows += float(y)
-				count += 1.0
-	assert_gt(count, 0.0)
-	assert_lt(rows / count, ProceduralBuilderSprite.SIZE / 2.0, "the load's middle is above his own")
+	for pixel in _pixels_of(image, color):
+		rows += float((pixel as Vector2i).y)
+		count += 1.0
+	return 0.0 if count == 0.0 else rows / count
 
 
 func _is_load(image: Image, x: int, y: int) -> bool:
@@ -292,3 +297,43 @@ func test_the_load_reads_against_the_head_it_rests_beside():
 		absf(load_color.get_luminance() - skin.get_luminance()), _lumberjack_contrast() * 0.3,
 		"a load the tone of his own head merges with it at this size"
 	)
+
+
+## And it must not swallow the man. Measured on a real render at the game's
+## own zoom (tools/probe_construction_haul.gd, `loaded.png`): a bundle
+## drawn up at head height put pale timber where the head was, and skin and
+## sawn wood are near enough in tone that the two merged into one pale mass
+## with a brown body under it -- the same failure the mallet head had, one
+## step along. A load is carried BESIDE the head, never over it, and the
+## dark apron between them is what keeps the two readable.
+func test_the_load_never_covers_or_touches_his_head():
+	var loaded := _carrying()
+	var empty := _empty_handed()
+	var skin_loaded := _pixels_of(loaded, ProceduralBuilderSprite.SKIN_COLOR)
+	var skin_empty := _pixels_of(empty, ProceduralBuilderSprite.SKIN_COLOR)
+	assert_eq(
+		skin_loaded, skin_empty,
+		"the head is the same head on both legs of the round -- the load does not cover it"
+	)
+	for pixel in _pixels_of(loaded, ProceduralBuilderSprite.LOAD_COLOR):
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			assert_false(
+				skin_loaded.has((pixel as Vector2i) + step),
+				"the load at %s is right against his head, and the two merge at this size" % pixel
+			)
+
+
+func _pixels_of(image: Image, color: Color) -> Dictionary:
+	var found := {}
+	for y in ProceduralBuilderSprite.SIZE:
+		for x in ProceduralBuilderSprite.SIZE:
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			if (
+				absf(pixel.r - color.r) <= 0.01
+				and absf(pixel.g - color.g) <= 0.01
+				and absf(pixel.b - color.b) <= 0.01
+			):
+				found[Vector2i(x, y)] = true
+	return found
