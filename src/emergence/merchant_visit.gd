@@ -18,93 +18,8 @@ const NpcProduction = preload("res://src/world/npc_production.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
-const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 
-## Real seconds of elapsed play per simulated day -- mirrors
-## EarthChunkManager.SECONDS_PER_SIMULATED_DAY's own VALUE (60), restated
-## here rather than imported for the reason VillageImmigration's own copy
-## gives (EarthChunkManager is an engine-dependent singleton a pure
-## emergence module must not depend on). Cross-checked by
-## test_merchant_visit.gd so the two cannot silently drift.
-##
-## It used to be ConstructionCatchup.SECONDS_PER_DAY (3600) -- the exact
-## fault VillageImmigration already had and already names in its own words:
-## "the offscreen catch-up's day, and never this module's to borrow".
-## construction_catchup.gd says plainly what that day is for: the offscreen
-## catch-up integrates an ABSENCE at the ecology LOD rate, "while a build
-## the PLAYER raised and is standing at runs on the game's own day
-## (EarthChunkManager.SECONDS_PER_SIMULATED_DAY, 60 seconds -- what the
-## ecosystem step, THE SETTLEMENT STEP, the day/night cycle and every colony
-## already run on)". _step_merchant_visits runs from the settlement step,
-## for a village the player is standing in.
-##
-## Measured before this (tools/probe_village_purse.gd) on a real village
-## after 5000 simulated seconds, with the buy list already fixed: 811
-## sellable units, 22 of 22 villagers broke, and a purse of 0.0 gold. One
-## visit every 3600 seconds is one visit every 60 player-felt days, against
-## a starvation window (Starvation.seconds_to_die) of 200 seconds.
-const SECONDS_PER_SIMULATED_DAY := 60.0
-
-
-## What a village keeps BACK to feed itself until the cart comes again, in
-## food units.
-##
-## The reserve used to protect BUILDING materials alone (see "surplus, not
-## stock"), and while the only food on the buy list was fish, meat and
-## fruit that was harmless -- a village rarely stockpiles those. With a
-## herbalist's crop and a farmer's wheat sellable, which they must be or
-## those two trades earn the village nothing, the cart would hold a
-## village's food at whatever level its own draw settles at, and that level
-## is BELOW VillageImmigration.FED_THRESHOLD. A village would sell itself
-## into the famine its immigration gate then reads.
-##
-## Derived rather than picked: SettlementState.FOOD_PER_HOUSEHOLD is what
-## one household really eats in a day (itself pinned to the hunger clock by
-## a test), and 1 / VISITS_PER_DAY is how many days pass between carts at
-## the base rate. So this is exactly "what the village eats before he comes
-## back", and retuning how often he comes retunes it by itself. It is the
-## same rule the construction reserve already states, pointed at the other
-## thing a village cannot do without -- a peasant sells what is left once
-## the household is fed until the next market day.
-static func food_reserve(household_count: int) -> float:
-	if household_count <= 0:
-		return 0.0
-	return float(household_count) * SettlementState.FOOD_PER_HOUSEHOLD / VISITS_PER_DAY
-
-
-## `reserved` with that food held back too, spread across the food ids the
-## settlement really holds.
-##
-## Spread rather than demanded per id: the reserve is a number of MEALS,
-## not a claim on any one crop, so a village with a little herb and a lot
-## of wheat keeps all of the herb and the rest in wheat. Never more of an
-## id than it holds -- a village cannot keep back grain it never grew --
-## and in sorted id order so two identical settlements reserve identically.
-##
-## `food_ids` is supplied by the caller, which is what keeps this module
-## free of the item catalog, the same division every other function here
-## keeps: numbers in, numbers out.
-static func with_food_reserve(
-	reserved: Dictionary, stock: Dictionary, food_ids: Array, household_count: int
-) -> Dictionary:
-	var out := reserved.duplicate()
-	var owed := food_reserve(household_count)
-	if owed <= 0.0:
-		return out
-	var ids: Array = []
-	for item_id in food_ids:
-		ids.append(String(item_id))
-	ids.sort()
-	for item_id in ids:
-		if owed <= 0.0:
-			break
-		var held := float(stock.get(item_id, 0.0))
-		if held <= 0.0:
-			continue
-		var keep := minf(held, owed)
-		out[item_id] = float(out.get(item_id, 0.0)) + keep
-		owed -= keep
-	return out
 
 
 ## The raw timber a woodcutter fells. Not in any producer map -- it comes
@@ -154,6 +69,30 @@ const KEEPING_GOOD_PRICES := {
 ## worth waiting for.
 const CART_CAPACITY := 20
 
+## The length of the day a visit is paced on.
+##
+## MEASURED, and it is the number that mattered most here
+## (tools/probe_village_famine.gd, run before and after): once the conjured
+## gold faucet was closed and this merchant became a village's ONLY income,
+## 7 of 10 villagers died inside 300 seconds where the same village had
+## survived and grown to 12. He was not too stingy -- he was too SLOW.
+##
+## His day was ConstructionCatchup.SECONDS_PER_DAY (3600), the deliberately
+## conservative rate for integrating an UNLOADED chunk's vegetation and
+## herds, while hunger kills in Starvation.seconds_to_die (200 seconds) of
+## the day the village actually lives on. The soonest he could possibly
+## call was eighteen times the window in which everybody who could not feed
+## themselves was already dead.
+##
+## So: the day the village lives in -- the same 60 seconds NpcMarker's
+## schedule, the ecosystem step, the settlement step and the day/night
+## cycle all run on. Exactly the defect, and exactly the fix, that a raised
+## build already had (docs/concept/planner_mode.md, "A raised build runs on
+## the game's own day"): a thing the player is WATCHING is paced by the day
+## they live in; a background integration over absence keeps the catch-up
+## rate.
+const SECONDS_PER_DAY := 60.0
+
 ## Visits per day to a village with something, anything, worth buying.
 const VISITS_PER_DAY := 0.4
 ## How much a full surplus adds to that draw, as a multiple.
@@ -186,10 +125,17 @@ static func village_produce() -> Array[String]:
 		var item_id := String(NpcProduction.PRODUCER_ITEM_BY_OCCUPATION[occupation])
 		if item_id != "" and not ids.has(item_id):
 			ids.append(item_id)
+	# ...what a village can be TOLD to grow (VillageCropChoice.SOWABLE) as
+	# well as what an occupation grows by default, because those are two
+	# different lists and a village really plants from both.
 	for occupation in VillageFarm.CROP_BY_OCCUPATION:
 		var crop_id := String(VillageFarm.CROP_BY_OCCUPATION[occupation])
 		if crop_id != "" and not ids.has(crop_id):
 			ids.append(crop_id)
+	for crop_id in VillageCropChoice.SOWABLE:
+		var sown_id := String(crop_id)
+		if sown_id != "" and not ids.has(sown_id):
+			ids.append(sown_id)
 	for gathered_id in SettlementGathering.gathered_item_ids():
 		if not ids.has(gathered_id):
 			ids.append(gathered_id)
@@ -264,15 +210,20 @@ static func _surplus_of(stock: Dictionary, reserved: Dictionary, item_id: String
 ## its own next building really needs (see this doc's "Mercantile
 ## surplus, not stock"). Stock up to the reserve is not surplus and is
 ## neither sold nor counted toward a visit being worth the walk.
+## `seconds_per_day` is the clock the draw is paced on -- see
+## SECONDS_PER_DAY, and the measurement that set it. A parameter rather
+## than a hard reference so the pacing is testable directly, the same shape
+## ConstructionCatchup already gives its own.
 static func arrivals(
-	seconds: float, stock: Dictionary, carry: float, reserved: Dictionary = {}
+	seconds: float, stock: Dictionary, carry: float, reserved: Dictionary = {},
+	seconds_per_day: float = SECONDS_PER_DAY
 ) -> Dictionary:
 	if seconds <= 0.0 or sellable_units(stock, reserved) <= 0:
 		return {"arrived": false, "carry": carry}
 
 	var surplus := clampf(float(sellable_units(stock, reserved)) / SURPLUS_FOR_FULL_DRAW, 0.0, 1.0)
 	var draw := VISITS_PER_DAY * (1.0 + SURPLUS_DRAW * surplus)
-	var accrued := carry + draw * (seconds / SECONDS_PER_SIMULATED_DAY)
+	var accrued := carry + draw * (seconds / maxf(seconds_per_day, 0.001))
 	if accrued < 1.0:
 		return {"arrived": false, "carry": accrued}
 	# One visit at a time, whatever has accrued: a merchant who is overdue

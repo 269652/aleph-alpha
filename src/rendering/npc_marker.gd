@@ -460,14 +460,9 @@ func setup(world, tile_size: int) -> void:
 ## (EarthChunkManager.household_wallet_for_villager). Optional and
 ## duck-typed like every other world hook here -- null keeps the economy's
 ## own ephemeral wallet, which is all an isolated test ever needs.
-func setup_economy(market, household_wallet = null, settlement_purse = null) -> void:
+func setup_economy(market, household_wallet = null) -> void:
 	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
 	economy.bind_household_wallet(household_wallet)
-	# ...and the settlement's own purse, which is a DIFFERENT object from
-	# `market` -- the persisted one a merchant really pays into (see
-	# NpcEconomy.bind_settlement_purse). Null leaves the old behaviour
-	# exactly as it was, so every marker a test stands up is unaffected.
-	economy.bind_settlement_purse(settlement_purse)
 	_quarry = null
 	_quarry_kind = String(QUARRY_KIND_BY_OCCUPATION.get(identity.occupation, ""))
 	_forager = ForagerBehavior.new() if _quarry_kind != "" else null

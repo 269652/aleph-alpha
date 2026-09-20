@@ -83,6 +83,7 @@ func test_the_gold_still_lands_in_the_one_purse():
 
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -129,7 +130,8 @@ func _what_the_merchant_is_shown() -> Dictionary:
 
 
 ## The regression itself, in one line: a hide in the farmhouse is a hide
-## the merchant will pay for.
+## the merchant will pay for -- and a hide is not food, so no meal list
+## covers it.
 func test_the_merchant_is_shown_the_farmhouse_the_larder_leaves_out():
 	_a_stocked("farmhouse", "hide", 12)
 	assert_eq(
@@ -146,10 +148,16 @@ func test_goods_in_a_farmhouse_are_worth_gold():
 	assert_eq(int(sale["paid"]), 12 * MerchantVisit.price_of("hide"))
 
 
-## The narrowing that broke it stays right where it belongs: nobody eats
-## off a farmhouse, so the village must not count it as food.
-func test_the_larder_still_leaves_the_farmhouse_out():
-	_a_stocked("farmhouse", "cooked_meat", 50)
+## The narrowing stays right where it belongs: a SAWMILL holds sawn timber
+## and nobody eats off one, so the village must not count its stock as
+## food. (A farmhouse used to be the example here; it was measured onto
+## STRUCTURE_MEAL_SOURCE_IDS since -- 97 units of a village's own crop that
+## its own people could not eat while they starved around it -- which is
+## why the two lists are kept apart rather than merged: what a village can
+## SELL and what it can EAT are different questions whose answers happen to
+## overlap today.)
+func test_the_larder_still_leaves_out_a_shelf_nobody_eats_off():
+	_a_stocked("sawmill", "cooked_meat", 50)
 	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
 	var catalog = ItemCatalog.new()
 	var larder := 0
@@ -157,43 +165,14 @@ func test_the_larder_still_leaves_the_farmhouse_out():
 		for item_id in stock.stock:
 			if catalog.kind_of(String(item_id)) == "food":
 				larder += int(stock.stock[item_id])
-	assert_eq(larder, 0, "a farmhouse is where a harvest waits for the carter")
+	assert_eq(larder, 0, "nobody takes their dinner off a sawmill")
 
 
-# -- the gold lands where the village actually spends from ----------------
-#
-# _step_merchant_visits pays into the settlement's PERSISTED Market, and
-# NpcEconomy._draw_subsistence_wage read the VillageMarket's own meta.
-# PURSE_META is set on whichever market OBJECT is in hand, so those were
-# two tanks sharing one name.
-
-const NpcEconomy = preload("res://src/world/npc_economy.gd")
-
-
-## The accessor a villager is bound to must see the merchant's own coin.
-func test_the_purse_a_villager_draws_from_is_the_one_the_merchant_pays_into():
-	var settlement_id: String = manager.EntityRef.for_settlement(_chunk_coord)
-	var paid_into = manager._market_store.market_for(settlement_id)
-	NpcEconomy.deposit_to_purse(paid_into, 25.0)
-	assert_almost_eq(
-		NpcEconomy.purse_of(manager.settlement_purse_for(_chunk_coord)), 25.0, 0.0001,
-		"a village was paid and cannot spend it"
-	)
-
-
-## ...and a villager really is bound to it when one is stood up.
-func test_a_spawned_villager_is_bound_to_the_settlements_purse():
-	var source := FileAccess.get_file_as_string("res://src/rendering/village_renderer.gd")
-	assert_true(
-		source.contains("settlement_purse_for("),
-		"VillageRenderer must resolve the settlement's own purse"
-	)
-	var setup_at := source.find("setup_economy(")
-	assert_gt(setup_at, -1, "the premise: villagers still get an economy")
-	assert_true(
-		source.substr(setup_at, 120).contains("purse"),
-		"...and it is handed to the economy it funds"
-	)
+## ...and the merchant is still shown it, which is the whole point of the
+## split: a sawmill's timber is a village's income.
+func test_the_merchant_is_still_shown_that_shelf():
+	_a_stocked("sawmill", "plank", 9)
+	assert_eq(int(_what_the_merchant_is_shown().get("plank", 0)), 9)
 
 
 ## ...and a visit really pays. Measured (tools/probe_village_purse.gd) on a
@@ -212,7 +191,7 @@ func test_a_visit_really_pays_gold_into_the_settlements_purse():
 	manager._step_merchant_visits(settlement_id, market)
 
 	assert_gt(
-		NpcEconomy.purse_of(manager.settlement_purse_for(_chunk_coord)), 0.0,
+		NpcEconomy.purse_of(manager._market_store.market_for(settlement_id)), 0.0,
 		"the cart came, took the goods, and paid nobody"
 	)
 
@@ -229,4 +208,40 @@ func test_what_he_paid_for_really_leaves_the_shelf():
 	assert_lt(
 		manager.structure_stock_at(_store.x, _store.y, "hide"), 12,
 		"he paid for hides and left them on the shelf"
+	)
+
+
+
+## MEASURED (tools/probe_village_famine.gd, purse column): purse 0.0 at
+## every sample of a 1200-second watch, in a village holding 38 sellable
+## food in its market and 187 across its shelves, with the merchant offered
+## that stock on every settlement step.
+##
+## step_settlements hands him `_market_store.market_for(settlement_id)` --
+## the persisted emergence Market, whose own neighbouring comment says
+## "live play essentially never stocks that one". The purse is metadata ON
+## THAT OBJECT (NpcEconomy._set_purse), while every villager reads the
+## purse off their live VillageMarket. So the gold a merchant paid landed
+## in a purse nobody reads, and the wage could never be drawn.
+##
+## This is the same "two unrelated things called the market" trap
+## SettlementFood's own header was written about.
+func test_the_visit_sees_the_market_the_villagers_actually_trade_from():
+	var body := _body("_step_merchant_visits")
+	assert_true(
+		body.contains("village_market"),
+		"the live market is one of the containers he is shown: %s" % body
+	)
+
+
+## And the gold lands where the wage is drawn from, or it may as well not
+## have been paid.
+func test_the_gold_lands_in_the_purse_the_wage_is_drawn_from():
+	var body := _body("_step_merchant_visits")
+	var deposit_at := body.find("deposit_to_purse(")
+	assert_gt(deposit_at, -1, "the premise: he still pays")
+	var call := body.substr(deposit_at, 60)
+	assert_true(
+		call.contains("village_market") or call.contains("purse_market"),
+		"paid into the market villagers read, not the persisted ledger: %s" % call
 	)

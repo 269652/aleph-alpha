@@ -75,11 +75,6 @@ var wallet: Wallet
 var occupation: String
 var market  # VillageMarket, shared by every NpcMarker of the same settlement
 
-## The settlement's own purse, bound by the caller that knows which
-## settlement this is (see bind_settlement_purse). Null for a bare economy,
-## which then keeps its market's own meta.
-var _settlement_purse = null
-
 var _production := NpcProduction.new()
 var _accumulated_yield := 0.0
 
@@ -501,40 +496,7 @@ func can_obtain_a_meal(world = null, pixel_position: Vector2 = Vector2.ZERO) -> 
 		return false
 	if wallet.can_afford(VillageWages.subsistence_wage()):
 		return true
-	return VillageWages.can_pay_subsistence(purse_of(_purse_market()))
-
-
-## Makes `a_market` the SETTLEMENT PURSE this villager's subsistence wage
-## is drawn from, in place of `market`'s own meta.
-##
-## They are not the same object, and that was the bug.
-## EarthChunkManager._step_merchant_visits pays the merchant's gold into
-## the settlement's PERSISTED Market (MarketStore.market_for), while the
-## wage read purse_of(self.market), the live VillageMarket. PURSE_META is
-## set on whichever market object is in hand, so those are two tanks
-## sharing one name: a village could be paid and still starve beside its
-## own stall.
-##
-## The persisted one wins, for the same reason bind_household_wallet exists
-## at all: a VillageMarket is rebuilt from scratch on every chunk load, so
-## a purse kept there dies with the chunk -- *"a villager's whole working
-## life evaporated the moment the player walked away"*. A merchant can also
-## visit a settlement whose chunk is not loaded, and his gold has to land
-## somewhere that still exists when it is.
-##
-## Passing null is a harmless no-op, so a bare NpcEconomy -- a test, or a
-## village with no settlement record yet -- behaves exactly as it did.
-func bind_settlement_purse(a_market) -> void:
-	if a_market == null:
-		return
-	_settlement_purse = a_market
-
-
-## The ONE tank this villager's wage comes out of: the settlement's own
-## purse when it has been bound, and otherwise the market they trade at.
-## Never both -- the same coin must not be spendable twice.
-func _purse_market():
-	return market if _settlement_purse == null else _settlement_purse
+	return VillageWages.can_pay_subsistence(purse_of(market))
 
 
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
@@ -601,13 +563,12 @@ func _draw_subsistence_wage(world = null, pixel_position: Vector2 = Vector2.ZERO
 		return
 	if not market.can_buy_meal() and not _structure_meal_available(world, pixel_position):
 		return
-	var purse_market = _purse_market()
-	var payout := VillageWages.pay_subsistence(purse_of(purse_market))
+	var payout := VillageWages.pay_subsistence(purse_of(market))
 	var paid := int(payout["paid"])
 	if paid <= 0:
 		return  # the village cannot afford a whole wage -- leave its purse exactly as it was
 	wallet.add(paid)
-	_set_purse(purse_market, float(payout["purse"]))
+	_set_purse(market, float(payout["purse"]))
 
 
 ## Whether the village's own stores hold a whole meal near this villager

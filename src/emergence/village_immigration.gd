@@ -73,24 +73,40 @@ const FOOD_SURPLUS_FOR_FULL_DRAW := FED_THRESHOLD * 2.0
 
 ## `{"arrivals": whole households moving in now, "carry": the fraction
 ## still owed}`. `spare_house_capacity` is real unused capacity in houses
-## that already stand; `has_room_to_build` is whether the village still has
-## frontage for one more house (VillageLayout.next_street_plot).
+## that ALREADY STAND.
 ##
-## Arrivals are CAPPED at `spare_house_capacity + 1 if has_room_to_build`,
-## and whatever the rate produced beyond that cap is simply LOST rather
-## than banked -- households that found no room went somewhere else, which
-## is both what really happened historically and what stops a long absence
-## from dumping a whole town onto a village the moment a player walks back
-## into it. The carry only ever holds a real sub-unit fraction.
+## Arrivals are CAPPED at `spare_house_capacity`, and whatever the rate
+## produced beyond that cap is simply LOST rather than banked -- households
+## that found no room went somewhere else, which is both what really
+## happened historically and what stops a long absence from dumping a whole
+## town onto a village the moment a player walks back into it. The carry
+## only ever holds a real sub-unit fraction.
+##
+## It used to be `spare_house_capacity + 1 if the village still had
+## FRONTAGE` -- somewhere to build one more house. Reported live with the
+## town panel in shot ("Population 21 (10 housed)"): *"The population is
+## rising but no new houses are built.. NPCs should only move in when a new
+## unoccupied house exists for them"*. That allowance was written as a cap
+## and behaved as a standing invitation: it is granted again on every
+## settlement step, whether or not the house the last one promised was ever
+## raised, so households pile up under no roof at all for as long as the
+## village has frontage left -- which is nearly always.
+##
+## village_growth.md's own mechanism 3 always said this: *"Gated on room:
+## free_capacity <= 0 => no arrivals. A village with no spare roof takes
+## nobody in, however rich."* Somewhere to build is not somewhere to live.
+##
+## The village keeps growing because the LADDER now builds a house when no
+## spare roof stands (VillageGrowth.next_building's lowest rung) -- room is
+## made first and moved into afterwards, rather than the other way round.
 static func arrivals(
 	seconds: float,
 	food_per_household: float,
 	spare_house_capacity: int,
-	has_room_to_build: bool,
 	ladder_share: float,
 	carry: float
 ) -> Dictionary:
-	var room := maxi(spare_house_capacity, 0) + (1 if has_room_to_build else 0)
+	var room := maxi(spare_house_capacity, 0)
 	if seconds <= 0.0 or room <= 0 or food_per_household < FED_THRESHOLD:
 		return {"arrivals": 0, "carry": carry}
 

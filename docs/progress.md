@@ -12616,6 +12616,7 @@ New concept doc (2026-08-25), written for the one mechanism below:
 ### UI / presentation
 
 - **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes. **Gained a formal "this one is selected" mark (2026-09-20)**: `selected_button_stylebox`/`BUTTON_SELECTED` — the gold `ACCENT` as a thicker border over a background that lifts out of the card. Godot draws a toggled control in its `pressed` stylebox, which here is a shade *darker* than normal (~5% of value) and measured as invisible over a dark card when the build palette was first rendered; applied per control rather than in the shared `Theme`, since `pressed` there also means a momentary click on every ordinary button in the game.
+- **The merchant-funded village actually survives** — ✅ Done (2026-09-20) — asked to run the famine probe and check villages stay fed. They did not: closing the gold faucet had caused a **village-killing regression**, measured by running `tools/probe_village_famine.gd` against `main` before and after (roster over 1200s: `10 10 12 12 12` before, `10 3 4 4 6` after — seven of ten dead inside 300 seconds). Five distinct breaks, each found by following the money after adding **purse and wallet columns** to that probe, and each independently real: (1) **the merchant ran on the wrong clock** — `ConstructionCatchup.SECONDS_PER_DAY` (3600), the offscreen LOD rate, while hunger kills in 200s, so his soonest possible call was 18× the starvation window; he is paced on the lived 60s day now, exactly the fix `planner_mode.md` already records for a raised build. (2) **`BUY_LIST` did not intersect what villages grow at all** — beam/plank/hide/wood/fish/meat/fruit versus herb/carrot/potato/wheat, so the only faucet could never open; a test now fails if a crop is added he will not buy. (3) **the gold was paid into a purse nobody reads** — `step_settlements` hands him the persisted emergence `Market` (whose own neighbouring comment says "live play essentially never stocks that one") while the purse is metadata *on that object* and every villager reads theirs off the live `VillageMarket`; the same "two unrelated things called the market" trap `SettlementFood`'s header was written about. (4) **he bought the larder** — once funded, purse climbed 21→25 with market food 0 at every sample; `SettlementSurplus.larder_reserve` holds back what the people eat, over a cover period *derived* as `1 / VISITS_PER_DAY` days rather than picked. (5) **97 units of harvest were stranded in farmhouses nobody could eat from** — `STRUCTURE_MEAL_SOURCE_IDS` named bakery/storage/warehouse, and a farmer's crop is deposited in the *farmhouse* until a carter fetches it. **Result, measured: `10 11 11 12 14` — nobody dies and the village grows past the 12 it reached before any of this.** One concurrent session's design rule was deliberately turned round, not deleted: their `test_a_farmhouse_shelf_is_not_the_villages_larder` encoded "a harvest waits for the carter; nobody eats off it", which is coherent but the wrong side of the line once measured; the invariant that file exists for — *what the settlement counts as food is exactly what its people can eat* — is untouched, only the boundary moved. Tests: `test_earth_chunk_manager_village_meals.gd` 12/12, `test_merchant_visit.gd` 31/31, `test_settlement_surplus.gd` 18/18, `test_merchant_buys_the_whole_village.gd` 6/6, `test_gold_has_one_faucet.gd` 7/7, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 102/102, `test_starvation.gd` 16/16, `test_village_wages.gd` 29/29.
 - **Gold has exactly one faucet** — ✅ Done (2026-09-20) — asked directly: "Gold should only be conjured by the travelling merchant". `traveling_merchants.md`'s own opening already claimed this ("a village's gold used to come from nowhere... a traveling merchant is the faucet that replaces it") and it was **not true** — two other places minted gold with nothing behind them. (1) `NpcEconomy._earn` split a coin conjured per food unit gathered, whether or not anyone ever bought it; gone, along with `record_harvest_wage` (which was purely that pay) and the sub-coin `_take_home_carry`. A producer's work now earns the village **goods**, and the merchant pays for those — and a producer is not left unpaid, because `_draw_subsistence_wage` was *already* ungated on occupation and its own doc already anticipated this case. (2) `_collect_estate_tax` credited the purse and **debited nobody**; it is a real transfer now, through the new pure `VillageWages.tax_debits` (one debit per household, in order, never more than a household holds, summing to no more than is owed), with the fractional remainder **carried** per settlement rather than rounded — a `Wallet` holds integer gold and a kossaet owes 0.25 a day, so rounding would either forgive a real debt or charge it four times over. A village collects what is there, not what it is due: shortfalls are **not** banked as arrears, since a debt a household can never pay only grows and would make the purse a fiction again. The invariant is guarded four ways, not asserted once: nothing but the merchant sale and the household-funded tax may call `deposit_to_purse`; every *other* writer of the purse (`_set_purse`) must move gold to or from a wallet in the same breath, closing the loophole that guarding one function name would leave; the old levy arithmetic (`levy_on`/`take_home_of`/`deposit`) is kept and still tested but must stay unwired; and the mint itself must be gone rather than merely unused. **Eight existing tests asserted the old model and were rewritten, not deleted** — including a shared fixture that funded a purse by working a hunter, which now completes the real loop (goods, then a merchant's sale) and is a truer fixture than the one it replaced. Tests: `test_gold_has_one_faucet.gd` 7/7 (new), `test_village_wages.gd` 29/29, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 96/96, `test_settlement_surplus.gd` 13/13, `test_merchant_visit.gd` 25/25, `test_village_market.gd` 25/25.
 - **A merchant buys the whole village, not one of its cupboards** — ✅ Done (2026-09-20) — reported with the town panel open: "The village produces way too much food and the NPCs don't have an income" (`Food feeds 387 of 16`, `Gold 1`, `Happiness 62% (worst: income)`). **One fault, not two.** A settlement keeps goods in more than one container — `VillageMarket.stock`, and every structure's own `StructureStock` — and `MerchantVisit`, the only thing that turns goods into gold, was only ever shown the first. `SettlementFood` was taught to count the shelves when the bread chain landed (`milling_and_baking.md`, "Food that counts"); the merchant never was. So a village hauls its whole harvest into the warehouse — which is precisely what the carter's round is *for* — and thereby puts it beyond the reach of its own income. `src/emergence/settlement_surplus.gd` is the one view: `combined()` adds the containers up for the merchant to price, `allocate()` says how much to take from each, in view order, never more than a container holds. Pure — it never touches what it is shown, so a sale that cannot be completed has changed nothing, the same division `MerchantVisit` itself keeps. The market is drawn from **first**, deliberately: it is the abstract ledger a village trades out of anyway, while a warehouse shelf is a real building the player can walk up to and open, so what the player can *see* is the last thing to go. **Does not merge the containers** — `milling_and_baking.md`'s "three food containers, one eater" is still open; this says only that the merchant reads all of them. Tests: `test_settlement_surplus.gd` 13/13, `test_merchant_buys_the_whole_village.gd` 4/4, `test_merchant_visit.gd` 25/25, `test_village_wages.gd` 20/20, `test_npc_economy.gd` 80/80, `test_village_market.gd` 25/25. **Measured against the rest of the requested loop, which already exists:** the merchant's cadence already tops out at one call a day (`VISITS_PER_DAY 0.4 × (1 + SURPLUS_DRAW 1.5)` = 1.0 at full surplus), so he was always willing to come daily and simply had nothing to buy — the binding constraint on clearing a 387-unit backlog is `CART_CAPACITY` (20 units a visit), not the frequency. Progressive taxation by estate is likewise already real and wired (`VillageEstates.BASE_TAX_PER_DAY` kossaet 0.25 → buerger 1.75, through `VillageWages.estate_tax_for`, called from `EarthChunkManager`). **Still open:** producers' own gold is still conjured per unit gathered (`NpcProduction.YIELD_TO_GOLD_RATE`) rather than paid out of the civic purse, so "NPCs get paid by the City Hall" is true for non-producers only; and nothing yet throttles production against demand, which is the other half of "produces way too much food".
 - **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
@@ -29454,143 +29455,330 @@ Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
 `test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_
 mortality.gd` 5/5 (new), `test_village_renderer.gd` 150/150.
 
-## A village with no money — three faults behind one symptom (2026-09-20)
+---
 
-Reported as *"fix the money problem"*, after a session in which a village
-measurably grew food, hauled it, ate it and still had nothing in anyone's
-pocket. Measured before reasoning (`tools/probe_village_purse.gd`, kept —
-it stands exactly where `EarthChunkManager._step_merchant_visits` stands
-and prints that function's real inputs), on a real village at 20
-player-felt days:
+## 2026-09-20 — Room is made first, and moved into after
 
-```
-  bucket              13  kind=tool       merchant refuses
-  herb               117  kind=food       merchant refuses
-  log                 24  kind=material   merchant refuses
-  plant_fibre          1  kind=material   merchant refuses
-  stone                5  kind=material   merchant refuses
-  wheat                5  kind=material   merchant refuses
-  wood                10  kind=material   merchant BUYS @1
-  sellable after reserve    : 0      (reserve {"wood": 12})
-  villagers' purse 0.0 | merchant's purse 0.0 | 8 of 8 villagers broke
-```
+Reported live with the town panel in shot — *"Population 21 (10 housed)"* —
+*"The population is rising but no new houses are built.. NPCs should only
+move in when a new unoccupied house exists for them... also despite showing
+20 population only 10 NPCs are there"*.
 
-A hypothesis that the gold had landed in the wrong purse was **disproved
-by that measurement** — both purses read 0.0, so no gold existed anywhere.
-Three real faults sat behind it, and only the last was the one guessed at.
+**The concept doc already specified what was asked for.**
+`village_growth.md`'s mechanism 3: *"Gated on room: `free_capacity <= 0` ⇒
+no arrivals. A village with no spare roof takes nobody in, however rich."*
+The code had drifted: `arrivals` capped at `spare_house_capacity + 1 if the
+village still had FRONTAGE`. That allowance was written as a cap and behaves
+as a standing invitation — it is granted again on **every settlement step**,
+whether or not the house the last one promised was ever raised, and frontage
+is nearly always available. Hence eleven of twenty-one households under no
+roof at all.
 
-### ✅ 1. The merchant refused everything the village makes
+✅ **Arrivals need a real empty house.** `room = spare_house_capacity`; the
+frontage term is deleted rather than reduced, so there is no dial left to
+reopen it. Whatever the draw produced beyond the cap is still lost rather
+than banked.
 
-`MerchantVisit.BUY_LIST` was a hand-written const — `beam, plank, hide,
-wood, fish, meat, fruit` — and the game outgrew it. A herbalist's `herb`,
-a farmer's `wheat`, gathered `stone` and `plant_fibre`, and the raw `log`
-a woodcutter fells all arrived **after** that line was written and none
-was ever added. One of nine held ids was sellable, and all ten of those
-units were reserved for the village's own next house. A merchant is the
-only faucet gold has, so the village had no income at all — the literal
-shape of the original report, *"all villagers have 0 gold"*.
+✅ **The ladder builds a house when no spare roof stands.** Necessary, not
+decorative: priority 1 only fires for a household already here with nowhere
+to live, so with the gate alone a village whose people are all housed would
+owe itself nothing, build nothing, and never have the roof an arrival needs
+— it would stop growing for good the moment it caught up with itself.
+`next_building` gains a lowest rung (a house for nobody in particular, when
+`spare_house_capacity <= 0`), **below** the civic and production rungs: a
+village finishes what it owes itself before making room for strangers. The
+new parameter defaults to 1 ("there is already room"), so a caller that does
+not pass it gets exactly the ladder it always got — pinned by its own test.
 
-`MerchantVisit.buy_list()` is now **derived** from the producers' own maps
-— `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`,
-`VillageFarm.CROP_BY_OCCUPATION`,
-`SettlementGathering.gathered_item_ids()` — plus the raw timber and the
-worked goods made from those. Prices became one stated rule instead of a
-table: goods that KEEP (`plank`, `beam`, `hide`) carry their own derived
-price, everything else a village makes is raw produce at `LOG_PRICE` —
-which is what the old table already did in four of its seven entries
-without saying so. `test_everything_a_villages_own_producers_make_is_
-sellable` reads the producer maps directly, so a new crop or occupation
-cannot be silently unsellable again.
+The resulting shape: build the entitled rungs → no spare roof → raise a
+house → somebody moves in → no spare roof again. Population advances one
+household per house actually built.
 
-### ✅ 2. The purse was two tanks sharing one name
+**Two tests pinned the old behaviour and were rewritten, not deleted** —
+*"room to build is room enough"* became *"an empty house is room enough"*,
+and *"room for one plot is one household, however long the absence"* became
+a pair: no empty house admits nobody however long the absence, one empty
+roof admits one.
 
-`NpcEconomy.PURSE_META` is set on whichever market **object** is in hand,
-and a settlement has two: `_step_merchant_visits` paid into the persisted
-`Market` (`MarketStore.market_for`), while `_draw_subsistence_wage` read
-the live `VillageMarket`'s meta. Every coin landed where nobody could
-spend it.
+✅ **And an arrival you can actually see.** *"Despite showing 20 population
+only 10 NPCs are there"*: `spawn_village` runs only from `_load_chunk`, so
+the villager roster was fixed at load time while `admit_household` kept
+adding to the abstract household count — a household that moved in while you
+stood there had nobody to show for it until the chunk unloaded and reloaded.
+`admit_household` re-derives the village now.
 
-The suite never caught it because its own fixture
-(`_fund_village_as_a_merchant_would`) deposits into the `VillageMarket` —
-**the test was more correct than the wiring**.
+A whole re-derivation, not one appended marker: a villager needs their
+farmhouse's field, their pond, their market stand, their store round and
+their workspot prop, all handed out together against the roster as a whole,
+so one bolted on afterwards would be the only villager without any of it.
+Safe to re-run because everything `spawn_village` does to the world already
+goes through an `_if_missing` check — that is what stops a chunk reload
+raising a second village. The cost, named rather than hidden: a villager
+mid-errand restarts it, which happens once per house the village raises and
+is the same thing walking away and back already does.
 
-`NpcEconomy.bind_settlement_purse` binds the **persisted** one, for the
-same reason `bind_household_wallet` exists: a `VillageMarket` is rebuilt
-from scratch on every chunk load, so a purse kept there dies with the
-chunk. That also closes this file's own older note that *"a village's
-savings die whenever you walk away and return"*. Resolved by
-`EarthChunkManager.settlement_purse_for`, wired through
-`NpcMarker.setup_economy` / `VillageRenderer`. Null is a no-op, so a bare
-`NpcEconomy` is unchanged.
+Tests: `test_village_immigration.gd` 20/20 (4 new, 2 rewritten),
+`test_village_growth.gd` 23/23 (5 new), `test_village_census.gd` 9/9,
+`test_village_assembly.gd` 39/39,
+`test_earth_chunk_manager_village_growth.gd` (5 new, covering the roster
+matching the households after any number of arrivals and nobody being
+duplicated by the re-derivation).
 
-### ✅ 3. The cart ran on the wrong clock — the unfixed twin
+## A farmhouse stands in its own yard (`concept/building.md`, 2026-09-20)
 
-`arrivals` divided its per-day rate by `ConstructionCatchup.SECONDS_PER_
-DAY` (3600). `construction_catchup.gd` states what that day is for: the
-offscreen catch-up integrates an **absence**, *"while a build the PLAYER
-raised and is standing at runs on the game's own day
-(`EarthChunkManager.SECONDS_PER_SIMULATED_DAY`, 60 seconds — what the
-ecosystem step, THE SETTLEMENT STEP, the day/night cycle and every colony
-already run on)"*. `_step_merchant_visits` runs from the settlement step.
+Asked for directly, with the art dropped in: *"I added
+farmhouse_bg_overlay.png which should be rendered as background behind the
+3x2 farmhouse it should use a random variation so that each farmhouses bg
+looks different"*.
 
-This is the **identical fault `VillageImmigration` already had and already
-fixed**, in `test_village_immigration.gd`'s own words: *"the offscreen
-catch-up's day, and never this module's to borrow."* Re-measured with
-faults 1 and 2 fixed, at 83 player-felt days:
+### ✅ Nine whole yards, seeded per building
 
-```
-  after 5000 simulated seconds:
-    settlement purse 0.0 gold | 22 of 22 villagers broke
-    units the merchant BUYS   : 811
-    a visit right now would pay: 20 gold
-    visit accrued (0..1)      : 0.373
-```
+`farmhouse_bg_overlay.png` is a 3×3 grid of nine finished yards at the plot's
+own 3:2 shape — a woodpile, a barrel, a bench, a washing line, a well, a
+beaten path through the grass. None of that is in the building's own sheet,
+which draws the house alone. Picking one whole picture is a far smaller
+mechanism than scattering props and deciding what may overlap what, and it
+reuses the "one sheet, seeded cell" shape `BuildingLifecycleSheet` already
+uses to make a street of cottages a street of different cottages.
 
-One visit per 3600 seconds is one per **60 player-felt days**, against a
-starvation window of 200 seconds.
+Drawn **between the kerb and the house** — children paint in tree order, so
+the yard lies on the ground the kerb marks out and the walls stand on it.
+Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
+the plot's and never wider. Wired per building id
+(`BuildingCatalog.background_sheet_for`), so every other building answers
+`{}` and draws exactly what it drew before.
 
-### ✅ ...and the thing that fix would have broken
+Worth stating, because it is what makes this art matter: **a farmhouse has no
+variant sheet of its own** — only `house_small`/`house_medium` do — so every
+farmhouse in the world draws the SAME house picture. Its yard is the only
+thing that tells one from another.
 
-Making `herb` and `wheat` sellable put a village's own **food** on the
-cart, and the reserve only ever protected building materials. On the
-village's own clock, the surplus-driven draw settles a village's food at
-a level *below* `VillageImmigration.FED_THRESHOLD` — it would have sold
-itself into the famine its own immigration gate then reads.
+### ✅ The keying was the real work, and my first reading of it was wrong
 
-`MerchantVisit.food_reserve(households)` is
-`households × SettlementState.FOOD_PER_HOUSEHOLD ÷ VISITS_PER_DAY`: what
-the village eats before the cart returns. Both halves were already real
-and already test-pinned, and retuning how often he comes retunes what a
-village keeps, by itself. `with_food_reserve` spreads it across the food
-ids a settlement really holds — a number of meals, not a claim on one
-crop — and never more of an id than it has.
+This sheet has no alpha channel and paints its transparency as a
+grey-and-white **checkerboard**, which nothing else in the project does
+(everything else keys flat magenta or near-black).
+
+I first wrote this up as *"a flat key punches 674 px of holes through the
+flowers"* and that was **backwards** — the 674 were checker pixels enclosed
+by art, which the flood MISSES, not flowers a flat key destroys. Caught by
+re-measuring before it shipped; the conclusion survived, the reason did not.
+
+The true reason a flat colour key cannot be used: the checker's lighter
+square and the art's white flower highlights **are the same colour**. The
+tones measure about 253 and 213; a flower highlight sits at 235 and up.
+Measured — one source cell holds **46,354 near-white pixels**, almost all of
+them checker, and **63 survive keying at drawn size**. Those are the flowers,
+and a flat key takes every one of them.
+
+What separates them is **connectivity**, not colour: the checker reaches the
+cell's own edge and a flower enclosed in foliage does not. So the key floods
+inward from the edge, the same shape `head.png`'s own background removal
+uses. Two refinements, each measured rather than reasoned about:
+
+- **The darker square is a safe seed anywhere in the cell**, since nothing in
+  the art is that particular grey — which is what clears checker showing
+  through a gap in the foliage, enclosed by art and so unreachable from the
+  edge (**86 such pixels** in one cell).
+- **The flood then widens by a bounded two pixels** under a looser grey rule,
+  taking the anti-aliased edges where one square meets the next. The seed
+  rule cannot be loosened that far without swallowing a grey rock; bounding
+  the widening to the one or two pixels anti-aliasing actually spans cannot
+  reach a rock's interior however grey it is (**82 px of grey fringe**
+  survived before it).
+
+### ✅ Looked at, not just asserted on
+
+All nine yards were rendered to PNG and composited over a mid-grey backdrop
+(`tools/probe_farmhouse_yard.gd`), twice: once to find the fringe, once to
+confirm it was gone. Flowers, grey rocks, barrels, benches, the well and the
+washing line all survive; the checkerboard does not.
+
+Tests: `test_building_catalog.gd` 80/80 (+4 new),
+`test_earth_chunk_manager_buildings.gd` 40/40 (+4 new),
+`test_illustrated_structure_sprite.gd` 53/54 (+4 new). The one failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is the same
+pre-existing house-art failure recorded in the fence entry above.
+
+## A dug pond is water you can see, and a hut stands over it (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live with a screenshot: *"The built pond renders as earth instead
+of water and it's missing a fisher hut (use farmhouse sprite until
+illustration exists)"* — a fenced brown rectangle with the pond's own fish
+swimming on it. The previous pass on this system closed with the reason it
+shipped that way: *"Not verified in a live session. Every number above is
+headless measurement; the screenshots have not been re-taken."*
+
+**Fault one: nothing was painted at all on the visit that dug it.** Water
+rides one overlay (`concept/hydrology.md`, "ONE WATER SURFACE"), painted
+once per chunk load — and the village that digs a fisher's pond runs LATER
+in that same load, so the pass had already been and gone and
+`build_at_global` never repainted it. Every new village a player walks into
+therefore showed its pond as the bare `pond_water` modification, which the
+painter has no tile of its own for and falls through to flat earth.
+Digging or filling a pond now repaints the surface over that cell and the
+four round it (a pond's own cross-section is read off its neighbours), not
+the whole chunk — the pass probes hydrology per cell, and a pond is dug one
+cell at a time.
+
+**Fault two: once painted, it was a puddle.** Measured on the first real
+render (`tools/probe_fisher_pond_render.gd`, new and kept): **10.4%** of
+the pond's own area read as water. The waterline is the contour where the
+across field crosses 1, and that field is INTERPOLATED between cell
+centres — so where the edge lands is half decided by the dry cells round
+the water, and they carried whatever the nearest river had left there, tens
+of tiles' worth. `VillagePond.WATER_ACROSS`/`BANK_ACROSS` are one decision
+rather than two: 0 in the water and 2 on the ring one tile out puts the
+contour exactly halfway between, on the water cell's own edge.
+`waterline_offset_tiles` states it and a test pins it at half a tile, so a
+change that moved the waterline off the pond's edge fails there rather than
+on screen. The bank never overrides a real river's own field, only a value
+further out than it. Re-rendered on the same pond: **89.8%**.
+
+**And the hut.** A farmer's beds have a farmhouse standing over them; a
+fisher's water had nothing, which is the half of "the same shape as a
+field" that was never built. `fisher_hut` is a real catalog building — the
+farmhouse's own 3×2 footprint, price and storage — sited on the bank of the
+pond it belongs to (`VillagePond.hut_origin`: the nearest free site within
+`HUT_BANK_REACH_TILES`, walked in a fixed order so the same water puts the
+hut in the same place on every reload). Idempotence is asked of the ground,
+not of a record: a hut already standing on this pond's bank is this pond's
+hut, which is what stops a village growing a second one every time it is
+walked past. It is listed among the works and deliberately NOT on the
+growth ladder, which keeps its own list.
+
+**Borrowed art, declared.** *"use farmhouse sprite until illustration
+exists"* is a catalog field now: `draws_as: "farmhouse"` puts that sheet at
+the END of the hut's own chain, so the hut draws as a farmhouse today and
+as itself the day `fisher_hut.png` lands — no code change, and removing the
+one line is pure tidying. Read with the SHEET's own grid, never the
+borrower's (farmhouse.png has six columns where every other contract sheet
+has eight), pinned by its own test.
+
+Honest gaps, all three real:
+
+🚧 **The catch still goes to the fisher's cottage**, not to the hut.
+`stock_building_cell` is still the building carrying the `fisher`
+occupation; the hut holds `storage` like any works, but nothing routes a
+catch into it. It is a building over the water, not yet a fish store.
+
+🚧 **A hut looks exactly like a farmhouse**, because it is drawn as one — a
+village with both shows two identical buildings until real art lands. That
+is what was asked for, recorded so nobody reads it as a bug.
+
+🚧 **The pond's bed is the flat earth tile** under the surface, which is
+what shows past the waterline at the pond's own edge (it reads as a muddy
+bank) and is all a scene with no flow overlay registered would draw at all.
+
+Tested: `test_village_pond.gd` (+11), `test_earth_chunk_manager_ponds.gd`
+(+3), `test_village_renderer.gd` (+2), `test_building_catalog.gd` (+3, one
+list test renamed).
+## A village with no money — two sessions, one diagnosis (2026-09-20)
+
+Reported as *"fix the money problem"*. Worked in parallel with
+session `017mcboF…`, whose entries above landed on `main` first. **Both
+sessions measured the same village and reached the same three faults
+independently** — the buy list not intersecting what villages grow, the
+gold paid into a purse nobody reads, and the cart pacing itself on the
+offscreen catch-up day. That convergence is itself worth recording: the
+faults were found by measurement, not by taste, and two independent
+measurements landed on the same three.
+
+Where the two differ, `main`'s answer is kept, because it was measured
+first and is integrated with the rest of that work:
+
+- the day is a **parameter** of `arrivals` rather than a module constant,
+  so a background settlement can still be integrated at the catch-up rate;
+- the larder reserve is `SettlementSurplus.larder_reserve` over
+  `EstateConsumption.demand_for`, which is grounded in real seasonal estate
+  demand rather than a flat per-household figure;
+- the merchant pays the **live `VillageMarket`**, which is the purse every
+  villager already reads.
+
+This entry records only what this session contributed on top.
 
 ### ✅ A larder and a warehouse answer different questions
 
-The previous day's larder fix narrowed `_settlement_structure_stocks` to
+The larder fix narrowed `_settlement_structure_stocks` to
 `STRUCTURE_MEAL_SOURCE_IDS`, and **four** callers shared it: three food
 readings and the merchant. Right for what a village can EAT, wrong for
 what it can SELL — a farmhouse is not a place anybody eats, and it is
-exactly the container the carter's round fills. Split into
+exactly the container a carter's round fills. Split into
 `_settlement_larder_stocks` (what people can eat) and
-`_settlement_structure_stocks` (every shelf), over one walk.
+`_settlement_structure_stocks` (every shelf), over one walk. Without it
+the merchant still could not see a farmhouse's harvest.
 
-### 🚧 Two things this got wrong, both caught by measuring
+### ✅ The buy list is derived, not written down again
 
-**The two-purse hypothesis was stated before it was measured**, and the
+`main`'s list gained the field crops and a test that fails if a crop is
+added he will not buy. That closes the crop hole; it does not close the
+class of fault. Measured (`tools/probe_village_purse.gd`, kept — it stands
+exactly where `_step_merchant_visits` stands and prints its real inputs),
+on a real village at 20 player-felt days:
+
+```
+  herb               117  kind=food       merchant refuses
+  log                 24  kind=material   merchant refuses
+  stone                5  kind=material   merchant refuses
+  plant_fibre          1  kind=material   merchant refuses
+  wood                10  kind=material   merchant BUYS @1
+  sellable after reserve : 0     (reserve {"wood": 12})
+```
+
+`log`, `stone` and `plant_fibre` are not crops and were still refused.
+`MerchantVisit.buy_list()` is now **derived** from the producers' own maps
+— `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`,
+`VillageFarm.CROP_BY_OCCUPATION`, `VillageCropChoice.SOWABLE`,
+`SettlementGathering.gathered_item_ids()` — plus the raw timber a
+woodcutter fells and the worked goods made from those. Prices became one
+stated rule instead of a table: goods that KEEP (`plank`, `beam`, `hide`)
+carry their own derived price, everything else a village makes is raw
+produce at `LOG_PRICE`, which is what the old table already did in eight of
+its eleven entries without saying so.
+`test_everything_a_villages_own_producers_make_is_sellable` reads the
+producer maps directly, so a new crop, occupation or gathered material
+cannot be silently unsellable again.
+
+### 🚧 The faucet is open, and the village still dies
+
+Measured on this session's own branch before the merge, with the derived
+buy list and a per-household food reserve, over 5000 simulated seconds:
+
+```
+   seconds   sellable visit 0..1   purse gold
+         0          0      0.000          0.0
+      1000         27      0.715        134.0
+      2500         14      0.523        360.0
+      5000         12      0.983        693.0
+   food units in the village : 0
+```
+
+**Gold really flows now — 0 → 693 where it was 0.0 at every sample.** And
+the village fell from 22 villagers to 2 doing it. A per-household reserve
+shrinks as the village dies, which is a death spiral rather than a brake;
+`main`'s seasonal `EstateConsumption` cover is the better of the two and is
+what is kept. The honest reading is the one session `017mcboF…` already
+recorded: **the faucet is open and the famine is not closed.** The
+remaining cause is the gap `milling_and_baking.md` already lists —
+*"three food containers, one eater… nothing ever moves food between
+them"*.
+
+### 🚧 Two things this session got wrong, both caught by measuring
+
+**A two-purse hypothesis was stated before it was measured**, and the
 measurement disproved it as the *cause*: both purses read 0.0, so the
-disconnect was real but inert — the next thing that would have bitten,
-not the thing that had. Recorded rather than quietly reframed.
+disconnect was real but inert. `main` fixed it from the other end (pay the
+live market rather than move the reader), which is the answer kept here.
 
-**The first haul fixture went red and it took an A/B to see why.**
-`test_npc_marker.gd` was 105/105 at the commit that switched hauling on
-and 103/105 after `_eat_from_the_load` landed. Both commits are right: a
-villager who carries food and is not working eats out of their own hands,
-and that fixture's producer is a hunter whose regional rate is far below
-one meal per hunger cycle, so their hands can never fill. Answered the
-same way `_stand_at_the_door` already answers thirst and rest, with the
-reason pinned as a **relationship** (one hunger cycle's catch is less than
-one meal) rather than left as two numbers in a comment.
+**A haul fixture went red and it took an A/B to see why.**
+`test_npc_marker.gd` was 105/105 at the commit that switched hauling on and
+103/105 after `_eat_from_the_load` landed. Both commits are right: a
+villager carrying food who is not working eats out of their own hands, and
+that fixture's producer is a hunter whose regional rate is far below one
+meal per hunger cycle, so their hands can never fill. Answered the way
+`_stand_at_the_door` already answers thirst and rest, with the reason
+pinned as a **relationship** — one hunger cycle's catch is less than one
+meal — rather than left as numbers in a comment.
 
 ### ⬜ Still open
 
@@ -29598,5 +29786,9 @@ one meal) rather than left as two numbers in a comment.
   fails (31/32), and fails identically on a clean `origin/main` worktree —
   a leftover of the faucet closure (`0514f08`), which deliberately stopped
   minting a coin at a kill. Not this work's, and not silently fixed here.
-- Food income is still not conditional on a sale, and a village still has
-  no granary depth designed for riding out a bad week between carts.
+- The purse still lives on a `VillageMarket` that is rebuilt on every chunk
+  load, so a village's savings still die when the player walks away — the
+  gap this file already records. Binding villagers to the persisted
+  `Market` instead was built on this branch and **dropped** in the merge,
+  because `main` had already chosen the other end of the same fix and
+  carrying both would split the tank again.

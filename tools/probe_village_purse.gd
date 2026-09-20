@@ -148,7 +148,7 @@ func _sample() -> void:
 		_lines.append("  %8s %10s %10s %12s" % ["seconds", "sellable", "visit 0..1", "purse gold"])
 		while elapsed < SIMULATED_SECONDS:
 			if elapsed >= next_report:
-				var purse_now = _manager.settlement_purse_for(chunk_coord)
+				var purse_now = SettlementFood.village_market_for(settlement_id, _manager._loaded_villages)
 				_lines.append("  %8.0f %10d %10.3f %12.1f" % [
 					elapsed,
 					MerchantVisit.sellable_units(
@@ -168,16 +168,18 @@ func _sample() -> void:
 			elapsed += SLICE
 
 		var village_market = SettlementFood.village_market_for(settlement_id, _manager._loaded_villages)
-		var purse = _manager.settlement_purse_for(chunk_coord)
+		var traded = _manager._market_store.market_for(settlement_id)
 		_lines.append("  after %.0f simulated seconds:" % elapsed)
-		# The one tank: what the merchant pays into IS what the wage draws
-		# from (NpcEconomy.bind_settlement_purse). The VillageMarket's own
-		# meta is the tank that used to hold it, and must now stay empty.
-		_lines.append("    settlement purse %.1f gold" % (
-			0.0 if purse == null else NpcEconomy.purse_of(purse)
-		))
-		_lines.append("    stale tank      %.1f gold" % (
+		# The purse a wage is really drawn from is the LIVE VillageMarket's
+		# own meta, which is where _step_merchant_visits pays. The
+		# persisted ledger carries a purse of its own that nobody spends,
+		# so both are printed: a village earning into the wrong tank looks
+		# exactly like a village nobody ever paid.
+		_lines.append("    village purse   %.1f gold" % (
 			0.0 if village_market == null else NpcEconomy.purse_of(village_market)
+		))
+		_lines.append("    ledger purse    %.1f gold" % (
+			0.0 if traded == null else NpcEconomy.purse_of(traded)
 		))
 		var broke := 0
 		var villagers := 0

@@ -106,3 +106,56 @@ func test_neither_reading_nor_planning_disturbs_the_containers():
 	SettlementSurplus.allocate({"fish": 8}, views)
 	assert_eq(market, {"fish": 5.0}, "the market is untouched")
 	assert_eq(shelf, {"fish": 5}, "and so is the shelf")
+
+
+# -- a merchant buys the surplus, not the larder --------------------------
+#
+# MEASURED (tools/probe_village_famine.gd, once the purse was finally being
+# funded): purse 21 -> 24 -> 25 gold and market food 0 at EVERY sample, and
+# the village died out entirely by t=900. The gold faucet worked; the
+# merchant was buying the food the villagers needed to eat.
+#
+# traveling_merchants.md already states the rule -- "a merchant buys a
+# village's SURPLUS; he does not buy the timber it cut for its own next
+# house" -- and `reserved` already implements it for CONSTRUCTION material.
+# Nobody was reserving what the people eat.
+
+
+func test_the_larder_is_held_back_before_anything_is_sold():
+	var views: Array = [{"fish": 10.0}]
+	var reserve := SettlementSurplus.larder_reserve(views, ["fish"], 4)
+	assert_eq(reserve, {"fish": 4}, "four units stay home")
+
+
+## Spread across whatever food the village actually has, so reserving does
+## not depend on it holding one particular crop.
+func test_the_reserve_is_spread_over_whatever_food_there_is():
+	var views: Array = [{"carrot": 3.0}, {"potato": 5}]
+	var reserve := SettlementSurplus.larder_reserve(views, ["carrot", "potato"], 6)
+	var held := 0
+	for item_id in reserve:
+		held += int(reserve[item_id])
+	assert_eq(held, 6, "six units held back in total: %s" % str(reserve))
+	assert_true(int(reserve.get("carrot", 0)) <= 3, "never more of a good than there is")
+
+
+## A village with less food than it needs holds back all of it -- and the
+## merchant simply finds nothing to buy, which is correct: there is no
+## surplus.
+func test_a_village_short_of_food_holds_back_every_last_unit():
+	var views: Array = [{"fish": 2.0}]
+	assert_eq(SettlementSurplus.larder_reserve(views, ["fish"], 9), {"fish": 2})
+
+
+func test_nothing_is_reserved_when_nothing_is_owed():
+	assert_eq(SettlementSurplus.larder_reserve([{"fish": 5.0}], ["fish"], 0), {})
+	assert_eq(SettlementSurplus.larder_reserve([{"fish": 5.0}], ["fish"], -3), {})
+
+
+## Only FOOD is held back. Timber is the construction reserve's business,
+## and holding it here too would stop a village ever selling what it cut.
+func test_only_food_is_held_back():
+	var views: Array = [{"wood": 50.0, "fish": 3.0}]
+	var reserve := SettlementSurplus.larder_reserve(views, ["fish"], 20)
+	assert_false(reserve.has("wood"), "timber is not the larder: %s" % str(reserve))
+	assert_eq(reserve, {"fish": 3})

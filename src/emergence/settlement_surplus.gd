@@ -71,3 +71,38 @@ static func allocate(bought: Dictionary, views: Array) -> Array:
 			(plan[index] as Dictionary)[item_id] = take
 			owed -= take
 	return plan
+
+
+## What the village keeps for itself: `units` of food held back across
+## whatever food it actually has, item_id -> whole units.
+##
+## traveling_merchants.md already states this rule -- "a merchant buys a
+## village's SURPLUS; he does not buy the timber it cut for its own next
+## house" -- and MerchantVisit's `reserved` already implements it for
+## CONSTRUCTION material. Nobody was reserving what the PEOPLE eat.
+##
+## MEASURED (tools/probe_village_famine.gd, once the purse was finally
+## being funded): purse climbing 21 -> 24 -> 25 gold with market food 0 at
+## every single sample, and the village dead by t=900. The faucet worked
+## perfectly; the merchant was carrying off the larder.
+##
+## Spread across whatever food is there rather than naming a crop, so the
+## reserve does not depend on a village holding one particular thing --
+## and never more of a good than really exists, so this can only ever hold
+## back food that is present.
+static func larder_reserve(views: Array, food_ids: Array, units: int) -> Dictionary:
+	var reserve: Dictionary = {}
+	if units <= 0:
+		return reserve
+	var available := combined(views)
+	var remaining := units
+	for item_id in food_ids:
+		if remaining <= 0:
+			break
+		var held := int(floor(float(available.get(item_id, 0.0))))
+		if held <= 0:
+			continue
+		var keep := mini(held, remaining)
+		reserve[item_id] = keep
+		remaining -= keep
+	return reserve
