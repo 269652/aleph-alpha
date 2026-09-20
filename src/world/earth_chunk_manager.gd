@@ -4730,7 +4730,63 @@ func admit_household(chunk_coord: Vector2i) -> String:
 	settled.witnesses = [settlement_id]
 	_event_store.append(settled)
 	_memory_store.witness_event(settled, _world_age_seconds)
-	return _household_store.form_household(npc_id).id
+	var household_id: String = _household_store.form_household(npc_id).id
+	# Somebody you can actually see. Reported live with the town panel in
+	# shot: *"despite showing 20 population only 10 NPCs are there"*.
+	_respawn_village(chunk_coord)
+	return household_id
+
+
+## Re-derives the village standing in `chunk_coord`, so the people on screen
+## are the households that really live there.
+##
+## `spawn_village` runs only from `_load_chunk`, which fixes the villager
+## roster at the moment the chunk loaded -- while admit_household goes on
+## adding to the settlement's household count. A household that moved in
+## while the player stood in the village therefore had no villager at all
+## until the chunk was unloaded and loaded again.
+##
+## A whole re-derivation rather than appending one marker, because a
+## villager is not just a marker: they need their farmhouse's field, their
+## pond, their market stand, their store round, their workspot prop -- all
+## handed out together by spawn_village against the roster as a whole. One
+## villager bolted on afterwards would be the only one in the village
+## missing all of it.
+##
+## Safe to re-run because everything spawn_village does to the WORLD is
+## already idempotent -- every building, fence, pond and paved cell goes
+## through a `_if_missing` check, precisely so a chunk reload never raises a
+## second village on top of the first. What is rebuilt is the scene nodes,
+## which is exactly what a reload rebuilds too.
+##
+## The cost is real and worth naming: a villager mid-errand restarts it. An
+## arrival happens once per house the village actually raises, so that is
+## rare, and it is the same thing the player already causes every time they
+## walk far enough away to unload the chunk.
+##
+## A no-op unless this chunk's village is really on screen -- which is what
+## makes it safe to call from admit_household, since settle_up_to_founding_
+## roster admits households during _load_chunk BEFORE the village is spawned
+## at all.
+func _respawn_village(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for node in _loaded_villages[chunk_coord]:
+		if is_instance_valid(node):
+			node.free()
+	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
+		_creatures_parent,
+		chunk_coord,
+		chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE,
+		TerrainRenderer.TILE_SIZE,
+		_biome_classifier.dominant_biome(chunk.biome),
+		self,
+		_current_sun_elevation_deg
+	)
 
 
 ## This settlement's own mean household productivity (HouseholdWellbeing),

@@ -298,14 +298,40 @@ find itself with no spare roof → raise a house → somebody moves into it →
 no spare roof again. Population now advances one household per house
 actually built, which is the pace the report asked for.
 
-⬜ **A household admitted while you are standing there does not appear until
-the chunk reloads.** `spawn_village` runs only from `_load_chunk`, so the
-villager roster is fixed at load time while `admit_household` keeps adding
-to the abstract count — which is the rest of the same report, *"despite
-showing 20 population only 10 NPCs are there"*. The gate above bounds how
-far the two can drift (one household per house built, rather than one per
-step for ever) but does not close it. Spawning a villager into a village
-that is already on screen is its own piece of work and is not done.
+### An arrival you can actually see (2026-09-20)
+
+The rest of the same report: *"despite showing 20 population only 10 NPCs
+are there"*.
+
+`spawn_village` runs only from `_load_chunk`, which fixes the villager
+roster at the moment the chunk loaded — while `admit_household` goes on
+adding to the settlement's household count. A household that moved in while
+the player stood in the village had no villager at all until they walked far
+enough away to unload the chunk and came back.
+
+`admit_household` now re-derives the village (`_respawn_village`), which is
+a **whole re-derivation rather than one appended marker** on purpose: a
+villager is not just a marker. They need their farmhouse's field, their
+pond, their market stand, their store round, their workspot prop — all
+handed out together by `spawn_village` against the roster as a whole, so a
+villager bolted on afterwards would be the only one in the village without
+any of it.
+
+Re-running it is safe because everything `spawn_village` does to the WORLD
+is already idempotent: every building, fence, pond and paved cell goes
+through a `_if_missing` check, precisely so that a chunk reload never raises
+a second village on top of the first. What gets rebuilt is the scene nodes —
+exactly what a reload rebuilds.
+
+**The cost, named rather than hidden**: a villager mid-errand restarts it.
+An arrival happens once per house the village actually raises, so it is
+rare, and it is the same thing the player already causes whenever they walk
+far enough away for the chunk to unload.
+
+It is a no-op unless that chunk's village is really on screen, which is what
+makes it safe to call from `admit_household` at all —
+`settle_up_to_founding_roster` admits households during `_load_chunk`
+*before* the village is spawned.
 
 ## Mechanism 4 — Wellbeing: needs, happiness, productivity
 

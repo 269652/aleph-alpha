@@ -22,6 +22,7 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
@@ -901,3 +902,65 @@ func test_every_rung_the_village_raises_is_walkable_back_to_its_street():
 		"%d of %d rungs stand on paving no street reaches: %s" % [stranded.size(), raised.size(), str(stranded)]
 	)
 
+
+
+# -- an arrival you can actually see ----------------------------------------
+#
+# Reported live with the town panel in shot: *"despite showing 20 population
+# only 10 NPCs are there"*.
+#
+# `spawn_village` runs only from `_load_chunk`, so the villager roster is
+# fixed at the moment the chunk loaded -- while `admit_household` goes on
+# adding to the settlement's household count. A household that moved in
+# while you were standing in the village had no villager at all until you
+# walked far enough away to unload the chunk and came back.
+
+
+func _villagers_on_screen() -> int:
+	var found := 0
+	for node in manager._loaded_villages.get(_chunk_coord, []):
+		if is_instance_valid(node) and node is NpcMarker:
+			found += 1
+	return found
+
+
+func test_a_loaded_village_starts_with_a_villager_for_every_household():
+	assert_eq(
+		_villagers_on_screen(), manager.household_count_for_settlement(_settlement_id),
+		"the premise: a freshly loaded village already shows everyone who lives in it"
+	)
+
+
+func test_a_household_admitted_to_a_loaded_village_gets_a_villager_of_its_own():
+	var before := _villagers_on_screen()
+	assert_ne(manager.admit_household(_chunk_coord), "", "the premise: somebody really moved in")
+	assert_eq(
+		_villagers_on_screen(), before + 1,
+		"a household that moved in while you were watching had nobody to show for it"
+	)
+
+
+## However many arrive, and whenever: the villagers you can see are the
+## households that live there, not the roster the chunk happened to load with.
+func test_the_villagers_on_screen_always_match_the_households_that_live_there():
+	for arrival in 3:
+		manager.admit_household(_chunk_coord)
+		assert_eq(
+			_villagers_on_screen(), manager.household_count_for_settlement(_settlement_id),
+			"after %d arrivals the village shows the wrong number of people" % (arrival + 1)
+		)
+
+
+## ...and nobody is duplicated doing it. Re-deriving a village must replace
+## its villagers, never add a second copy of everyone already standing there.
+func test_nobody_is_duplicated_when_a_village_takes_somebody_in():
+	manager.admit_household(_chunk_coord)
+	var seen: Dictionary = {}
+	for node in manager._loaded_villages.get(_chunk_coord, []):
+		if not is_instance_valid(node) or not (node is NpcMarker):
+			continue
+		var identity = node.identity
+		if identity == null:
+			continue
+		assert_false(seen.has(identity.seed_value), "two markers for the same villager")
+		seen[identity.seed_value] = true

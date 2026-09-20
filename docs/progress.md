@@ -28162,15 +28162,26 @@ and *"room for one plot is one household, however long the absence"* became
 a pair: no empty house admits nobody however long the absence, one empty
 roof admits one.
 
-⬜ **The third symptom is bounded, not fixed.** *"Despite showing 20
-population only 10 NPCs are there"*: `spawn_village` runs only from
-`_load_chunk`, so the villager roster is fixed at load time while
-`admit_household` keeps adding to the abstract household count — an arrival
-is invisible until the chunk reloads. The gate above bounds how far the two
-can drift (one household per house built, instead of one per step for ever)
-but does not close it. Spawning a villager into a village already on screen
-is its own piece of work, and is named here rather than quietly folded in.
+✅ **And an arrival you can actually see.** *"Despite showing 20 population
+only 10 NPCs are there"*: `spawn_village` runs only from `_load_chunk`, so
+the villager roster was fixed at load time while `admit_household` kept
+adding to the abstract household count — a household that moved in while you
+stood there had nobody to show for it until the chunk unloaded and reloaded.
+`admit_household` re-derives the village now.
+
+A whole re-derivation, not one appended marker: a villager needs their
+farmhouse's field, their pond, their market stand, their store round and
+their workspot prop, all handed out together against the roster as a whole,
+so one bolted on afterwards would be the only villager without any of it.
+Safe to re-run because everything `spawn_village` does to the world already
+goes through an `_if_missing` check — that is what stops a chunk reload
+raising a second village. The cost, named rather than hidden: a villager
+mid-errand restarts it, which happens once per house the village raises and
+is the same thing walking away and back already does.
 
 Tests: `test_village_immigration.gd` 20/20 (4 new, 2 rewritten),
 `test_village_growth.gd` 23/23 (5 new), `test_village_census.gd` 9/9,
-`test_village_assembly.gd` 39/39.
+`test_village_assembly.gd` 39/39,
+`test_earth_chunk_manager_village_growth.gd` (5 new, covering the roster
+matching the households after any number of arrivals and nobody being
+duplicated by the re-derivation).
