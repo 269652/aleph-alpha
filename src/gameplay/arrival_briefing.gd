@@ -294,3 +294,19 @@ static func _tile(facts: Dictionary, key: String) -> Variant:
 	if value is Vector2i:
 		return Vector2(value)
 	return null
+
+
+## The three lines as one passage, in order, with the missing ones closed up
+## rather than left as blank rows.
+##
+## Every caller would otherwise invent its own join, and "a missing fact is a
+## line the caller does not draw" would become one rule per caller. It is
+## this one. Nothing known at all is no card at all -- the caller has no
+## business showing an empty panel to a character who just opened their eyes.
+static func card_text(briefing: Dictionary) -> String:
+	var lines: Array[String] = []
+	for key in ["place_line", "bearing_line", "errand_line"]:
+		var line := String(briefing.get(key, "")).strip_edges()
+		if line != "":
+			lines.append(line)
+	return "\n".join(lines)

@@ -158,6 +158,7 @@ const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
 const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
+const ArrivalBriefing = preload("res://src/gameplay/arrival_briefing.gd")
 const SpellWeaveWindow = preload("res://scenes/spell_weave_window.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const Why = preload("res://src/emergence/why.gd")
@@ -2347,11 +2348,98 @@ func _discovery_step(local_player: Player, delta: float) -> void:
 ## than only on the frames a chunk edge is crossed -- otherwise a player who
 ## stopped walking would keep the card until they moved again.
 func _expire_discovery_card(delta: float) -> void:
-	if _discovery_card_seconds_left <= 0.0:
+	_discovery_card_seconds_left = _expire_card(
+		_discovery_banner, _discovery_card_seconds_left, delta
+	)
+
+
+## One prose card's countdown: hands back the time left, and hides the card
+## itself on the frame it runs out. Shared by every timed passage here so
+## "a card that never clears is furniture" is one rule rather than one per
+## card.
+func _expire_card(banner: PanelContainer, seconds_left: float, delta: float) -> float:
+	if seconds_left <= 0.0:
+		return 0.0
+	var remaining := maxf(0.0, seconds_left - delta)
+	if remaining <= 0.0 and banner != null:
+		_set_message_banner(banner, "")
+	return remaining
+
+
+## The arrival briefing's own banner and the time left on it
+## (docs/concept/arrival.md). Shown once, on the NEW-game path only.
+var _arrival_banner: PanelContainer
+var _arrival_card_seconds_left := 0.0
+
+## The curated river this session's spawn was drawn on
+## (SpawnRiverPicker.pick's "river"). Before the briefing existed this was
+## printed to stdout at spawn and thrown away, which is why the game could
+## put a character on the Loire and never say so.
+var _spawn_river_name := ""
+
+
+## The three facts a new character needs in their first ten seconds: where
+## they are, what is near them, and one thing to do
+## (docs/concept/arrival.md).
+##
+## Every line is read off live state or is not printed. The river is the one
+## the spawn picker really drew, the season the world's own clock, the
+## bearing a real settlement the event store really recorded, and the errand
+## the live production-shortfall projection -- so the card shows a shortage
+## because there IS one, never because a first quest was authored.
+##
+## NEW game only, the same rule the dawn clause keeps: a character old
+## enough to have been saved has already had a first morning, and being told
+## where they are would be the game forgetting them.
+func _show_arrival_briefing(local_player: Player) -> void:
+	if local_player == null or _chunk_manager == null or _arrival_banner == null:
 		return
-	_discovery_card_seconds_left = maxf(0.0, _discovery_card_seconds_left - delta)
-	if _discovery_card_seconds_left <= 0.0 and _discovery_banner != null:
-		_set_message_banner(_discovery_banner, "")
+	var player_tile := local_player.current_tile()
+	var facts := {
+		"river_name": _spawn_river_name,
+		"season": _chunk_manager.current_season(),
+		"player_tile": player_tile,
+	}
+	var nearest := _nearest_known_settlement(player_tile)
+	if not nearest.is_empty():
+		facts["settlement_tile"] = nearest["tile"]
+		facts["errands"] = _chunk_manager.production_shortfall_quests_for_settlement(
+			String(nearest["id"])
+		)
+	var card := ArrivalBriefing.card_text(ArrivalBriefing.briefing_for(facts))
+	if card == "":
+		return
+	_set_message_banner(_arrival_banner, card)
+	_arrival_card_seconds_left = Answerback.seconds_to_read(card)
+
+
+func _expire_arrival_card(delta: float) -> void:
+	_arrival_card_seconds_left = _expire_card(
+		_arrival_banner, _arrival_card_seconds_left, delta
+	)
+
+
+## The nearest settlement this world has actually founded, as `{id, tile}`,
+## or `{}` when none has been. Read from the event store's own
+## `settlement_founded` records -- the same door `_handle_map_command` reads
+## landmarks through -- so the briefing can never point at a village that
+## does not exist. The tile is the settlement chunk's centre, which is where
+## `RegionalTrade.chunk_coord_of` puts it.
+func _nearest_known_settlement(player_tile: Vector2i) -> Dictionary:
+	var best: Dictionary = {}
+	var best_distance := INF
+	var half := EarthChunkManager.CHUNK_SIZE / 2
+	for event in _chunk_manager.event_store().events_of_type("settlement_founded"):
+		if event.actors.is_empty():
+			continue
+		var settlement_id: String = event.actors[0]
+		var chunk_coord: Vector2i = RegionalTrade.chunk_coord_of(settlement_id)
+		var tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(half, half)
+		var distance := Vector2(tile).distance_to(Vector2(player_tile))
+		if distance < best_distance:
+			best_distance = distance
+			best = {"id": settlement_id, "tile": tile}
+	return best
 
 
 ## The local hour a YOUNG character's sky should read, or NO_FORCED_HOUR
@@ -3403,6 +3491,10 @@ func _build_message_stack() -> void:
 	# rather than a one-line result, so it reads at the same size as the
 	# other prose banners rather than at a result's.
 	_discovery_banner = _make_message_banner(14)
+	# The arrival briefing (docs/concept/arrival.md), last so it sits under
+	# everything else: it is shown once, at the one moment nothing else is
+	# competing for the stack.
+	_arrival_banner = _make_message_banner(14)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -7134,6 +7226,12 @@ func _spawn_local_singleplayer() -> void:
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
+	# LAST, and after setup: current_tile() needs the tile size setup hands
+	# it, and the briefing's bearing is measured from that tile. NEW game
+	# only -- _spawn_local_singleplayer_from_save is a separate function and
+	# never greets a character who has been living here (docs/concept/
+	# arrival.md).
+	_show_arrival_briefing(player)
 
 
 ## Restores a previously saved character (see docs/concept/persistence.md):
@@ -7303,6 +7401,10 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 			print("[spawn] no curated river bank qualified -- falling back to the Loire at Nantes")
 		else:
 			_session_spawn_candidate = pick["tile"]
+			# Kept, not just printed: the arrival briefing's place line is
+			# "You are on the Loire, in spring", and this is the only place
+			# the game ever knows which river that is.
+			_spawn_river_name = String(pick["river"])
 			print("[spawn] the %s at tile %s" % [pick["river"], pick["tile"]])
 	# The same bank nudge as before: chunks around the candidate are loaded
 	# (with loading-overlay progress), then the nearest tile that is neither
@@ -8058,6 +8160,7 @@ func _client_process(delta: float) -> void:
 	# Before the minimap, so the ground under the player is on the explored
 	# record the same frame it is walked (docs/concept/discovery.md).
 	_discovery_step(local_player, delta)
+	_expire_arrival_card(delta)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_discovery", perf_started)
 	_update_minimap(player_tile, delta)
