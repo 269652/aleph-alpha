@@ -36,6 +36,11 @@ const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+## The play-scale tile in pixels, for converting a species profile's
+## tiles-per-second pace into this scene's own pixel speeds. Restated
+## rather than preloading TerrainRenderer (a creature does not otherwise
+## need the renderer) and pinned to it by test.
+const TILE_SIZE_PX := 16
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
@@ -2148,15 +2153,15 @@ func _apply_decision(decision: Dictionary, delta: float) -> void:
 		# it. Measured at the time: a wall one tile ahead, and the animal
 		# crossed two full tiles through it in a single 0.5s step.
 		"attack":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_attack(_stimulus_node(decision))
 			_current_action = "attack"
 		"hunt":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_eat(_stimulus_node(decision))
 			_current_action = "attack"
 		"scavenge":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_scavenge(_stimulus_node(decision))
 			_current_action = "attack"
 		"seek_water":
@@ -2206,6 +2211,27 @@ func _step_courtship_movement(direction: Vector2, delta: float) -> void:
 ## docs/concept/ecosystem_dynamics.md's Species roster) -- a real mechanical
 ## difference from every other predator, not just a color/flavor one.
 const VENOMOUS_SPECIES := {"venomous_snake": true}
+
+
+## How fast this individual runs when it is hunting you, from its own
+## species profile (SpeciesBite, docs/concept/predator_profiles.md).
+##
+## Measured before this existed, and the sharpest single fact about the
+## world's difficulty gradient: HUNT_SPEED is 36.0 px/s while
+## Player.BASE_SPEED is 40.0 -- so every pursuer in the game was outWALKED
+## by a player who never touched the sprint key. A ring that gates which
+## species may spawn gates nothing at all when none of them can close a
+## metre on you.
+##
+## A species with no profile keeps the shared HUNT_SPEED, so nothing
+## unprofiled silently stops moving.
+func hunt_speed() -> float:
+	var species := info.species if info != null else ""
+	if SpeciesBite.has_profile(species):
+		return float(
+			SpeciesBite.profile_for(species)["pursuit_speed_tiles_per_second"]
+		) * TILE_SIZE_PX
+	return HUNT_SPEED
 
 
 ## What this individual bites for, from its own species profile

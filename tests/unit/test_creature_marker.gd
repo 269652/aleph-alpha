@@ -4579,3 +4579,57 @@ func test_the_cooldown_between_bites_is_the_species_own():
 	assert_eq(victim.damage_taken, _bite_of("bear"), "a second bite inside the cooldown lands nothing")
 	biter.queue_free()
 	victim.queue_free()
+
+
+# -- and a hunter can actually catch you --------------------------------
+#
+# Measured in adversarial review, and the sharpest fact about the world's
+# difficulty gradient: HUNT_SPEED is 36.0 px/s while Player.BASE_SPEED is
+# 40.0, so EVERY pursuer in the game today is outwalked -- not outrun,
+# outWALKED -- by a player who never touches the sprint key. A ring that
+# gates which species may spawn gates nothing at all when none of them can
+# close a metre on you.
+
+func test_a_hunting_predator_runs_at_its_own_species_pace():
+	var hunter := CreatureMarker.new()
+	hunter.info = CreatureInfo.new("wolf")
+	add_child(hunter)
+	assert_almost_eq(
+		hunter.hunt_speed(),
+		SpeciesBite.profile_for("wolf")["pursuit_speed_tiles_per_second"] * float(TerrainRenderer.TILE_SIZE),
+		0.001
+	)
+	hunter.queue_free()
+
+
+func test_at_least_one_real_predator_is_faster_than_a_walking_player():
+	var fastest := 0.0
+	var fastest_species := ""
+	for species in SpeciesBite.species_list():
+		var speed: float = (
+			SpeciesBite.profile_for(species)["pursuit_speed_tiles_per_second"]
+			* float(TerrainRenderer.TILE_SIZE)
+		)
+		if speed > fastest:
+			fastest = speed
+			fastest_species = species
+	assert_gt(
+		fastest, PlayerScript.BASE_SPEED,
+		"something on this planet (%s) must be able to close on a walking player" % fastest_species
+	)
+
+
+func test_a_species_with_no_profile_still_hunts_at_the_shared_pace():
+	var hunter := CreatureMarker.new()
+	hunter.info = CreatureInfo.new("not_a_real_species")
+	add_child(hunter)
+	assert_almost_eq(hunter.hunt_speed(), CreatureMarker.HUNT_SPEED, 0.001)
+	hunter.queue_free()
+
+
+const PlayerScript = preload("res://scenes/player.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
+
+func test_the_restated_tile_size_is_the_renderers_own():
+	assert_eq(CreatureMarker.TILE_SIZE_PX, TerrainRenderer.TILE_SIZE)
