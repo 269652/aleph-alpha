@@ -18491,11 +18491,21 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 	if spare_capacity <= 0:
 		return
 
-	var owner_id := settlement_id
-	if BuildingCatalog.BUILDING_IDS.has(next_building):
-		if waiting.is_empty():
-			return
-		owner_id = waiting[0]
+	# Who it belongs to -- and a home with nobody waiting for it is the
+	# VILLAGE'S, not a reason to refuse the build.
+	#
+	# This credited a home to waiting[0] and RETURNED when nobody was
+	# waiting. That is right for the shelter rung, which exists for a named
+	# household, and wrong for the ladder's lowest rung, which raises a
+	# house precisely BECAUSE everybody is already housed and no roof
+	# stands empty (VillageGrowth.next_building, docs/concept/
+	# village_growth.md "Room is made first, moved into after"). So the
+	# village chose that house on every settlement step and never once
+	# began it. Measured (tools/probe_village_growth_gate.gd) with every
+	# other condition open -- food per household 2.3 to 3.6 against a
+	# threshold of 2.0, six spare hands, a site available, `house_small`
+	# chosen at every sample -- and `building now` empty throughout.
+	var owner_id := VillageGrowth.owner_for(next_building, waiting, settlement_id)
 
 	var origin = _growth_site_for(chunk_coord, next_building)
 	if origin == null:

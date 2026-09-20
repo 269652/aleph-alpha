@@ -19,12 +19,13 @@ extends SceneTree
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const SettlementFood = preload("res://src/emergence/settlement_food.gd")
+const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
 
 const CHUNK_SIZE := 32
 const STEPS := 40
 const SLICE := 0.25
-const SIMULATED_SECONDS := 1200.0
-const REPORT_EVERY := 150.0
+const SIMULATED_SECONDS := 600.0
+const REPORT_EVERY := 100.0
 
 var _manager
 var _origin: Vector2i
@@ -101,7 +102,27 @@ func _gate(chunk_coord: Vector2i, settlement_id: String) -> Dictionary:
 		# defaulted to "there is already room" and the column read "-" for
 		# a reason that was about the probe rather than the village.
 		"next_building": _manager.next_building_for_settlement(chunk_coord),
+		# ...and everything BETWEEN choosing a building and it standing.
+		# Measured after the assembly gained its lowest rung: the village
+		# owed itself house_small at every sample and `room` stayed 0, so
+		# choosing is not building and the difference is these three.
+		"labour": SettlementSpareCapacity.for_settlement(
+			household_ids.size(), _manager._household_occupations_for_settlement(settlement_id)
+		),
+		"waiting": census["unhoused_household_ids"].size(),
+		"has_site": _manager._growth_site_for(
+			chunk_coord, _manager.next_building_for_settlement(chunk_coord)
+		) != null,
+		"projects": _projects_in(chunk_coord),
 	}
+
+
+## What this settlement is actually BUILDING right now, by state.
+func _projects_in(chunk_coord: Vector2i) -> String:
+	var out: Array = []
+	for project in _manager._construction_project_store.active_projects_in_chunk(chunk_coord):
+		out.append("%s:%s" % [str(project.blueprint_id), str(project.status)])
+	return ", ".join(out) if not out.is_empty() else "-"
 
 
 func _sample() -> void:
@@ -117,8 +138,9 @@ func _sample() -> void:
 		_lines.append("GROWTH GATE at %s   (FED_THRESHOLD %.1f)" % [
 			str(chunk_coord), VillageImmigration.FED_THRESHOLD
 		])
-		_lines.append("  %7s %6s %6s %5s %8s %7s %6s  %s" % [
-			"seconds", "house", "housed", "room", "food/hh", "ladder", "carry", "next build"
+		_lines.append("  %7s %6s %6s %5s %8s %7s %6s %5s %4s  %-13s %s" % [
+			"seconds", "house", "housed", "room", "food/hh", "labour", "waiting",
+			"site", "", "next build", "building now"
 		])
 
 		var elapsed := 0.0
@@ -129,12 +151,14 @@ func _sample() -> void:
 				if g.is_empty():
 					_lines.append("  %7.0f  (no households)" % elapsed)
 				else:
-					_lines.append("  %7.0f %6d %6d %5d %8.2f %7.2f %6.2f  %s%s" % [
+					_lines.append("  %7.0f %6d %6d %5d %8.2f %7d %6d %5s %4s  %-13s %s%s" % [
 						elapsed, g["households"], g["housed"], g["room"],
-						g["food_per_household"], g["ladder_share"], g["carry"],
+						g["food_per_household"], g["labour"], g["waiting"],
+						"yes" if g["has_site"] else "NO", "",
 						str(g["next_building"]) if str(g["next_building"]) != "" else "-",
+						g["projects"],
 						"" if float(g["food_per_household"]) >= VillageImmigration.FED_THRESHOLD
-							else "   <- HUNGRY, gate shut",
+							else "   <- HUNGRY",
 					])
 				next_report += REPORT_EVERY
 			for node in _manager._loaded_villages.get(chunk_coord, []):
