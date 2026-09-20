@@ -31212,11 +31212,13 @@ apron about as well as the woodsman's does from his tunic, and the tool
 must be smaller than the man's own head, which is the honest standard for
 "a thing he is carrying" rather than "an axe, but bigger".
 
-Honest gap:
+Honest gap, **half closed the same day** — see "The builder carries the
+material" below:
 
-🚧 **He does not carry material or place anything.** The labour he stands
-for is abstract — hours against a required total — so he is the face of
-work happening here, not a piece-by-piece builder.
+🚧 **He places nothing.** He carries the project's real reserved material
+from the village store to the site now, but the labour he stands for is
+still abstract — hours against a required total — so he is the face of
+work happening here rather than a piece-by-piece builder.
 `BuilderMarker`/`civic_construction.md`'s piece-placing worker is a
 different, still-unbuilt thing for the legacy piece model.
 
@@ -31275,3 +31277,85 @@ that chunk. Every other ground cover can re-colonise.
 
 Tested, red first at every step: `test_earth_chunk_manager_ferns.gd` 15/15
 (+3), `test_earth_chunk_manager_brambles.gd` 16/16 (+4).
+
+
+## The builder carries the material (`concept/building.md`, 2026-09-20)
+
+Asked in the next breath after the builder himself: *"the builders should
+carry materials to the site"*. He worked an empty plot — the timber a
+cottage is made of left the village store as a number and arrived nowhere,
+and the man standing over the work had never fetched any of it.
+
+**The material was already real; only its journey was missing.**
+`SettlementConstruction.try_start` draws every one of a recipe's inputs out
+of `VillageMarket.stock` the moment a project starts and puts them in that
+project's own `reserved_material`. `village_warehouse.md` pillar 2 had
+already given that stock an address and pillar 4 had already made goods
+*arrive* by being carried; this is the other half of pillar 4 — goods leave
+by being carried too, and the site's builder is who carries them.
+
+- **A real round.** Out to the store, a spell loading, back to the plot,
+  the load set down, two spells of work, out again — until everything the
+  project reserved is standing on the site, after which there is nothing
+  left to fetch and he is a man working his plot again
+  (`ConstructionWorkerMarker`'s four phases).
+- **The load is read, not authored.** `ConstructionHaul` takes the item
+  with the most still outstanding, `CARRY_LOAD` at a time, the last trip
+  carrying only the remainder. `CARRY_LOAD` is pinned against the REAL
+  catalog costs rather than eyeballed: a cottage's 12 wood must come out a
+  handful of journeys (3) and a hall's 20 wood + 10 stone must cost more of
+  them (8).
+- **Nothing to fetch is a real answer.** An unreserved project, and a
+  village whose site was too cramped for a store (`village_warehouse.md`'s
+  own pillar-1 caveat), both fall back to exactly the builder that existed
+  before this. That is the same default pillar 4 already chose for
+  producers, not a special case invented here.
+- **Visibly loaded on the way back.** `ProceduralBuilderSprite` gained a
+  second drawing — a bundle of boards under the arm in place of the mallet
+  up — swapped exactly as his hands fill and empty.
+- **The haul does not gate the labour, and must not.**
+  `ConstructionCatchup` advances projects in chunks with no builder walking
+  in them at all, so hours that waited on a delivery would stall every
+  unloaded village's building and make a settlement's progress depend on
+  being looked at. The round is committed material becoming visible, not a
+  second ledger over the first.
+
+**Two failures, both found by looking at a real village rather than at a
+passing test** (`tools/probe_construction_haul.gd`, kept — it raises a real
+hall on a real village's plaza and walks its builder for four simulated
+minutes).
+
+1. **Sent into a wall.** `nearest_structure_position` answers with a
+   whole-building's ORIGIN cell, which is inside its walls. Measured: the
+   builder walked 68 px toward it, pressed into the building 25 px short,
+   and stood there for the remaining 230 seconds — nothing delivered, never
+   once back on his plot. He is sent to the store's DOOR now, the same cell
+   a villager hauling into it is sent to (`VillageRenderer._warehouse_door`),
+   pinned both against that door and against `WalkGate` itself.
+2. **And then stuck against the next building along.** The wall slide is a
+   reflex for a wall you brush; getting *around* one is a plan, and
+   `TileRouter` is that plan — villagers have routed since
+   `navigation.md`'s own pass. The builder steers the same way `NpcMarker`
+   does now, on the same node budget and throttle (pinned to that marker's
+   constants), plus one addition: a route that runs out while he is short
+   of his goal is recomputed, and a search that finds *nothing* backs off,
+   because that is the expensive one.
+
+After both: **all 30 units delivered — 20 wood and 10 stone, eight trips —
+inside 140 of the 240 simulated seconds, 80% of his time spent on the plot
+and 11% of it carrying.** Then the pile is in and he only works, which is
+what the spec says should happen.
+
+**The art failed once more, and measurably.** Drawn up on the shoulder, the
+bundle sat exactly where the head is, and sawn timber and skin are near
+enough in tone that they merged into one pale mass over a brown body
+(`loaded.png` at the game's own zoom). Carried at chest height the dark
+apron runs between them and both read. Pinned by the rule rather than by
+the colour that fixed it: the head is the same head on both legs of the
+round, and no load pixel is even adjacent to it.
+
+Tested: `test_construction_haul.gd` (10, new),
+`test_construction_worker_marker.gd` (18, was 5),
+`test_procedural_builder_sprite.gd` (15, was 6),
+`test_earth_chunk_manager_city_hall_rising.gd` (+3).
+
