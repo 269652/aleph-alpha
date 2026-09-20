@@ -17168,8 +17168,17 @@ const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 ## behaviour that matters -- what the settlement counts as food is what its
 ## people can eat -- so the next store added here fails a test rather than
 ## starving a village quietly.
+## The FARMHOUSE was the next one down the same chain, and it stranded the
+## harvest the same way the warehouse once did. Measured
+## (tools/probe_village_famine.gd's own food breakdown): 97 units of a
+## village's own crop, in its own three farmhouses, that its own people
+## could not eat -- while they starved to death around them. A farmer's
+## crop is PUT in the farmhouse (NpcMarker._work_field_cell ->
+## deposit_to_structure_at) and only becomes warehouse food once a carter
+## has fetched it; a village whose carter is slow, or which has no store at
+## all, keeps every bite of its harvest there.
 const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = [
-	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID
+	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID, VillageFarm.FARM_BUILDING_ID
 ]
 
 
