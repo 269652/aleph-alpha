@@ -485,7 +485,23 @@ func reconcile_villagers(
 		if node is NpcMarker:
 			villagers.append(node)
 
-	var roster := _population_for(chunk_coord, world)
+	# The REAL roster, read directly rather than through _population_for.
+	# That helper reads 0 as "this settlement was never recorded, fall back
+	# to the founding roster" -- exactly right when spawning a village for
+	# the first time, and badly wrong here: a village whose last household
+	# died looks identical to one that was never written down, so the
+	# fallback resurrects it. Measured before it was fixed
+	# (tools/probe_village_famine.gd): a village fell to a roster of 0 and
+	# this put ten villagers back on the street, who starved, forever.
+	#
+	# A world that cannot answer is left exactly as it is. Reconciling
+	# against a number nobody supplied is the invented number this
+	# project's rules forbid.
+	if world == null or not world.has_method("household_count_for_settlement"):
+		return standing
+	var roster: int = world.household_count_for_settlement(
+		EntityRef.for_settlement(chunk_coord)
+	)
 	if roster <= villagers.size():
 		return standing
 

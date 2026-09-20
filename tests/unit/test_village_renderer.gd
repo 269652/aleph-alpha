@@ -3939,3 +3939,45 @@ func test_who_moves_in_is_the_same_person_every_time():
 				seeds.append(node.identity.seed_value)
 	assert_eq(seeds.size(), 2, "precondition: somebody moved in both times")
 	assert_eq(seeds[0], seeds[1], "a different person arrived on the second run")
+
+
+## An EXTINCT village must stay extinct. _population_for reads a roster of
+## 0 as "this settlement was never recorded, fall back to the founding
+## roster" -- exactly right when spawning a village for the first time,
+## and badly wrong here, because a village whose last household died looks
+## identical to one that was never written down.
+##
+## Measured before it was fixed (tools/probe_village_famine.gd): a village
+## fell to a roster of 0, and the reconcile put ten villagers back on the
+## street, who starved, forever.
+func test_an_extinct_village_is_not_repopulated():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	# Everybody died: the markers are gone and the roster is empty.
+	var survivors: Array = []
+	var freed := 0
+	for node in nodes:
+		if node is NpcMarker and freed < 8:
+			freed += 1
+			node.queue_free()
+			continue
+		survivors.append(node)
+	world.household_count = 0
+
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, survivors
+	)
+	assert_eq(_villagers_among(after), 2, "an extinct village refilled itself off the street")
+
+
+## ...and a world that cannot answer at all is left exactly as it is,
+## rather than being guessed at.
+func test_a_world_that_cannot_say_leaves_the_village_alone():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, null, nodes
+	)
+	assert_eq(_villagers_among(after), 10)
