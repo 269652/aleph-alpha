@@ -100,14 +100,68 @@ func _find_settlement_chunk() -> Vector2i:
 			for record in manager.buildings_in_chunk(coord):
 				if BuildingCatalog.capacity_of(record.get("id", "")) > 0:
 					houses += 1
+			var room := _spare_house_plots(coord, ROOM_TO_GROW_PLOTS)
 			manager._unload_chunk(coord)
 			_scrub_chunk(coord)
-			if has_square and houses > 0:
+			if has_square and houses > 0 and room >= ROOM_TO_GROW_PLOTS:
 				return coord
 			if loads >= 20:
 				break
-	fail_test("no real settlement chunk that laid its plaza found within the scanned neighborhood")
+	fail_test("no real settlement chunk with a plaza AND room to grow found within the scanned neighborhood")
 	return Vector2i.ZERO
+
+
+## How much room to grow this file really needs of its fixture, in further
+## house plots: enough to carry a founding roster all the way to the
+## ladder's last rung, since these tests grow the village one household at a
+## time until the rung they are about to exercise is the one it is owed.
+## Derived from the two constants that decide it, never eyeballed.
+##
+## The finder used to ask only for a square and a house, and that was enough
+## by luck: the villages it happened to land on had frontage to spare. It
+## stopped being enough the moment founding kept squares it used to abandon
+## (see VillageLayout._layout_once) -- a square is eight columns of the main
+## street that no house may ever take, so villages that gained one lost
+## frontage with it, and the first candidate near Berlin moved from
+## (674,117) to (656,117), which has room for four more houses. Measured
+## across the fourteen real settlement chunks the scan reaches
+## (tools/probe_village_frontage.gd): spare plots run from 1 to 15, so "has
+## a square" and "has room" are genuinely different questions and the
+## fixture has to ask both.
+const ROOM_TO_GROW_PLOTS := VillageGrowth.BREWERY_MIN_HOUSEHOLDS - SettlementGenerator.POPULATION
+
+
+## How many FURTHER house plots this village's own streets could still take,
+## up to `cap` -- pure, by claiming each answer before asking again, so
+## nothing is placed and the chunk is left exactly as it was found.
+func _spare_house_plots(coord: Vector2i, cap: int) -> int:
+	var house_id: String = BuildingCatalog.BUILDING_IDS[0]
+	var claimed: Dictionary = {}
+	var is_buildable := func(cell: Vector2i) -> bool:
+		var g: Vector2i = coord * CHUNK_SIZE + cell
+		return manager.is_buildable_ground_at(g.x, g.y)
+	var is_occupied := func(cell: Vector2i) -> bool:
+		if claimed.has(cell):
+			return true
+		var g: Vector2i = coord * CHUNK_SIZE + cell
+		return manager.modification_at_global(g.x, g.y) != ""
+	var is_paved := func(cell: Vector2i) -> bool:
+		if claimed.has(cell):
+			return false
+		var g: Vector2i = coord * CHUNK_SIZE + cell
+		return TerrainRenderer.is_road_tile(manager.modification_at_global(g.x, g.y))
+	var found := 0
+	while found < cap:
+		var plot: Dictionary = VillageLayout.next_street_plot(
+			house_id, CHUNK_SIZE, VillageLayout.seed_for(coord), is_buildable, is_occupied,
+			manager._is_dry_local(coord), Callable(), is_paved
+		)
+		if plot.is_empty():
+			return found
+		found += 1
+		for cell in BuildingCatalog.footprint_cells(house_id, plot["origin"]):
+			claimed[cell] = true
+	return found
 
 
 func _plaza_terrain_is_open(coord: Vector2i) -> bool:

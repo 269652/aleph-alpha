@@ -29252,16 +29252,17 @@ square" until the shape was printed and the 4×3 block turned out to be the
 **city hall standing on it** — a false alarm caught before it was reported
 as a defect.
 
-🚧 **The reported hamlet's hall never finishes** (confirmed by the player:
-"No"). `SettlementReadout` shows `Building  City Hall`, so the project
-exists and is not completing. Two gates in
-`_apply_construction_labor_catchup` can hold it forever, and both are
-silent: `spare_capacity` of 0 (`household_count` minus households with a
-producer occupation — only `farmer`/`hunter`/`fisher` count), and
-`_civic_site_is_clear` failing, which `continue`s with nothing said
-anywhere. Both are tested as deliberate behaviour
-(`test_labour_waits_while_the_plot_is_blocked`), so telling a stall from
-the design needs that save. Not guessed at.
+✅ **The reported hamlet's hall never finishes** — *resolved, and the
+reading above was wrong* (see "A square abandoned at founding is a square
+the houses take", below). `SettlementReadout`'s `Building  City Hall` is
+the village's **aspiration line, not a live project**: measured on that
+exact village, `project=none` and `hall=0`. There was nothing to finish.
+The two gates guessed at here (`spare_capacity` of 0,
+`_civic_site_is_clear` failing inside
+`_apply_construction_labor_catchup`) were never reached — the decision
+returns far earlier, on a `null` civic plot. Kept as written because the
+guess is the useful part of the record: it is what measuring the real
+village replaced.
 
 ⬜ **A renderer-level test of the same rule was written and withdrawn.** It
 asserted paving on a row the stub's predicate does not govern the way I
@@ -29269,6 +29270,123 @@ assumed, so it failed for its own reasons rather than the code's. The rule
 is pinned where the decision lives, in `test_village_layout.gd`.
 
 Tests: 253/253 across the layout, renderer and both city-hall suites (+1).
+
+## A square abandoned at founding is a square the houses take (`concept/village_market_square.md`, `concept/civic_construction.md`, 2026-09-20)
+
+Reported a fourth time, with the hamlet in shot: *"the hall still isn't
+finishing and no square plaza either"* — ten households at lat 47.2 lon
+15.1, HUD reading `Building  City Hall`, no square and no seat on the
+ground.
+
+✅ **Measured before anything was changed.** `tools/probe_village_hall.gd`
+and `tools/probe_village_founding.gd` (both kept) load that exact village,
+chunk (676,148):
+
+```
+VILLAGE (676, 148) households=10  hall=0  project=none
+   PLAZA [P: (7, 13), S: (8, 6)] paved=15/48 pavable=34
+   CIVIC PLOT origin=(9, 13) site_clear=false plot_origin_for=<null>
+      (10, 14) mod='house_small'   (12, 14) mod='house_small'   ...
+```
+
+The hall was never started, not stalled — and could not be: the plot had
+two houses on it, so `_civic_plot_origin_for` answers `null` and
+`_apply_civic_build_decision` returns before `CivicBuildDecision` is ever
+asked.
+
+✅ **The cause, instrumented rather than guessed.** A temporary print in
+`_layout_once` named the three cells that cost the village its square:
+
+```
+industry={origin:(13,7), road_spur:[(14,9)...(14,15)]}
+plaza cell (14, 13) blocked  buildable=true occupied=true
+plaza cell (14, 14) blocked  buildable=true occupied=true
+plaza cell (14, 15) blocked  buildable=true occupied=true
+```
+
+The sawmill stands up at the timber and its reserved road spur runs down
+the square's own east column. Founding demanded **all 48 cells clear**, so
+the whole square was dropped, nothing was claimed, and the founding houses
+marched through it — (6,14) (8,14) (10,14) (12,14), covering every cell of
+the civic plot. The reload path had already learned the tolerant rule
+(`plaza_is_worth_laying`); founding never had, and founding is the end that
+matters, because a square abandoned there is a square the houses **take**,
+which no later pass can undo.
+
+✅ **Fixed at founding.** The square is kept whenever it is worth laying,
+the whole rect is claimed (so no plot creeps into the part a spur crosses)
+and only the genuinely takeable cells are paved — the square laid *around*
+the spur. The floor stays: a square with almost nothing left of it is
+still honestly declined. Verified end to end on the reported village, same
+seed, same 49-chunk sweep: **`hall=1`**, standing on its plot, square
+paved 36/48 with the other twelve being the hall itself.
+
+✅ **A second defect, found while verifying the first.** The square came
+out at x0=7 in one run and x0=12 in the next — same chunk, same seed.
+`plaza_x0_for` states the invariant outright ("rivers do not move"), but
+a fisher's dug pond is a chunk *modification* and `is_water_at_global`
+answers it first, so the square had started sliding for **built** water.
+Measured directly: digging one row of pond across a square moved it from
+x0=12 to x0=4, which strands the paving already laid and leaves the well,
+the stall, the market stands and the civic plot pointing at bare ground.
+`EarthChunkManager.is_generated_water_at_global` is everything
+`is_water_at_global` knows except dug ponds (asking
+`generator.is_river_at_global` directly, since this class's own river test
+answers a pond too); every square-siting caller reads it now, and
+`VillageLayout.layout` takes the same optional `is_dry` its siblings
+already took. A pond still refuses a house — it just no longer moves a
+square.
+
+🚧 **A village already standing in a save keeps its built-over square.**
+The fix is at founding; nothing here moves a house that is already there.
+Chunks persist on unload (`_persist_modifications_now`), so a world played
+before this lands still has villages whose civic plot is somebody's front
+room, and they will never raise a seat.
+
+There is a surgical heal that needs no code: delete that chunk's two
+persisted files and it is re-founded, correctly, on the next visit —
+`user://chunk_buildings/<x>_<y>.bin` and
+`user://chunk_modifications/<x>_<y>.bin` (for the reported village,
+`676_148.bin`; `user://` is `%APPDATA%\Godot\app_userdata\Aleph Alpha\`
+on Windows and `~/.local/share/godot/app_userdata/Aleph Alpha/` on Linux).
+It throws away everything the player built in that chunk too, which is why
+it is a note here rather than an automatic migration: the alternative
+migration would have to demolish two occupied houses, and that is not a
+call this ledger gets to make.
+
+🚧 **A village whose square genuinely cannot be laid still has no seat**,
+silently. Sliding the civic plot to another clear 4×3 strip of the square
+was considered and not taken: the plot is re-derived from the seed with
+nothing persisted, and a plot that moved with occupancy could slide away
+from a half-built project of its own.
+
+> **A correction worth keeping.** The first sweep of this village reported
+> `usable=48/48` and sent the investigation at terrain. That probe asked
+> the skeleton with `is_buildable_ground_at`, which vetoes **forest**,
+> while the game asks it with `not is_water_at_global` — on a forest-edge
+> village those are different rectangles, so every number it printed
+> described a square the game never lays. The probe asks the game's own
+> predicate now.
+
+✅ **A square costs a village frontage, and one test fixture was living on
+that slack.** `test_earth_chunk_manager_village_growth.gd` finds its own
+real village by scanning near Berlin for one that "laid its plaza and has
+houses". A square is eight columns of the main street no house may ever
+take, so villages that gained one lost frontage with it, and the first
+candidate moved from (674,117) to (656,117) — which has a square, has
+houses, and has room for exactly four more, while these tests grow a
+village one household at a time up to the ladder's last rung. The finder
+asks both questions now, with the margin derived from
+`BREWERY_MIN_HOUSEHOLDS` minus the founding roster rather than eyeballed,
+and `_spare_house_plots` counting purely (claiming each answer before
+asking again, nothing placed). Measured across the fourteen real settlement
+chunks the scan reaches (`tools/probe_village_frontage.gd`, kept): spare
+plots run from 1 to 15.
+
+Tests: 253/253 across `test_village_layout.gd`,
+`test_village_plaza_wiring.gd`, `test_village_renderer.gd` and the new
+`test_village_square_ignores_dug_water.gd` (+11); 33/33 in
+`test_earth_chunk_manager_village_growth.gd`.
 
 ## Consecutive rails share a post (`concept/village_farms.md`, 2026-09-20)
 
@@ -29899,6 +30017,142 @@ meal — rather than left as numbers in a comment.
   `Market` instead was built on this branch and **dropped** in the merge,
   because `main` had already chosen the other end of the same fix and
   carrying both would split the tank again.
+
+## Nothing grows in a pond, and a pond keeps its fish (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live with the water in shot: *"Now there's a pond, but grass grows
+in it and no fish are in it"*. Two independent faults; neither was visible
+from anything that doc's status list claimed, and one of them was measured
+before a line was changed.
+
+**Grass in the water.** `TallGrass` seeds off the chunk's BIOME array, and a
+dug pond is deliberately NOT a biome — it is a chunk modification, so its
+cells still read as the grassland they were cut out of. This world has
+answered that exact report once already, for rivers (*"grass grows in
+rivers"*, answered by `TallGrass._is_river_at`), because a river does not
+change the biome array either. A river is GENERATED, so its answer lives in
+the sim; a pond is BUILT, so its answer is the seam every other built thing
+already uses: `EarthChunkManager._is_built_surface`, the one predicate
+`build_at_global`, `destroy_at_global` and `_built_local_cells` share for
+ground cover.
+
+Worth stating, because a half-fix here would have looked like a whole one:
+the chunk-LOAD path already kept grass out, through
+`_ground_cover_blockers`, which reads `is_water_at_global` and has always
+seen a pond. What it never covered is the visit that DIGS one — the sim is
+built when the chunk loads and the village digs later in that same load —
+nor `TallGrass.plant`, which checks the biome and the block set but not the
+water. Both go through `block_cells` now, and filling a pond in gives the
+ground back exactly as pulling out a fence rail does.
+
+**No fish in it.** Measured first, on two real streamed villages
+(`tools/probe_pond_and_farmhouse.gd`, added here): both held a dug, fenced
+pond, and both reported a stock of **0.00** with nothing swimming.
+
+The water survives a reload because it is a persisted modification, and so
+does the fence. The FISH were an in-memory dictionary keyed by chunk, and
+the village pass that stocks a pond only ever runs on the visit that DIGS
+one — `_dig_fisher_ponds_if_missing` returns early on a pond that is
+already there, which is correct, since a fisher stocks a pond once. So a
+pond was a fishery for one visit and a hole for the rest of the game. Even
+in-session it came back wrong: `_free_pond_fish_markers` empties the water
+on unload and nothing re-synced it on load.
+
+`POND_FISH_DIR` persists the stock per chunk, keyed by the pond's own
+anchor — saved on unload, merged back on load with the in-session record
+winning, the same precedence the region's aggregate fish population already
+uses. **Persistence rather than re-stocking on reload**, and the difference
+is the point: a pond the village has fished out must stay fished out until
+it breeds back, and a reload that quietly refilled it would make the stock
+decorative. `test_a_pond_fished_out_is_still_fished_out_after_a_reload`
+pins that.
+
+Re-measured after the fix on the same transect, first visit AND walking
+back: **6 of 6 ponds** clear of grass, **6 of 6** holding 2.00 fish with 2
+markers swimming, on the revisit as well as the founding visit.
+
+Tested: `test_earth_chunk_manager_ground_cover.gd` 11/11 (+3 new),
+`test_earth_chunk_manager_ponds.gd` (+3 new, whole `_a_pond` selection
+11/11). Red first in both: grass left standing in the water, flowers
+plantable in it, the ground not given back; nothing swimming after a
+reload, and stock 0.0 to a manager that never dug the pond.
+
+### Still open, named rather than implied
+
+- **Reeds.** A real fishpond has vegetation in it, and this world has a sim
+  for that (`AquaticVegetation`, which seeds on water as an INCLUSION
+  filter). A dug pond is not in the mask it reads, so a pond grows nothing
+  at all today. Clean water rather than wrong water, and *land* grass in a
+  pond was the report.
+- **A hut on 4 of 6 banks.** The same sweep found two ponds with no
+  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Resolved
+  in the entry directly below.
+
+## A pond is dug where its hut can stand (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live, standing at the water: *"no Fisher Hut is near"*. The
+entry above records the sweep that found it; this is what it turned out
+to be.
+
+Measured on three real streamed villages (`tools/probe_village_geometry.gd`,
+added here): one of them had a pond with **no hut anywhere**, and not by a
+near miss. All **51** candidate origins within `HUT_BANK_REACH_TILES` of
+that water were refused — 19 by the village street, 21 by neighbouring
+houses, 5 by the pond's own fence rail and 6 by the water itself. The dig
+had put the pond in the two-row strip between the street and the next
+house row, which is exactly wide enough for the water and nothing else.
+
+Two passes that never spoke: the dig took the best rectangle in reach, and
+the hut was sited afterwards on whatever bank that left.
+`VillageFarm.field_rect` gains the caller's-own-condition argument
+`VillageLayout.street_plot` has had all along, for the reason that one
+already states — *a farmhouse with nowhere to farm is a farmhouse that
+should not have been raised*. A refused rectangle keeps the search going,
+so the fisher gets the next-best water that does work; and when no bank in
+reach can take a hut, a second unconditional search digs the pond anyway,
+because a pond with no hut beats no pond at all.
+
+**Asked of the ground as it WILL BE.** `hut_origin` is asked at placement
+time, when the rails are real ground the caller's `is_free` already
+refuses. Before the dig neither the water nor its frame exists, so
+`hut_origin_after_fencing` adds the rails by hand — without it the dig
+would choose a site whose only bank is the fence it is about to build. A
+test pins that case exactly.
+
+**And the hut gets a front step.** Every other building a village places
+has its doorstep paved as part of siting the plot, because every other
+building is sited on frontage; a hut belongs to the water instead, so
+nothing laid its step and it stood with its door opening onto bare ground.
+That invariant has been false since the hut landed the same day, hidden by
+luck — the fixture village's hut happened to fall with its doorstep on a
+rail — and moving the pond by one rectangle broke
+`test_every_placed_building_faces_south_onto_a_real_road_cell`, which is
+that test doing exactly its job.
+
+Red first at every step: the dig choosing the hutless strip, a bank that
+only the fence would block being taken for a bank, and a hut with no front
+step. Tested: `test_village_pond.gd` 29/29 (+5 new),
+`test_village_renderer.gd` 153/153 (+1 new),
+`test_village_pond_hut_wiring.gd` 3/3 (new file).
+
+### And the farmhouse half of the same report, which did NOT reproduce
+
+The same message said *"not a single Farmhouse even though there's plenty
+of space"*. Measured rather than assumed, on every real stamped village in
+the sweep: **every one of them has a farmhouse**, and the count tracks the
+trades — 3 farmhouses where the roster carried 2 farmers and a herbalist,
+1 where it carried a herbalist alone.
+
+Where they STAND is the answer. A farmhouse is sited on a street plot that
+has room for a 3x2 field beside it, which the middle of a village never
+has; measured from the plaza's own centre, the nearest farmhouse in the
+two villages surveyed sits at **4.0** and **6.8** tiles, while the fisher's
+own house and pond sit **11.7** tiles out at the far end of the street.
+Standing at the water — which is where the report was written from —
+there is no farmhouse in shot, and in that particular village there was
+genuinely no hut either. Nothing is changed for this half; it is recorded
+so the next reader does not go looking for a bug that is a viewing
+position.
 
 ## Why a village stopped growing — two links, both invisible (2026-09-20)
 

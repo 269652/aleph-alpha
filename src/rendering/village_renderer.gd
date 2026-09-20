@@ -143,6 +143,7 @@ func spawn_village(
 	# One founding, one set of ground answers and one square (see
 	# _buildable_memo and _skeleton_memo).
 	_buildable_memo.clear()
+	_dry_memo.clear()
 	_skeleton_memo.clear()
 	# The settlement's REAL population, not the founding roster: households
 	# move in over time (docs/concept/village_growth.md mechanism 3), and a
@@ -156,8 +157,11 @@ func spawn_village(
 		# The square's own siting (VillageLayout.plaza_x0_for) -- the well,
 		# stall and gate must be derived from the SAME square the layout
 		# and the paving below use, or a riverside village's props stand
-		# where its square isn't.
-		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		# where its square isn't. The GENERATED world's water, for the same
+		# reason every other square-siting caller asks it: a fisher's dug
+		# pond would otherwise move the props off their own paving (see
+		# _is_dry_local).
+		_is_dry_local(chunk_coord, chunk_size, world) if world != null else Callable(),
 		# What this village's own land feeds it with (SettlementDemand.
 		# trade_for): the SEEDED region, so the roster is the same on every
 		# visit and does not drift with the weather. A world that cannot
@@ -522,10 +526,14 @@ func reconcile_villagers(
 
 	# One set of ground answers, exactly as spawn_village does.
 	_buildable_memo.clear()
+	_dry_memo.clear()
 	_skeleton_memo.clear()
 	var settlement := _settlement_generator.generate_settlement(
 		chunk_coord, chunk_origin_tiles, chunk_size, tile_size, roster,
-		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		# The square's own siting, as at founding -- the GENERATED world's
+		# water, so a newcomer's anchors are derived from the SAME square
+		# the paving was laid on (see _is_dry_local).
+		_is_dry_local(chunk_coord, chunk_size, world) if world != null else Callable(),
 		(
 			world.seeded_region_for_chunk(chunk_coord)
 			if world != null and world.has_method("seeded_region_for_chunk") else null
@@ -666,7 +674,12 @@ func _place_new_village(
 	var industry := _industry_plot_for(chunk_coord, chunk_size, world, is_buildable, is_occupied)
 	var result := _village_layout.layout(
 		building_ids, chunk_size, layout_seed, is_buildable,
-		_occupied_or_reserved(is_occupied, _reserved_cells(industry))
+		_occupied_or_reserved(is_occupied, _reserved_cells(industry)),
+		# ...and the square inside that layout is sited by the GENERATED
+		# world, never by what this village can build on: a fisher's dug
+		# pond refuses a house but must never move a square (see
+		# _is_dry_local).
+		_is_dry_local(chunk_coord, chunk_size, world)
 	)
 	# EVERY villager, not merely one. Asked for directly: "They should only
 	# settle where there's enough space and the square wins; houses should
@@ -840,6 +853,10 @@ func _recover_existing_village(
 ## one cell. The ground itself does not move while a village is being
 ## founded, which is what makes THIS one exact.
 var _buildable_memo: Dictionary = {}
+## The same, for _is_dry_local -- its own dictionary, because the two
+## predicates give DIFFERENT answers for the same cell (a dug pond is not
+## buildable but is dry ground as far as the square is concerned).
+var _dry_memo: Dictionary = {}
 
 ## This village's own skeleton, computed once per founding rather than once
 ## per question.
@@ -863,7 +880,7 @@ func _bones(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
 	if not _skeleton_memo.has(key):
 		_skeleton_memo[key] = VillageLayout.skeleton(
 			chunk_size, VillageLayout.seed_for(chunk_coord),
-			_is_buildable_local(chunk_coord, chunk_size, world)
+			_is_dry_local(chunk_coord, chunk_size, world)
 		)
 	return _skeleton_memo[key]
 
@@ -881,6 +898,33 @@ func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Calla
 			answer = world.is_buildable_ground_at(g.x, g.y)
 		elif world.has_method("is_buildable_terrain_at"):
 			answer = world.is_buildable_terrain_at(g.x, g.y)
+		memo[g] = answer
+		return answer
+
+
+## The square's OWN siting predicate: the GENERATED world's water and
+## nothing else (VillageLayout.plaza_x0_for, EarthChunkManager._is_dry_
+## local). Deliberately NOT _is_buildable_local, which also refuses a dug
+## pond -- a pond is a chunk MODIFICATION, so a square sited by it MOVES
+## when a fisher digs one. Measured: a row of pond dug through a square
+## slid it from x0=12 to x0=4 (test_village_square_ignores_dug_water.gd),
+## which leaves the well, the stall, the market stands and the civic plot
+## all pointing at ground nobody ever paved. Every consumer of the square
+## must re-derive the same rectangle with nothing persisted, so its input
+## has to be the one thing that never changes once the world is seeded.
+##
+## A world that cannot tell built water from generated water falls back to
+## _is_buildable_local, which is what this always was -- a stub world in a
+## test digs no ponds.
+func _is_dry_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	if not world.has_method("is_generated_water_at_global"):
+		return _is_buildable_local(chunk_coord, chunk_size, world)
+	var memo := _dry_memo
+	return func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		if memo.has(g):
+			return memo[g]
+		var answer: bool = not world.is_generated_water_at_global(g.x, g.y)
 		memo[g] = answer
 		return answer
 
@@ -1037,7 +1081,8 @@ func _close_short_street_gaps(
 	var is_free := func(cell: Vector2i) -> bool:
 		return is_buildable.call(cell) and not is_occupied.call(cell)
 	var street_y: int = VillageLayout.skeleton(
-		chunk_size, VillageLayout.seed_for(chunk_coord), is_buildable
+		chunk_size, VillageLayout.seed_for(chunk_coord),
+		_is_dry_local(chunk_coord, chunk_size, world)
 	)["street_y"]
 	for cell in VillageLayout.short_street_gap_cells(
 		_is_paved_local(chunk_coord, chunk_size, world), is_free,
@@ -1350,7 +1395,31 @@ func _dig_fisher_ponds_if_missing(
 				if renderer._is_street_row(chunk_coord, chunk_size, world, y):
 					return false
 			return true
-		var water: Array = VillagePond.pond_cells(origin, building_id, is_free_for_house)
+		# And on ground its own WORKS can stand beside. Reported live at the
+		# water: *"no Fisher Hut is near"*, and measured on three real
+		# streamed villages -- one had a pond with no hut anywhere, because
+		# all 51 candidate origins within reach of that water were refused
+		# (19 by the village street, 21 by neighbouring houses, 5 by the
+		# pond's own rails, 6 by the water). The dig had put the water in
+		# the two-row strip between the street and the next house row,
+		# which is exactly wide enough for the water and nothing else.
+		#
+		# The dig and the hut pass never spoke: the dig took the best
+		# rectangle in reach and the hut was sited afterwards on whatever
+		# bank that left. This is the same rule VillageLayout already
+		# applies to a farmhouse, which refuses a plot with no room for its
+		# field — a works with nowhere to stand is a works that should not
+		# have been sited there.
+		var takes_a_hut := func(cells: Array) -> bool:
+			return VillagePond.bank_takes_a_hut(cells, origin, building_id, is_free)
+		var water: Array = VillagePond.pond_cells(
+			origin, building_id, is_free_for_house, takes_a_hut
+		)
+		if water.is_empty():
+			# ...and dug anyway where no bank in reach can take one. A pond
+			# with no hut beats no pond at all: the fisher works the water,
+			# not the building.
+			water = VillagePond.pond_cells(origin, building_id, is_free_for_house)
 		if water.is_empty():
 			continue  # no room beside this house -- honestly, no pond
 		ponds[origin] = water
@@ -1422,6 +1491,39 @@ func _place_fisher_huts_if_missing(
 			chunk_coord, origin, VillagePond.HUT_BUILDING_ID, Vector2i(0, 1), building_seed, ""
 		):
 			standing.append(origin)
+			_lay_front_step(chunk_coord, chunk_size, world, origin)
+
+
+## The front step of a building the village raised off the street grid.
+##
+## Every other building a village places gets its doorstep paved as part of
+## siting the plot (VillageLayout lays it among the plot's own road_cells),
+## because every other building is sited ON frontage. A fisher's hut is
+## deliberately not — it belongs to the water, and the water is wherever
+## the fisher had room (docs/concept/village_ponds.md, "The hut on the
+## bank"). So nothing laid its front step, and a hut stood with its door
+## opening onto bare ground.
+##
+## True since the hut landed, and hidden by luck: the fixture village's hut
+## happened to fall with its doorstep on one of the pond's own rails, so
+## test_every_placed_building_faces_south_onto_a_real_road_cell passed for
+## the whole lot anyway. Moving the pond by one rectangle broke it, which
+## is that test doing exactly its job.
+##
+## AFTER place_building, never before: place_building refuses a plot whose
+## doorstep cell is already non-empty, so paving first would refuse the hut
+## over its own future front step — the same ordering trap
+## _place_new_village's own comment records for the houses.
+func _lay_front_step(chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i) -> void:
+	if not world.has_method("build_at_global") or not world.has_method("modification_at_global"):
+		return
+	var step: Vector2i = origin + BuildingCatalog.doorstep_of(VillagePond.HUT_BUILDING_ID)
+	if step.x < 0 or step.y < 0 or step.x >= chunk_size or step.y >= chunk_size:
+		return
+	var g: Vector2i = chunk_coord * chunk_size + step
+	if world.modification_at_global(g.x, g.y) != "":
+		return  # a rail, a road or the gate is already a front step
+	world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 ## The water already standing in this house's own reach, in the same local
@@ -1835,7 +1937,7 @@ func _place_warehouse_if_missing(chunk_coord: Vector2i, chunk_size: int, world) 
 
 	var plot: Dictionary = VillageLayout.skeleton(
 		chunk_size, VillageLayout.seed_for(chunk_coord),
-		_is_buildable_local(chunk_coord, chunk_size, world)
+		_is_dry_local(chunk_coord, chunk_size, world)
 	)["warehouse_plot"]
 	# A village whose square could not be sited has no plot beside it
 	# either -- honest, the same way no plaza means no hall.
@@ -1890,7 +1992,7 @@ func _place_civic_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> v
 	# laid a square, and has nowhere to put a seat.
 	var plot: Dictionary = VillageLayout.skeleton(
 		chunk_size, VillageLayout.seed_for(chunk_coord),
-		_is_buildable_local(chunk_coord, chunk_size, world)
+		_is_dry_local(chunk_coord, chunk_size, world)
 	)["civic_plot"]
 	var origin: Vector2i = plot["origin"]
 	if not world.has_method("modification_at_global"):
@@ -1951,7 +2053,8 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 		return
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var skeleton := VillageLayout.skeleton(
-		chunk_size, VillageLayout.seed_for(chunk_coord), is_buildable
+		chunk_size, VillageLayout.seed_for(chunk_coord),
+		_is_dry_local(chunk_coord, chunk_size, world)
 	)
 	# No short-circuit on the civic doorstep. It used to skip the whole pass
 	# whenever that cell was already a road tile -- and the STREET crossing

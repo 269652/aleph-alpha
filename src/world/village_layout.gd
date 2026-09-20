@@ -422,18 +422,26 @@ static func market_stand_cells(skeleton: Dictionary, count: int) -> Array:
 ## gets both; a cramped one houses its people and goes without. See
 ## docs/concept/village_warehouse.md's own pillar 1 for the honest caveat
 ## this puts on "always".
+## `is_dry` is the square's own siting predicate (see plaza_x0_for and
+## next_street_plot, which already draw the same split): the GENERATED
+## world's water, never whatever wider ground rule this caller builds
+## against. A fisher's dug pond refuses a house but must not move a square
+## -- see test_the_founding_layout_sites_its_square_by_is_dry_not_by_what_
+## it_can_build_on. Omitted, `is_buildable` answers it, which is what a
+## caller with no finer rule of its own has always meant.
 func layout(
-	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
+	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
+	is_dry := Callable()
 ) -> Dictionary:
-	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true)
+	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true, is_dry)
 	if houses_everyone(planned, building_ids):
 		return planned
-	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false)
+	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false, is_dry)
 
 
 func _layout_once(
 	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
-	reserve_warehouse: bool
+	reserve_warehouse: bool, is_dry := Callable()
 ) -> Dictionary:
 	if building_ids.is_empty():
 		var no_roads: Array[Vector2i] = []
@@ -443,7 +451,7 @@ func _layout_once(
 	# VillageRenderer._is_buildable_local: a village fells the trees it
 	# needs, so water is the only ground it refuses), which is exactly what
 	# the square's siting wants -- see plaza_x0_for.
-	var bones := skeleton(chunk_size, seed_value, is_buildable)
+	var bones := skeleton(chunk_size, seed_value, is_dry if is_dry.is_valid() else is_buildable)
 	var street_y: int = bones["street_y"]
 	var street_x0: int = bones["street_x0"]
 	var street_x1: int = bones["street_x1"]
@@ -457,15 +465,42 @@ func _layout_once(
 	# took (nor the plaza or a side street, claimed up front below).
 	var claimed: Dictionary = {}
 
-	# The plaza and its side streets are reserved FIRST, only when the whole
-	# square can actually be paved -- a village whose centre is water or
-	# forest gets no plaza (and so no hall), honestly, rather than a square
-	# with a lake in it.
-	var has_plaza := _every_cell_clear(_rect_cells(plaza), chunk_size, is_buildable, is_occupied)
+	# The plaza and its side streets are reserved FIRST, and the square is
+	# kept whenever MOST of it can really be paved (plaza_is_worth_laying) --
+	# never abandoned over a handful of cells something already speaks for.
+	#
+	# This used to demand the WHOLE rect clear, and on chunk (676,148) --
+	# the village reported a fourth time as "the hall still isn't finishing
+	# and no square plaza either" -- the sawmill's own road spur ran down
+	# the square's east column and blocked exactly three of its 48 cells.
+	# The square was dropped, nothing was claimed, and the founding houses
+	# marched straight through it, covering every cell of the civic plot. A
+	# village that loses its square at FOUNDING loses it for good: the
+	# reload's re-paving can pave around a house, but it cannot move one,
+	# and _civic_plot_origin_for needs the plot to be paving, so that
+	# village can never raise a hall.
+	#
+	# The reload path (VillageRenderer._lay_plaza_if_missing) already lays
+	# the square around what stands in it. This is the same rule, at the end
+	# that matters more. A village whose centre is genuinely water or built
+	# over still gets no plaza (and so no hall), honestly -- that floor is
+	# PLAZA_MIN_PAVED_SHARE, not "every cell".
+	var plaza_cells := _rect_cells(plaza)
+	var takeable: Array = []
+	for cell in plaza_cells:
+		if _cell_clear(cell, chunk_size, is_buildable, is_occupied):
+			takeable.append(cell)
+	var has_plaza := plaza_is_worth_laying(takeable.size(), plaza_cells.size())
 	var side_street_cells: Array = []
 	if has_plaza:
-		for cell in _rect_cells(plaza):
+		# The whole rect is CLAIMED -- the square's ground is the square's,
+		# so no plot may creep into the part a spur happens to cross -- but
+		# only the takeable cells are PAVED. Whatever reserved the rest
+		# (a mill's spur, a store's corner) keeps its own ground and lays
+		# its own surface there.
+		for cell in plaza_cells:
 			claimed[cell] = true
+		for cell in takeable:
 			road_cells[cell] = true
 		var second_street_y := street_y + STREET_PITCH_TILES
 		for x in [plaza.position.x, plaza.end.x - 1]:

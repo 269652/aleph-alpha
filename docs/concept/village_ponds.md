@@ -75,13 +75,21 @@ village actually does.
   surface paints it and its flow moves what floats in it, with no case of its
   own anywhere else. `is_buildable_ground_at` refuses it too — the fisher's
   own water is not somewhere to put a house. Filling one in gives the dry
-  ground back.
+  ground back. And **nothing grows in it** (2026-09-20): a pond blocks the
+  ground cover like any other built thing, through the one predicate they
+  all share — see "Grass in the water" below.
 - ✅ **A hut on the bank** (2026-09-20). `fisher_hut`, a real catalog
   building with the farmhouse's own footprint, price and storage, raised on
   the bank of the pond it belongs to by the pond pass itself rather than by
   the growth ladder. Its art is borrowed from the farmhouse through a
   declared `draws_as` until its own sheet is drawn. Full account below, in
   "Water you can see, and a hut over it".
+
+  **And the pond is dug where the hut can stand** (2026-09-20). Siting the
+  water without asking whether its own works could stand beside it left one
+  real village in three with a pond and no hut at all. The dig asks now,
+  and falls back to digging anyway when no bank in reach can take one —
+  see "A pond is dug where its hut can stand" below.
 - ✅ **A fisher's house digs one.** Sited against the house that carries the
   `fisher` occupation, since a fisher lives in an ordinary house and there is
   no separate building to hang it on. Fenced on the field's own rule, through
@@ -108,6 +116,10 @@ village actually does.
   village stocks the pond as it digs it, and stocking an already-stocked
   pond changes nothing — a fisher stocks a pond, they do not keep stocking
   it.
+
+  **And the stock is kept** (2026-09-20), in `POND_FISH_DIR`, because a
+  fisher stocking a pond once is only a fishery if the fish are still
+  there tomorrow. Full account below, in "A pond keeps its fish".
 - ✅ **Fish you can SEE in it.** Real `FishMarker`s stand on the pond's own
   water, one per whole fish and at most one per tile — six tiles is a pond,
   not a shoal. Kept in step with the stock on every stocking, breeding tick
@@ -288,6 +300,133 @@ forgotten. What `draws_as` borrows is the whole picture -- the house AND
 the ground it stands in -- and the hut's OWN seed still picks which of the
 nine, so the hut by the pond and the farmhouse up the street are different
 pictures.
+
+## Nothing grows in it, and it keeps its fish (2026-09-20)
+
+Reported live with the water in shot: *"Now there's a pond, but grass
+grows in it and no fish are in it"*. Two independent faults, neither
+visible from anything this doc's status list claimed.
+
+### Grass in the water
+
+`TallGrass` seeds off the chunk's BIOME array, and a pond is deliberately
+NOT a biome (see "Built water" above) — so a pond dug out of grassland
+still reads as grassland to every ground-cover sim, and the grass already
+standing there simply stayed standing. This world has answered that exact
+report once before, for rivers: *"grass grows in rivers"*, answered by
+`TallGrass._is_river_at`, because a river does not change the biome array
+either.
+
+A river is GENERATED, so its answer belongs in the sim. A pond is BUILT,
+so its answer is the seam every other built thing already uses:
+`EarthChunkManager._is_built_surface`, the one predicate
+`build_at_global`, `destroy_at_global` and `_built_local_cells` share for
+ground cover. A pond now clears the cover as it is dug and keeps it out
+afterwards — grass, flowers, scrub and lichen alike — and filling the
+hole in gives the ground back, exactly as pulling out a fence rail does.
+
+Worth stating because a half-fix would have looked like a whole one: the
+chunk-load path ALREADY kept grass out, through `_ground_cover_blockers`,
+which reads `is_water_at_global` and so has always seen a pond. What it
+did not cover is the visit that DIGS one — the sim is built when the
+chunk loads and the village digs later in that same load — nor
+`TallGrass.plant`, which checks the biome and the block set but not the
+water. Both go through `block_cells` now.
+
+**Reeds are a separate question, left open on purpose.** A real fishpond
+has vegetation in it, and this world already has a sim for that
+(`AquaticVegetation`, which seeds on water as an INCLUSION filter rather
+than an exclusion). A dug pond is not in the mask it reads, so a pond
+grows nothing at all today. That reads as clean water rather than as
+wrong water, and *land* grass standing in a pond was the report.
+
+### A pond keeps its fish
+
+Measured before anything was changed, on two real streamed villages
+(`tools/probe_pond_and_farmhouse.gd`): both held a dug, fenced pond, and
+both reported a stock of **0.00** with nothing swimming in it.
+
+The water survives because it is a persisted chunk modification, and the
+fence survives because it is a persisted chunk modification. The FISH were
+an in-memory dictionary keyed by chunk, and the village pass that stocks a
+pond only ever runs on the visit that DIGS one —
+`_dig_fisher_ponds_if_missing` returns early on a pond that is already
+there, which is correct ("a fisher stocks a pond, they do not keep
+stocking it"). So a pond was a fishery on the one visit that founded it
+and a hole for the rest of the game. Even within a session it came back
+wrong: `_free_pond_fish_markers` empties the water on unload and nothing
+re-synced it on load, so a stock that did survive in memory had nothing
+swimming in it.
+
+`POND_FISH_DIR` persists the stock per chunk, keyed by the pond's own
+anchor — saved on unload beside the region's aggregate, merged back on
+load with the in-session record winning, which is the same precedence the
+region's own fish population already uses. The stock is saved in its OWN
+block rather than with the region's, because that block is skipped for a
+chunk with no water in it at all, and a landlocked chunk is exactly where
+a village digs a pond.
+
+**Persistence, not re-stocking on reload**, and the difference is the
+whole point: a pond the village has fished out must stay fished out until
+it breeds back, and a reload that quietly refilled it would make the stock
+decorative.
+`test_a_pond_fished_out_is_still_fished_out_after_a_reload` pins it.
+
+## A pond is dug where its hut can stand (2026-09-20)
+
+Reported live, standing at the water: *"no Fisher Hut is near"*. Measured
+on three real streamed villages (`tools/probe_village_geometry.gd`) before
+anything was changed: one of them had a pond with **no hut anywhere**, and
+not by a near miss. All **51** candidate origins within
+`HUT_BANK_REACH_TILES` of that water were refused — 19 by the village
+street, 21 by neighbouring houses, 5 by the pond's own fence rail and 6 by
+the water itself.
+
+The pond had been dug into the two-row strip between the street and the
+next house row, which is exactly wide enough for the water and nothing
+else. Two passes that never spoke: the dig took the best rectangle in
+reach, and the hut was sited afterwards on whatever bank that left.
+
+### The dig asks first
+
+`VillageFarm.field_rect` gains the caller's-own-condition argument
+`VillageLayout.street_plot` has had all along, and for the reason that one
+already states: *a farmhouse needs room for its field, and a farmhouse
+with nowhere to farm is a farmhouse that should not have been raised.* A
+refused rectangle simply keeps the search going, so the fisher gets the
+next-best water that does work.
+
+And when no bank in reach can take a hut, a second, unconditional search
+digs the pond anyway. **A pond with no hut beats no pond at all**: the
+fisher works the water, not the building.
+
+### Asked of the ground as it WILL BE
+
+`hut_origin` is asked at PLACEMENT time, by which point the rails are real
+ground and the caller's own `is_free` refuses them. The dig asks the same
+question BEFORE either the water or its frame exists, so
+`hut_origin_after_fencing` adds the rails by hand — without that, the dig
+would happily choose a site whose only bank is the fence it is about to
+build. A test pins exactly that case: ground whose only clear band in
+reach is the pond's own southern rail line takes a hut under the
+placement-time question and none under the dig-time one.
+
+### And a step to its door
+
+Every other building a village places has its doorstep paved as part of
+siting the plot, because every other building is sited ON frontage. A hut
+belongs to the water instead, so nothing laid its front step and it stood
+with its door opening onto bare ground.
+
+That invariant has been false since the hut landed and was hidden by
+luck: the fixture village's hut happened to fall with its doorstep on one
+of the pond's own rails, so
+`test_every_placed_building_faces_south_onto_a_real_road_cell` passed for
+the whole lot anyway. Moving the pond by one rectangle broke it, which is that
+test doing exactly its job. The step is laid AFTER `place_building`, never
+before — `place_building` refuses a plot whose doorstep is already
+non-empty, so paving first would refuse the hut over its own future front
+step, the same ordering trap the houses' own pass records.
 
 ### Honest gaps
 
