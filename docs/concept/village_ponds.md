@@ -575,3 +575,14 @@ and never `pond_fish_at`.
   muddy bank and is left deliberately; it is also the fallback a scene with
   no flow overlay registered would show, where a pond is still a brown
   rectangle.
+- **A fisher who arrives in play digs nothing until the next visit**
+  (measured 2026-09-20, [village_economy_balance.md](village_economy_balance.md)
+  mechanism 6). The dig runs at founding and on reload
+  (`_dig_fisher_ponds_if_missing`), never from the settlement step, so an
+  immigrant whose trade is fisher counts toward the village's producers
+  from the day they arrive and produces nothing until the chunk is next
+  loaded — the probe's field report shows them with no pond and no shelf,
+  and a village of eleven on four fields and one pond eats its shelves
+  from 45 units to 4. The step digging the pond on arrival, or the
+  assembly treating a pondless fisher as a field hand without a field, is
+  the fix; neither is in yet.
