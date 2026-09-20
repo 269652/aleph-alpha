@@ -149,6 +149,35 @@ static func next_building(
 	return ""
 
 
+## Who the building this ladder just chose belongs to.
+##
+## A home a WAITING household is owed is theirs -- the first in the queue,
+## which VillageCensus sorts, so a repeated decision credits the same
+## household with the same plot rather than queuing a second house
+## somewhere else next tick.
+##
+## A home raised for NOBODY IN PARTICULAR -- the lowest rung above, which
+## only fires when no roof stands empty -- belongs to the SETTLEMENT. It is
+## not unowned; the village owns it, and it stands empty as exactly the
+## invitation VillageImmigration.arrivals gates on.
+##
+## That case had no answer, and the caller refused the build rather than
+## inventing one: EarthChunkManager._apply_village_growth_decision credited
+## a home to `waiting[0]` and RETURNED when nobody was waiting. So the rung
+## was chosen on every settlement step and never once begun. Measured
+## (tools/probe_village_growth_gate.gd) with every other condition open --
+## food per household 2.3 to 3.6 against a threshold of 2.0, six spare
+## hands, a site available, `house_small` chosen at every sample -- and no
+## project ever started.
+##
+## Everything that is not a home is the village's whether anybody is
+## waiting or not: nobody lives in a sawmill.
+static func owner_for(building_id: String, waiting: Array, settlement_id: String) -> String:
+	if not BuildingCatalog.BUILDING_IDS.has(building_id):
+		return settlement_id
+	return String(waiting[0]) if not waiting.is_empty() else settlement_id
+
+
 ## How many DISTINCT rungs of this ladder actually stand -- the real input
 ## behind HouseholdWellbeing's "community" need (a village with a hall and
 ## a brewery is a better place to live than a bare hamlet). Counts each

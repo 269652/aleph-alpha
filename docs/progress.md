@@ -30280,3 +30280,162 @@ Tested: `test_village_way_to_paving.gd` 10/10 (new file),
 (+2), `test_earth_chunk_manager_ponds.gd` stocking selection 13/13 (+4),
 `test_village_renderer.gd` + `test_village_layout.gd` 253/253. Red first
 at every step.
+
+## Why a village stopped growing — two links, both invisible (2026-09-20)
+
+Asked for directly: *"now make the village grow again"*. The roster held
+at its founding ten for a whole watch where it used to reach twelve.
+
+**The obvious hypothesis was wrong, and the measurement killed it.** The
+last food reading had been 19 units over 10 households — 1.9 against a
+`FED_THRESHOLD` of 2.0 — so the gate looked shut on food by a hair.
+`tools/probe_village_growth_gate.gd` (kept) prints every condition
+`VillageImmigration.arrivals` actually reads, separately, rather than the
+roster alone:
+
+```
+  seconds  house housed  room  food/hh  ladder
+      300     10     10     0     2.30    0.60
+      600     10     10     0     2.30    0.60
+      900     10     10     0     2.10    0.60
+     1050     10     10     0     2.30    0.60
+```
+
+Food comfortably **over** the threshold the whole way. `room` **zero at
+every single sample**. The village was fed, content, and sealed.
+
+### ✅ Link 1 — the documented fix was in a function the village had stopped asking
+
+[village_growth.md](concept/village_growth.md) has said since the day
+before: *"a village whose people are all housed would owe itself nothing,
+build nothing, and never have the roof an arrival needs… so
+`next_building` gains a lowest rung: a house for nobody in particular."*
+
+That rung went into `VillageGrowth.next_building`. The live decision had
+already moved: `_apply_village_growth_decision` →
+`next_building_for_settlement` → **`VillageAssembly.next_building`**, the
+estate-weighted petition that replaced the fixed ladder order. The
+assembly had no such rung, and its state dict was never handed a spare
+capacity to test one against — so the fix was unreachable from the path a
+village uses. Even the assembly's own fallback to the ladder called it with
+three arguments, so the capacity defaulted to *"there is already room"*
+there too.
+
+The assembly carries the rung now, below every petition (a village
+finishes what it already owes itself before it makes room for strangers),
+and `_village_assembly_state` hands it the real spare capacity. The house
+is the **starting** estate's, because that is what a newcomer arrives as,
+unlike the shelter rung above it which rehouses a *named* household in
+their own estate's house.
+
+`_next_growth_building_for` — the settlement card's read — walked
+`VillageGrowth`'s ladder directly, which is neither the function the
+village asks nor handed the capacity. Its own doc comment forbids exactly
+that (*"the card cannot promise a building the village is not actually
+about to raise"*). It asks the one question now.
+
+### ✅ Link 2 — and the one case the rung exists for was the one case the build refused
+
+With the rung firing, the village chose `house_small` at every sample and
+`room` stayed 0. Re-measured with the whole build pipeline in the probe:
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  -
+      200     10     10     0     3.60       6      0   yes    house_small  -
+      500     10     10     0     3.20       6      0   yes    house_small  -
+```
+
+Food over the threshold, six spare hands, a site available, the house
+chosen every time — and **no project ever started**.
+
+`_apply_village_growth_decision` credited a new home to `waiting[0]` and
+**returned** when nobody was waiting. That is right for the shelter rung,
+which exists for a named household, and exactly wrong for the lowest rung,
+which raises a house *because* everybody is already housed. The one case
+the rung exists for was the one case the caller refused.
+
+`VillageGrowth.owner_for` answers it instead: a waiting household's home is
+theirs (the first in the queue, which `VillageCensus` sorts, so a repeated
+decision lands on the same plot); a home for nobody in particular is the
+**settlement's** — a commons roof standing empty, which is precisely the
+invitation the arrival gate reads; and nobody lives in a sawmill, so a
+works is the village's either way.
+
+### ✅ Measured after both
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  house_small:0
+      200     10     10     0     3.60       6      0   yes    house_small  house_small:0
+      400     10     10     0     2.90       6      0   yes    house_small  house_small:0
+      500     10     10     1     3.20       6      0    NO    -            -
+
+  house_small x11   (was x10)
+```
+
+Chosen, **begun**, finished, and `room` is 1. The eleventh roof stands
+empty and the gate is open.
+
+**Exactly one commons house is ever raised**, which is worth stating
+because it looks like it could run away: once it stands, spare capacity is
+1, so the rung stops firing. From then on each arrival is unhoused, the
+shelter rung raises *their* house, and the spare roof stays as the standing
+invitation for the next. Population advances one household per house
+actually built — the pace the original report asked for.
+
+### ✅ And the roster rises, on the same watch every other reading used
+
+`tools/probe_village_famine.gd`, the 1200-second watch every measurement in
+this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse  wallets
+         0       10         10       0.30          0      0.0        0
+       300       10         10       0.60          2      0.0        0
+       600       10         10       1.00          0     20.0        0
+       900       11         11       1.00          0      0.0        0
+      1200       11         11       1.00          0      1.0        0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes merged | 10 → 10 → 10 → 10 → 10 |
+| **+ both growth links** | **10 → 10 → 10 → 11 → 11** |
+
+**Nobody dies and the village grows.** `standing` equals `roster` at every
+sample, so the villager reconcile holds through the arrival: the eleventh
+household is somebody you can SEE.
+
+**Honest limit:** it is tight. The worst-off villager reached 185 of 200
+through the starvation window at t=900 and fell back to 125 by t=1200 —
+fed each time, but not comfortably. And the arrival lands at t=900 where
+the pre-faucet village reached twelve by t=600, so growth is slower than it
+was when gold was conjured. Both point at the same open gap
+([milling_and_baking.md](concept/milling_and_baking.md)): the harvest sits
+in farmhouses and the market reads 0, so a wage buys a meal only where a
+villager can reach one.
+
+### ⬜ A pre-existing failure set, named rather than absorbed
+
+`test_earth_chunk_manager.gd`'s settlement slice runs **75 of 90**, with
+fifteen failing — among them
+`test_step_settlements_records_a_first_production_shortfall_once`,
+`test_an_unloaded_settlement_can_grow_on_its_own_gathering` and
+`test_probe_eight_household_settlement`. A clean `origin/main` worktree
+runs the identical 75/90 with the identical fifteen names, so none of it is
+this work's. Recorded because fifteen is too many to leave as an unremarked
+background hum, and because the whole file (15,371 lines) does not finish
+inside a single run here, so nobody is looking at it by accident.
+
+### 🚧 The lesson, and it is the same one in a new costume
+
+A fix documented against one function is not a fix if the caller has moved
+to another. This file's own warnings about hand-maintained lists are the
+same failure: **a fact written in one place, and read from another.** What
+made it findable was a probe that prints each gate condition *separately*
+rather than the outcome they jointly produce — the roster alone said only
+"it stopped", which is consistent with at least four different causes.

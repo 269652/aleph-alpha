@@ -633,3 +633,104 @@ func test_a_shortage_still_outranks_an_institution():
 		"sawmill",
 		"a city built a hall while its people were cold"
 	)
+
+
+# -- room is made first, and moved into after -----------------------------
+#
+# village_growth.md says this already, and has since 2026-09-20: *"a
+# village whose people are all housed would owe itself nothing, build
+# nothing, and never have the roof an arrival needs -- it would stop
+# growing for good the moment it caught up with itself. So next_building
+# gains a lowest rung: a house for nobody in particular, when
+# spare_house_capacity <= 0."*
+#
+# That rung was added to VillageGrowth.next_building. The live decision
+# does not go through it: EarthChunkManager._apply_village_growth_decision
+# asks next_building_for_settlement, which asks THIS function, and this
+# function had no such rung and was never handed the capacity to test it.
+# The documented fix was unreachable from the path the village uses.
+#
+# Measured (tools/probe_village_growth_gate.gd) on a real village over a
+# 1200-second watch, every ladder rung it was entitled to already standing:
+#
+#     seconds  house housed  room  food/hh  ladder
+#         300     10     10     0     2.30    0.60
+#         600     10     10     0     2.30    0.60
+#         900     10     10     0     2.10    0.60
+#        1050     10     10     0     2.30    0.60
+#
+# Food comfortably over FED_THRESHOLD (2.0) the whole way, and `room` zero
+# at every single sample. The village was fed, content, and sealed.
+
+const _SETTLED := {"kossaet": 4}
+
+
+## Everyone housed, nothing to complain of, and no spare roof: the village
+## owes itself a house.
+func test_a_village_with_no_spare_roof_owes_itself_a_house():
+	var next := _petition({
+		"estate_counts": _SETTLED,
+		"satisfaction": _fully_supplied(_SETTLED),
+		"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS.duplicate(),
+		"spare_house_capacity": 0,
+	})
+	assert_true(
+		BuildingCatalog.BUILDING_IDS.has(next),
+		"a village that caught up with itself must still make room: got '%s'" % next
+	)
+
+
+## ...and a village that already HAS a spare roof does not keep building
+## them. One empty house is room; two is a habit.
+func test_a_village_with_a_spare_roof_owes_nothing():
+	var next := _petition({
+		"estate_counts": _SETTLED,
+		"satisfaction": _fully_supplied(_SETTLED),
+		"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS.duplicate(),
+		"spare_house_capacity": 1,
+	})
+	assert_eq(next, "", "an empty house already stands; nothing is owed")
+
+
+## The house for nobody in particular is the STARTING estate's, because
+## that is the estate a newcomer arrives as (VillageEstates.STARTING_ESTATE
+## -- admit_household forms exactly one).
+func test_the_room_made_is_the_house_a_newcomer_would_live_in():
+	var next := _petition({
+		"estate_counts": {"buerger": 4},
+		"satisfaction": _fully_supplied({"buerger": 4}),
+		"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS.duplicate(),
+		"spare_house_capacity": 0,
+	})
+	assert_eq(
+		next, VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE),
+		"a stranger arrives a cottager, whatever the burghers here live in"
+	)
+
+
+## And it sits BELOW every petition, exactly as village_growth.md rules: a
+## village finishes what it already owes itself before it makes room for
+## strangers.
+func test_a_real_petition_still_outranks_making_room():
+	var next := _petition({
+		"estate_counts": _SETTLED,
+		"satisfaction": {FUEL: 0.0},
+		"spare_house_capacity": 0,
+	})
+	assert_false(
+		BuildingCatalog.BUILDING_IDS.has(next),
+		"a cold village builds the works that warms it before a spare roof: got '%s'" % next
+	)
+
+
+## A caller that does not know its spare capacity gets exactly the
+## behaviour it always got -- the same default VillageGrowth.next_building
+## already keeps, so nothing that never learned this parameter starts
+## building houses.
+func test_a_caller_that_does_not_know_its_capacity_is_unchanged():
+	var next := _petition({
+		"estate_counts": _SETTLED,
+		"satisfaction": _fully_supplied(_SETTLED),
+		"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS.duplicate(),
+	})
+	assert_eq(next, "", "absent capacity reads as 'there is already room'")

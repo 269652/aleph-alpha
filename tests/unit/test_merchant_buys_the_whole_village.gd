@@ -245,3 +245,35 @@ func test_the_gold_lands_in_the_purse_the_wage_is_drawn_from():
 		call.contains("village_market") or call.contains("purse_market"),
 		"paid into the market villagers read, not the persisted ledger: %s" % call
 	)
+
+
+# -- the village asks the assembly with its real spare capacity -----------
+#
+# VillageAssembly gained the "room is made first" rung, and a rung nothing
+# hands the capacity to is a rung that never fires. This is a
+# source-contract question, the same boundary this file already draws for
+# _step_merchant_visits' own wiring.
+
+func test_the_assembly_is_told_how_many_roofs_stand_empty():
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func _village_assembly_state")
+	assert_gt(start, -1, "the premise: the one reading the village votes on still exists")
+	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
+	assert_true(
+		body.contains("spare_house_capacity"),
+		"the assembly cannot make room it is never told is missing: %s" % body
+	)
+
+
+## And the READOUT asks the same question the decision does, or the card
+## promises a building the village is not about to raise -- which is what
+## _next_growth_building_for's own doc comment already forbids.
+func test_the_readout_asks_the_same_question_the_decision_does():
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func _next_growth_building_for")
+	assert_gt(start, -1, "the premise: the readout still asks")
+	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
+	assert_true(
+		body.contains("next_building_for_settlement") or body.contains("spare_house_capacity"),
+		"the card and the village must read one answer: %s" % body
+	)
