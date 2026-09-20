@@ -84,6 +84,12 @@ village actually does.
   the growth ladder. Its art is borrowed from the farmhouse through a
   declared `draws_as` until its own sheet is drawn. Full account below, in
   "Water you can see, and a hut over it".
+
+  **And the pond is dug where the hut can stand** (2026-09-20). Siting the
+  water without asking whether its own works could stand beside it left one
+  real village in three with a pond and no hut at all. The dig asks now,
+  and falls back to digging anyway when no bank in reach can take one —
+  see "A pond is dug where its hut can stand" below.
 - ✅ **A fisher's house digs one.** Sited against the house that carries the
   `fisher` occupation, since a fisher lives in an ordinary house and there is
   no separate building to hang it on. Fenced on the field's own rule, through
@@ -365,6 +371,61 @@ whole point: a pond the village has fished out must stay fished out until
 it breeds back, and a reload that quietly refilled it would make the stock
 decorative.
 `test_a_pond_fished_out_is_still_fished_out_after_a_reload` pins it.
+
+## A pond is dug where its hut can stand (2026-09-20)
+
+Reported live, standing at the water: *"no Fisher Hut is near"*. Measured
+on three real streamed villages (`tools/probe_village_geometry.gd`) before
+anything was changed: one of them had a pond with **no hut anywhere**, and
+not by a near miss. All **51** candidate origins within
+`HUT_BANK_REACH_TILES` of that water were refused — 19 by the village
+street, 21 by neighbouring houses, 5 by the pond's own fence rail and 6 by
+the water itself.
+
+The pond had been dug into the two-row strip between the street and the
+next house row, which is exactly wide enough for the water and nothing
+else. Two passes that never spoke: the dig took the best rectangle in
+reach, and the hut was sited afterwards on whatever bank that left.
+
+### The dig asks first
+
+`VillageFarm.field_rect` gains the caller's-own-condition argument
+`VillageLayout.street_plot` has had all along, and for the reason that one
+already states: *a farmhouse needs room for its field, and a farmhouse
+with nowhere to farm is a farmhouse that should not have been raised.* A
+refused rectangle simply keeps the search going, so the fisher gets the
+next-best water that does work.
+
+And when no bank in reach can take a hut, a second, unconditional search
+digs the pond anyway. **A pond with no hut beats no pond at all**: the
+fisher works the water, not the building.
+
+### Asked of the ground as it WILL BE
+
+`hut_origin` is asked at PLACEMENT time, by which point the rails are real
+ground and the caller's own `is_free` refuses them. The dig asks the same
+question BEFORE either the water or its frame exists, so
+`hut_origin_after_fencing` adds the rails by hand — without that, the dig
+would happily choose a site whose only bank is the fence it is about to
+build. A test pins exactly that case: ground whose only clear band in
+reach is the pond's own southern rail line takes a hut under the
+placement-time question and none under the dig-time one.
+
+### And a step to its door
+
+Every other building a village places has its doorstep paved as part of
+siting the plot, because every other building is sited ON frontage. A hut
+belongs to the water instead, so nothing laid its front step and it stood
+with its door opening onto bare ground.
+
+That invariant held for three weeks on luck alone: the fixture village's
+hut happened to land with its doorstep on one of the pond's own rails, so
+`test_every_placed_building_faces_south_onto_a_real_road_cell` passed for
+the whole lot. Moving the pond by one rectangle broke it, which is that
+test doing exactly its job. The step is laid AFTER `place_building`, never
+before — `place_building` refuses a plot whose doorstep is already
+non-empty, so paving first would refuse the hut over its own future front
+step, the same ordering trap the houses' own pass records.
 
 ### Honest gaps
 
