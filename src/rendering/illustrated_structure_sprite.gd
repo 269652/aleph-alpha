@@ -441,30 +441,62 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	var inner := VillageFarm.fence_inner_direction(subject)
 	if inner == Vector2i.ZERO:
 		return Vector2.ZERO
+	var unplaced := _unplaced_art_rect(subject, tile_size)
+	if unplaced.size == Vector2.ZERO:
+		return Vector2.ZERO
+	var offset := Vector2.ZERO
+	if inner.x > 0:
+		offset.x = float(tile_size) - unplaced.end.x
+	elif inner.x < 0:
+		offset.x = -unplaced.position.x
+	if inner.y > 0:
+		offset.y = float(tile_size) - unplaced.end.y
+	elif inner.y < 0:
+		offset.y = -unplaced.position.y
+	return offset
+
+
+## Where a subject's real INK finally lands inside its tile, in tile-local
+## pixels -- (0, 0) is the tile's own top-left corner, y measured down.
+## Rect2() (zero size) for a subject with no art at all.
+##
+## This is footprint_texture placed by footprint_offset, then narrowed to
+## the wood itself (_art_rect) rather than the transparent band around it.
+##
+## It exists because a fence's COLLIDER stands at the foot of its wood and
+## nowhere else -- reported as "The horizontal fences should have the hitbox
+## at the bottom of the rail". Finding that foot means redoing the band
+## arithmetic below, and a second copy of it in EarthChunkManager would be a
+## second copy to get wrong: the two horizontal facings land at OPPOSITE
+## ends of their cell, which is exactly the detail such a copy loses.
+func placed_art_rect(subject: String, tile_size: int) -> Rect2:
+	var unplaced := _unplaced_art_rect(subject, tile_size)
+	if unplaced.size == Vector2.ZERO:
+		return Rect2()
+	return Rect2(unplaced.position + footprint_offset(subject, tile_size), unplaced.size)
+
+
+## The same rect BEFORE footprint_offset moves it -- where the wood lands
+## with no offset at all.
+##
+## The band is centred on the tile and bottom-anchored (EarthChunkManager.
+## _spawn_structure_art_for), and is NOT one tile wide once a rail is scaled
+## by its own run, so where its edges fall has to be carried rather than
+## assumed away.
+func _unplaced_art_rect(subject: String, tile_size: int) -> Rect2:
 	var idle := idle_texture(subject)
 	if idle == null:
-		return Vector2.ZERO
+		return Rect2()
 	var image := idle.get_image()
 	var art := _art_rect(subject, image)
 	var scale := _footprint_scale(subject, image, tile_size)
-	# Where the wood lands with no offset at all: the band is centred on the
-	# tile and bottom-anchored (EarthChunkManager._spawn_structure_art_for),
-	# and is NOT one tile wide once a rail is scaled by its own run, so where
-	# its edges fall has to be carried rather than assumed away.
 	var band_left := (float(tile_size) - float(image.get_width()) * scale) * 0.5
 	var band_top := float(tile_size) - float(image.get_height()) * scale
-	var left := band_left + float(art.position.x) * scale
-	var top := band_top + float(art.position.y) * scale
-	var offset := Vector2.ZERO
-	if inner.x > 0:
-		offset.x = float(tile_size) - (left + float(art.size.x) * scale)
-	elif inner.x < 0:
-		offset.x = -left
-	if inner.y > 0:
-		offset.y = float(tile_size) - (top + float(art.size.y) * scale)
-	elif inner.y < 0:
-		offset.y = -top
-	return offset
+	return Rect2(
+		band_left + float(art.position.x) * scale,
+		band_top + float(art.position.y) * scale,
+		float(art.size.x) * scale, float(art.size.y) * scale
+	)
 
 
 ## How bright a pixel must be to count as this art rather than as the chroma
