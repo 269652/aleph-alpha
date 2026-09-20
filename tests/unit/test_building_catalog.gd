@@ -1037,3 +1037,36 @@ func test_a_borrowed_sheet_is_read_with_its_own_grid():
 	for entry in BuildingCatalog.finished_sheet_chain("fisher_hut", 7):
 		if entry["path"] == BuildingCatalog.sheet_of("farmhouse"):
 			assert_eq(int(entry["columns"]), BuildingCatalog.sheet_columns_of("farmhouse"))
+
+
+## A borrowed building comes with the ground it stands in. Asked for
+## directly, once the hut was standing beside its pond: *"the fisher hut
+## should get a yard too"* -- it is drawn as a farmhouse (`draws_as`), and
+## a farmhouse in a yard beside a hut on bare plot reads as one building
+## finished and the other forgotten.
+func test_a_building_drawn_as_another_stands_in_that_ones_yard_too():
+	var yard := BuildingCatalog.background_sheet_for("fisher_hut", 11)
+	assert_false(yard.is_empty(), "a hut drawn as a farmhouse stands in a farmhouse's yard")
+	assert_eq(
+		String(yard["path"]),
+		String(BuildingCatalog.background_sheet_for("farmhouse", 11)["path"]),
+		"and it is the same yard art, not a second copy of it"
+	)
+
+
+## Its OWN seed picks it, so the hut by the pond and the farmhouse up the
+## street are not the same picture -- the whole point of nine yards.
+func test_a_borrowed_yard_still_varies_across_every_one_of_the_nine():
+	var seen := {}
+	for seed_value in range(400):
+		var yard := BuildingCatalog.background_sheet_for("fisher_hut", seed_value)
+		seen["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(seen.size(), 9, "all nine yards are used: %s" % str(seen.keys()))
+
+
+## And borrowing art is the ONLY way to inherit a yard -- a building that
+## borrows nothing and declares nothing still stands on its own plot.
+func test_a_building_that_borrows_nothing_inherits_no_yard():
+	for building_id in ["sawmill", "warehouse", "blacksmith", "brewery", "city_hall"]:
+		assert_eq(BuildingCatalog.draws_as_of(building_id), "", "precondition: %s borrows nothing" % building_id)
+		assert_true(BuildingCatalog.background_sheet_for(building_id, 1).is_empty())

@@ -433,9 +433,20 @@ const _BACKGROUND_SHEETS := {
 ## reason variant_cell_for uses two: one hash split into a row and a column
 ## walks a diagonal of the grid instead of covering it.
 static func background_sheet_for(building_id: String, seed_value: int) -> Dictionary:
-	if not _BACKGROUND_SHEETS.has(building_id):
+	# A building drawn as another (draws_as) stands in that one's yard as
+	# well: what is borrowed is the whole picture, the house AND the ground
+	# it stands in. Asked for directly once the fisher's hut was up beside
+	# its pond -- "the fisher hut should get a yard too" -- because a
+	# farmhouse in a yard beside a hut on bare plot reads as one building
+	# finished and the other forgotten. Its OWN seed still picks WHICH
+	# yard, so the hut and the farmhouse up the street are different
+	# pictures.
+	var declared := building_id
+	if not _BACKGROUND_SHEETS.has(declared):
+		declared = draws_as_of(building_id)
+	if not _BACKGROUND_SHEETS.has(declared):
 		return {}
-	var sheet: Dictionary = _BACKGROUND_SHEETS[building_id]
+	var sheet: Dictionary = _BACKGROUND_SHEETS[declared]
 	var columns := int(sheet["columns"])
 	var rows := int(sheet["rows"])
 	return {

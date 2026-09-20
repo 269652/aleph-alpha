@@ -467,6 +467,20 @@ in the building's own sheet, which draws only the house.
   sheet declared draws exactly what it drew before; the wiring is per
   building id (`BuildingCatalog.background_sheet_for`), so the farmhouse
   having one costs nothing anywhere else.
+- **A building that borrows art borrows the yard with it.** `draws_as` (see
+  the asset contract) hands over the whole picture, so the fisher's hut,
+  drawn as a farmhouse, stands in a farmhouse's yard — asked for directly:
+  *"the fisher hut should get a yard too"*. Its OWN seed still picks which
+  of the nine, so the hut by the pond and the farmhouse up the street are
+  different pictures. Borrowing art is the only way to inherit a yard; a
+  building that declares neither still stands on bare plot
+  (`test_a_building_that_borrows_nothing_inherits_no_yard`).
+- **And the kerb survives underneath it**, though it is painted first:
+  measured on the delivered sheet, 0 of 5118 pixels in the yard's outer
+  three-pixel band are opaque, so the line round the plot is never covered.
+  Pinned by `test_a_yard_never_paints_over_the_kerb_at_the_plots_own_edge`
+  rather than left to luck — yard art bled to the edge would quietly erase
+  the kerb of every building that stands in one.
 
 **The background must be flooded off, not keyed off.** This sheet has no
 alpha channel and its transparency is a painted grey-and-white
@@ -598,7 +612,11 @@ there is no registry to edit. Until a file exists, a procedural placeholder
 draws so the system is playable and testable without art.
 
 **Or a borrowed sheet, where a placeholder box is too little.** A catalog
-entry may name another building's art with `draws_as`, and that sheet
+entry may name another building's art with `draws_as`, which borrows the
+whole picture -- the building's sheet AND the yard it stands in (see "A
+building's own yard, drawn behind it"), since a borrowed house on bare
+plot beside the real thing in its finished yard reads as forgotten rather
+than as a stand-in. The borrowed sheet
 becomes the LAST link of its own chain (`BuildingCatalog.draws_as_of`,
 `finished_sheet_chain`): the building draws as its stand-in until its own
 file lands, and the day it does, it wins with no code change at all —
