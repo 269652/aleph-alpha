@@ -30085,8 +30085,10 @@ reload, and stock 0.0 to a manager that never dug the pond.
   at all today. Clean water rather than wrong water, and *land* grass in a
   pond was the report.
 - **A hut on 4 of 6 banks.** The same sweep found two ponds with no
-  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Resolved
-  in the entry directly below.
+  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Diagnosed in
+  the entry directly below, and only PARTLY closed by it: two of the three
+  real villages measured still have none, because their fisher's own plot
+  genuinely has no room for a 3x2 works.
 
 ## A pond is dug where its hut can stand (`concept/village_ponds.md`, 2026-09-20)
 
@@ -30134,6 +30136,43 @@ only the fence would block being taken for a bank, and a hut with no front
 step. Tested: `test_village_pond.gd` 29/29 (+5 new),
 `test_village_renderer.gd` 153/153 (+1 new),
 `test_village_pond_hut_wiring.gd` 3/3 (new file).
+
+### What this does NOT fix, measured rather than hoped
+
+A controlled A/B on a wiped world {D} the same three villages founded from
+nothing, before and after {D} says the dig-time question is a **no-op in
+the two villages that were missing a hut**. Their ponds do not move,
+because no other rectangle in reach passes either, so the fallback runs
+and the water lands in the same strip:
+
+| village | pond | hut | why not |
+| --- | --- | --- | --- |
+| (678,128) | (8,12) | yes, at (4,11) | {D} |
+| (682,132) | (4,17) | none | 51/51 refused: 23 street, 20 houses, 6 water, 2 rails |
+| (696,128) | (4,17) | none | 51/51 refused: 19 street, 21 houses, 6 water, 5 rails |
+
+Both of those fishers live at `(4,19)`, the far west end of the street,
+and the street grid boxes them in: `y=16` is a street row and `y=21` is
+the next, so the only ground of their own is the two-row strip `y=17-18`
+that the water exactly fills. A 3x2 works plus its doorstep needs three.
+
+**A fix that was nearly written on a bad number.** The obvious next move
+is to raise the hut BEFORE the frame, so the fence goes round it the way
+it already goes round a farmhouse standing in its field's ring {D} which
+would also retire `HUT_BANK_REACH_TILES`' own stated reason for being 2
+rather than 1. The first count said 5 and 2 sites were refused by rails,
+which looked like enough. That count was read off the probe's
+first-reason tally, and a site whose FIRST refusal is a rail can still be
+blocked by a street on another of its cells, so it was an upper bound
+wearing an answer's clothes. Recomputed properly {D} the same grid walked
+again with the rails, and only the rails, treated as clear ground {D} the
+reorder opens **7** sites in the village that already has a hut and **0**
+in each of the two that do not. The frame is not what is in the way. The
+reorder is not the fix, and was not written.
+
+What remains is a design question rather than a defect: a fisher's hut
+borrows the farmhouse's 3x2 footprint because it is drawn as one, and a
+real fisher's shack is not a farmhouse.
 
 ### And the farmhouse half of the same report, which did NOT reproduce
 

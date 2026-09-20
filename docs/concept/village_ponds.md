@@ -90,6 +90,11 @@ village actually does.
   real village in three with a pond and no hut at all. The dig asks now,
   and falls back to digging anyway when no bank in reach can take one —
   see "A pond is dug where its hut can stand" below.
+
+  ⚠️ **Two villages in three still have no hut**, and it is measured
+  rather than suspected: their fisher's plot genuinely has no room for a
+  3x2 works, and the obvious next fix (the frame going round the hut)
+  opens zero sites in either. Same section, "What it does not fix".
 - ✅ **A fisher's house digs one.** Sited against the house that carries the
   `fisher` occupation, since a fisher lives in an ordinary house and there is
   no separate building to hang it on. Fenced on the field's own rule, through
@@ -427,6 +432,36 @@ test doing exactly its job. The step is laid AFTER `place_building`, never
 before — `place_building` refuses a plot whose doorstep is already
 non-empty, so paving first would refuse the hut over its own future front
 step, the same ordering trap the houses' own pass records.
+
+### What it does not fix, and why the obvious next fix is not it
+
+A controlled A/B on a wiped world — the same three villages founded from
+nothing, before and after — says the dig-time question is a **no-op in
+the two villages that were missing a hut**. Their ponds do not move,
+because no other rectangle in reach passes either, so the fallback runs
+and the water lands in the same strip. Both of those fishers live at the
+far west end of the street, and the street grid boxes them in: one street
+row above, the next below, leaving a two-row strip that the water exactly
+fills. A 3x2 works plus its doorstep needs three rows.
+
+The obvious next move is to raise the hut BEFORE the frame, so the fence
+goes round it the way it already goes round a farmhouse standing in its
+field's ring — which would also retire `HUT_BANK_REACH_TILES`' own
+stated reason for being 2 rather than 1. **Measured, it is not the fix.**
+Walking the same candidate grid again with the pond's own rails, and only
+the rails, treated as clear ground opens **7** sites in the village that
+already has a hut and **0** in each of the two that do not. The frame is
+not what is in the way; the street grid and the neighbours are.
+
+(The first count said 5 and 2, which looked like enough. It was read off
+a first-reason tally, and a site whose FIRST refusal is a rail can still
+be blocked by a street on another of its cells — an upper bound wearing
+an answer's clothes. Recorded because the reorder was about to be written
+on it.)
+
+What remains is a design question rather than a defect, and it is the
+borrowing itself: a fisher's hut takes the farmhouse's 3x2 footprint
+because it is DRAWN as one, and a real fisher's shack is not a farmhouse.
 
 ### Honest gaps
 
