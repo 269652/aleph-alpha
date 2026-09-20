@@ -439,7 +439,18 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 	# whole figure's proportions out of alignment (a gap here, an overlap
 	# there) instead of just rendering the same composition at more detail.
 	var torso_y := _PORTRAIT_HEAD.y - 2 * _PORTRAIT_DETAIL_SCALE
-	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1 * _PORTRAIT_DETAIL_SCALE
+	# Where the legs start is read off the torso REALLY DRAWN, not off its
+	# box. _fit_to_box preserves aspect, and hero_composite.png's torso art
+	# is a different height in every row (measured: 49 to 59 px trimmed), so
+	# a short torso fits to less than _PORTRAIT_TORSO.y and stops well above
+	# where a box-derived legs_y expects it -- leaving a 4-5 row hole
+	# between torso and legs on rows 0 and 1. Exactly the mistake
+	# _blend_portrait_legs already corrected for _PORTRAIT_LEG one step
+	# down, made once more with the OTHER fixed box. Pinned by
+	# test_every_outfit_row_draws_one_cohesive_figure, which asks it of
+	# every row rather than of whichever one a single seed reaches.
+	var torso := _portrait_torso_image(appearance, outfit_variant)
+	var legs_y := torso_y + torso.get_height() - 1 * _PORTRAIT_DETAIL_SCALE
 
 	# Arms first, so the torso's outline overlaps them at the shoulder rather
 	# than the other way around. Left/right use frame 0/1 of the illustrated
@@ -458,10 +469,7 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 
 	_blend_portrait_legs(image, appearance, outfit_variant, center_x, legs_y)
 
-	_blend(
-		image, _portrait_torso_image(appearance, outfit_variant),
-		Vector2i(center_x - _PORTRAIT_TORSO.x / 2, torso_y)
-	)
+	_blend(image, torso, Vector2i(center_x - _PORTRAIT_TORSO.x / 2, torso_y))
 	_blend(image, _portrait_head_image(appearance), Vector2i(center_x - _PORTRAIT_HEAD.x / 2, 0))
 	return image
 
