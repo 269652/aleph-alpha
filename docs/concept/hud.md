@@ -484,6 +484,44 @@ player reads them when debugging worldgen — while a frame counter is
 something you want visible while the thing it measures is going wrong,
 which is exactly when you are not thinking to press F3.
 
+### A panel occupies space; it does not choose coordinates
+
+Reported with both open: *"The Town Panel and Warehouse / Building panel
+overlap.. a panel should occupy space and make other panels render below
+it.. don't use fixed coords"*.
+
+The column system already said this in its own doc comment — *"each builder
+simply adds to the column it belongs in and never positions itself against
+its neighbour's height"* — and the building readout was the one card that
+never joined. It sat at `PRESET_CENTER_RIGHT`, a hand-picked 24px from the
+edge and 180px tall whatever it held, while the right column grew down from
+the minimap straight into it. The settlement card landing in that column is
+what finally made the collision visible; the panel had been placed against
+nothing all along.
+
+The rule, now pinned rather than merely written down:
+
+> A control that joins a HUD column is positioned **by** that column.
+> `_add_hud_card` and `offset_top`/`offset_bottom` in the same builder is a
+> contradiction, and `test_no_card_that_joins_a_column_also_places_itself`
+> fails on it — for every builder, not just the one that was reported.
+
+Two properties fall out of the container rather than being arranged, and
+both are tested against a real `HousePanel` in a real `VBoxContainer`
+(`test_hud_panel_flow.gd`) instead of asserted about constants:
+
+- **A taller card above pushes the one below further down.** That is what
+  "occupies space" means, and it is exactly what a hand-picked offset
+  cannot do.
+- **A closed panel leaves no hole.** A hidden child of a `VBox` takes no
+  room — the same property the message stack above already relies on — so
+  the building readout costs nothing while it is shut.
+
+Ordering within the column is a judgement, not a constraint: the standing
+readouts (where you are, when you are, what this place is doing) come
+first, and the readout a *click* opens comes last, so it appears beneath
+them rather than shoving them about.
+
 ## Status
 
 - ✅ **The settlement card** (`src/ui/settlement_readout.gd`, 17 tests) —
@@ -536,6 +574,14 @@ which is exactly when you are not thinking to press F3.
   minimap, top-right. `World.karma_display_text`/`karma_display_color`
   are the pure, tested halves (`test_world_hud.gd`): a signed number,
   coloured gold/red/neutral by sign.
+- ✅ **Every HUD card is laid out by its column** (2026-09-20) — the
+  building readout joined the right-hand column; it was the last card
+  placed by hand, and it overlapped the settlement card. See "A panel
+  occupies space" above. Pinned three ways: the real stacking behaviour
+  against a real `HousePanel`, a source-contract check on the builder, and
+  a generalised one over *every* builder that adds a card, so the next one
+  cannot reintroduce it. `test_hud_panel_flow.gd` 6/6; rendered for a look
+  with `tools/probe_hud_column_flow.gd`.
 - ✅ **One shared mark for "this one is selected"** (2026-09-20) —
   `UiTheme.selected_button_stylebox` / `BUTTON_SELECTED`, pinned by
   `test_ui_theme.gd` against the measured failure it replaced: the
