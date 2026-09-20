@@ -4562,6 +4562,30 @@ func _record_household_departure(settlement_id: String, household) -> void:
 	_memory_store.witness_event(departed, _world_age_seconds)
 
 
+## A villager has starved to death (docs/concept/village_mortality.md
+## mechanism 3). True when somebody really was taken off the roster.
+##
+## A death is a DEPARTURE WITH A REASON, not a second mechanism beside it:
+## it goes out through the same `npc_departed` event the estate exodus
+## already appends, so _households_in_settlement, the census, the tier,
+## the growth ladder and the settlement card all see it with no new
+## plumbing -- and the roof they owned stops counting as one of ours,
+## exactly as VillageCensus' roster rule arranges.
+##
+## False for a villager who does not live here, and for one already gone:
+## a death that fired twice would cost the village two households for one
+## person, and a marker can be freed on the same frame the settlement
+## step notices it.
+func record_villager_death(settlement_id: String, seed_value: int) -> bool:
+	var household = _household_store.household_for(EntityRef.for_npc(seed_value))
+	if household == null:
+		return false
+	if not _households_in_settlement(settlement_id).has(household.id):
+		return false
+	_record_household_departure(settlement_id, household)
+	return true
+
+
 ## docs/concept/village_estates.md mechanism 6: the households pay into the
 ## SAME purse VillageWages already pays the subsistence wage out of, which
 ## is what closes the loop on machinery that already exists rather than
