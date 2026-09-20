@@ -469,10 +469,19 @@ func test_a_reloaded_older_village_gets_its_plaza_paved_where_the_square_is_clea
 	second_parent.free()
 
 
-## ...but never over a house: an old village whose houses stand where the
-## square would go keeps its square unpaved, rather than paving through a
-## building.
-func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_stands_on_it():
+## ...and never THROUGH a house. An old village whose houses stand where the
+## square would go keeps the occupied cells bare and paves the rest.
+##
+## This test used to assert that NOT ONE cell of the square was paved when a
+## house stood on any of them, which is broader than its own stated intent
+## and is the reported defect: *"There are still villages without plaza."*
+## Measured on a real village (tools/probe_village_supply.gd), chunk
+## (682,132) had 8 of its 48 square cells paved -- exactly the street row
+## crossing it -- because a farm rail and a warehouse stood inside the
+## square and the whole pass was abandoned. A square laid AROUND what stands
+## in it is still a square; paving over the building is what must not
+## happen, and that half is kept.
+func test_a_reloaded_older_village_paves_its_square_around_a_house_not_through_it():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -489,13 +498,24 @@ func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_sta
 		world.built_tiles.erase(g)
 		world.occupied_cells.erase(g)
 	# An old house stands on one square cell.
-	world.occupied_cells[plaza_cells[5]] = "house_small"
+	var occupied: Vector2i = plaza_cells[5]
+	world.occupied_cells[occupied] = "house_small"
 
 	var second_parent := Node2D.new()
 	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	assert_ne(
+		world.built_tiles.get(occupied, ""), TerrainRenderer.ROAD_TILE_ID,
+		"the cell the house stands on is never paved (%s)" % str(occupied)
+	)
+	var paved := 0
 	for g in plaza_cells:
-		assert_ne(world.built_tiles.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "must not pave a square a house stands on (%s)" % str(g))
+		if world.built_tiles.get(g, "") == TerrainRenderer.ROAD_TILE_ID:
+			paved += 1
+	assert_eq(
+		paved, plaza_cells.size() - 1,
+		"every other cell of the square is laid -- one house does not cancel a village its centre"
+	)
 	second_parent.free()
 
 

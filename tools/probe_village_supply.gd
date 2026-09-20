@@ -108,6 +108,7 @@ func _report_plaza(chunk_coord: Vector2i) -> void:
 	)
 	var plaza: Rect2i = skeleton["plaza"]
 	var paved := 0
+	var occupied := 0
 	var total := 0
 	var blockers: Array = []
 	for y in range(plaza.position.y, plaza.end.y):
@@ -119,16 +120,24 @@ func _report_plaza(chunk_coord: Vector2i) -> void:
 			if _TerrainRenderer.is_road_tile(existing):
 				paved += 1
 				continue
+			# A building standing in the square is EXPECTED now: the square
+			# is laid around what stands in it (VillageLayout.
+			# plaza_is_worth_laying). Only a bare or wet cell is a real gap
+			# -- counting a hall's own footprint as one is how the first
+			# version of this probe called a perfectly good square
+			# incomplete.
+			if existing != "":
+				occupied += 1
+				continue
 			if not is_buildable.call(cell):
 				blockers.append("%s water" % str(cell))
-			elif existing != "":
-				blockers.append("%s %s" % [str(cell), existing])
 			else:
-				blockers.append("%s bare" % str(cell))
-	if paved < total:
+				blockers.append("%s BARE" % str(cell))
+	if paved + occupied < total:
 		_without_plaza += 1
-	_say("  PLAZA %d/%d cells paved%s" % [
-		paved, total, "" if paved == total else "   <-- INCOMPLETE"
+	_say("  PLAZA %d/%d paved, %d built on, %d bare%s" % [
+		paved, total, occupied, total - paved - occupied,
+		"" if paved + occupied == total else "   <-- GAPS"
 	])
 	if not blockers.is_empty():
 		_say("    blocked by: %s" % ", ".join(blockers.slice(0, 8)))
