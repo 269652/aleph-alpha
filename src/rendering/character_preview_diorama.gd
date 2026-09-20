@@ -239,6 +239,10 @@ var _pond_cells: Dictionary = {}
 ## directly, independent of how many OTHER _rng draws happened first this
 ## build() (see _build_pond's own doc comment on why not _rng.seed).
 var _dna_seed := 0
+## The ambient boar's scaling parent, and the boar art's own opaque height
+## in texture pixels -- see _build_boar/_step_boar_stand.
+var _boar_stand: Node2D = null
+var _boar_drawn_height := 0.0
 ## The pond's own WaterShader instance -- kept (not just its shared
 ## material) so record_water_disturbance can forward a fish's own ripple
 ## straight to it, and _process can age those ripples every frame the same
@@ -421,12 +425,24 @@ func _build_steps() -> Array[Dictionary]:
 
 ## The stroll/action state every step above has to exist before -- picking a
 ## first action reads character_view's own position.
+## The opening BEAT is always the same one, and it is deliberately not
+## rolled: the hero holds its mark, facing the camera, for as long as an
+## ordinary IDLE lasts, and only then starts behaving randomly.
+##
+## This panel is a character portrait before it is anything else. Rolling
+## the first action meant the opening frame -- the first thing a player
+## ever sees of the character they are making -- caught the hero mid-stride
+## with its back to the camera whenever its first stroll target happened to
+## lie upstage, which is what a rendered opening frame showed. Nothing is
+## lost: within a couple of seconds it is picking its own actions exactly
+## as before.
 func _finish_build() -> void:
 	_stroll_target = character_view.position
 	_fishing_spot = _compute_fishing_spot()
-	var first_action := CharacterActionPicker.pick_next(_rng)
-	_enter_action(first_action.action)
-	_action_time_remaining = first_action.duration
+	_enter_action(CharacterActionPicker.Action.IDLE)
+	_action_time_remaining = CharacterActionPicker.duration_of(
+		CharacterActionPicker.Action.IDLE, _rng
+	)
 
 
 ## Redresses the live, already-strolling CharacterView -- everything else
@@ -439,6 +455,9 @@ func apply_appearance(appearance: Dictionary) -> void:
 
 
 func _process(delta: float) -> void:
+	# Ahead of the character_view guard: the boar is scenery and holds its
+	# staged size whether or not a hero has been built yet.
+	_step_boar_stand()
 	if character_view == null:
 		return
 
@@ -1277,14 +1296,47 @@ func _build_butterfly(flyer_renderer: AmbientFlyerRenderer, butterfly_position: 
 ## BIRD_WANDER_RADIUS and FISH_SWIM_SPEED already apply.
 func _build_boar() -> void:
 	var seed_value := hash(_layout.boar_position)
+	# A scaling HOLDER, not a scale written onto the marker. A
+	# CreatureMarker owns its own `scale`: _apply_action_scale recomputes it
+	# from the species profile and the animal's current growth on every
+	# animation step, so anything written from outside lasts exactly until
+	# the marker's next frame. Measured live while this WAS written onto the
+	# marker: 29.4 x 19.9 world units against the hero's 19.6, i.e. exactly
+	# the unscaled size (tools/probe_diorama_render.gd).
+	_boar_stand = Node2D.new()
+	_boar_stand.name = "BoarStand"
+	_boar_stand.position = _layout.boar_position
+	add_child(_boar_stand)
 	boar_node = CreatureRenderer.new()._build_marker(
-		self, "boar", _layout.boar_position, seed_value, null, TerrainRenderer.TILE_SIZE
+		_boar_stand, "boar", Vector2.ZERO, seed_value, null, TerrainRenderer.TILE_SIZE
 	)
 	boar_node.set_status_bars_visible(false)
-	var drawn_height := float(boar_node.texture.get_height()) * boar_node.scale.y
-	if drawn_height > 0.0:
-		var wanted := CharacterPreviewLayout.hero_drawn_height() * BOAR_HEIGHT_FRACTION_OF_HERO
-		boar_node.scale *= wanted / drawn_height
+	# The OPAQUE extent, not the texture's height: every illustrated animal
+	# frame is composited onto one shared 340x330 canvas with its feet on a
+	# shared baseline (IllustratedAnimalSprite.CANVAS_SIZE/BASELINE_Y), so
+	# most of the texture is transparent padding and its height says
+	# nothing about how big the animal reads on screen. Cached, because
+	# _step_boar_stand re-derives the holder's scale from it every frame.
+	_boar_drawn_height = float(boar_node.texture.get_image().get_used_rect().size.y)
+	_step_boar_stand()
+
+
+## Holds the ambient boar at its staged size however the marker rescales
+## itself (see _build_boar). Re-derived rather than set once: the marker's
+## own scale genuinely changes over time as the animal grows
+## (MammalGrowth.size_scale_at), and a portrait wants a boar that stays the
+## size it was composed at rather than one quietly outgrowing the frame.
+##
+## No feedback loop -- the marker's scale is computed from its species and
+## age alone and never reads the holder's.
+func _step_boar_stand() -> void:
+	if _boar_stand == null or boar_node == null or _boar_drawn_height <= 0.0:
+		return
+	var marker_height := _boar_drawn_height * boar_node.scale.y
+	if marker_height <= 0.0:
+		return
+	var wanted := CharacterPreviewLayout.hero_drawn_height() * BOAR_HEIGHT_FRACTION_OF_HERO
+	_boar_stand.scale = Vector2.ONE * (wanted / marker_height)
 
 
 ## The FISH action's own bobber (see _start_fishing_cast) -- one Sprite2D,
@@ -1305,18 +1357,14 @@ func _build_bobber() -> void:
 func _build_character() -> void:
 	character_view = CharacterViewScene.instantiate()
 	character_view.name = "Hero"
-	# A reasonable starting position -- clear of the pond/trees by
-	# construction whenever the layout found one; falls back to the
-	# footprint's own centre if every attempt failed (see
-	# CharacterPreviewLayout._position_clear_of_pond's own doc comment on
-	# why this can't loop forever).
-	var start := FOOTPRINT * 0.5
-	for attempt in MAX_TARGET_ATTEMPTS:
-		var candidate := Vector2(_rng.randf_range(0.0, FOOTPRINT.x), _rng.randf_range(0.0, FOOTPRINT.y))
-		if _layout.is_clear(candidate):
-			start = candidate
-			break
-	character_view.position = start
+	# CENTRE STAGE, deliberately, rather than a seeded point somewhere in
+	# the scene. This panel's first frame is the first thing a player sees
+	# of their character, and a random clear spot across the whole footprint
+	# rendered on one seed as a hero tucked into the left edge with the
+	# middle of the panel empty beside it. It strolls out from here within
+	# a second or two anyway (see _pick_new_target), so nothing is lost but
+	# the bad opening frame.
+	character_view.position = CharacterPreviewLayout.hero_bounds(FOOTPRINT).get_center()
 	add_child(character_view)
 	character_view.apply_appearance(HeroAppearance.new().appearance_for("warrior", 0))
 	_equip_starting_weapon()

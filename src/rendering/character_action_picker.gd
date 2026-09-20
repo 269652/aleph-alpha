@@ -48,11 +48,19 @@ const DURATION_RANGE := {
 ## Action, "duration": float}`), using `rng` for reproducible-if-needed
 ## randomness -- the same injected-RandomNumberGenerator convention
 ## CharacterStroll.pick_target already follows.
+## How long one NAMED action lasts -- the duration half of pick_next,
+## without the roll of which action it is. For a caller that has already
+## chosen (the diorama's opening beat is a fixed IDLE, see
+## CharacterPreviewDiorama._finish_build) and should still last exactly as
+## long as any other idle rather than carrying a duration of its own.
+static func duration_of(action: Action, rng: RandomNumberGenerator) -> float:
+	var duration_range: Vector2 = DURATION_RANGE[action]
+	return rng.randf_range(duration_range.x, duration_range.y)
+
+
 static func pick_next(rng: RandomNumberGenerator) -> Dictionary:
 	var action := _weighted_pick(rng)
-	var duration_range: Vector2 = DURATION_RANGE[action]
-	var duration := rng.randf_range(duration_range.x, duration_range.y)
-	return {"action": action, "duration": duration}
+	return {"action": action, "duration": duration_of(action, rng)}
 
 
 static func _weighted_pick(rng: RandomNumberGenerator) -> Action:

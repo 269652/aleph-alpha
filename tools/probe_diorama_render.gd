@@ -23,6 +23,8 @@ var MainMenu
 const OUT_DIR := "res://tools/diorama_renders"
 const SEEDS := [4021, 99, 1234]
 const SETTLE_FRAMES := 40
+## The opening frame a player sees when the creator first paints.
+const OPENING_FRAMES := 2
 
 
 func _init() -> void:
@@ -52,6 +54,13 @@ func _init() -> void:
 		viewport.add_child(diorama)
 		diorama.build(seed_value)
 
+		for _i in OPENING_FRAMES:
+			await process_frame
+		RenderingServer.force_draw()
+		await process_frame
+		var opening: Image = viewport.get_texture().get_image()
+		opening.save_png(ProjectSettings.globalize_path("%s/opening_%d.png" % [OUT_DIR, seed_value]))
+
 		for _i in SETTLE_FRAMES:
 			await process_frame
 		RenderingServer.force_draw()
@@ -61,6 +70,13 @@ func _init() -> void:
 		var path := "%s/diorama_%d.png" % [OUT_DIR, seed_value]
 		image.save_png(ProjectSettings.globalize_path(path))
 		print("%s  hero=%s" % [path, _hero_extent(diorama, camera, view, footprint)])
+		var boar = diorama.boar_node
+		if boar != null and boar.texture != null:
+			var used: Rect2i = boar.texture.get_image().get_used_rect()
+			print("    boar: used=%s local_scale=%s global_scale=%s -> %.1f x %.1f world units at %s" % [
+				used.size, boar.scale, boar.global_scale,
+				float(used.size.x) * boar.global_scale.x, float(used.size.y) * boar.global_scale.y,
+				boar.global_position])
 		viewport.queue_free()
 		await process_frame
 

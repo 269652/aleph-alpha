@@ -364,10 +364,25 @@ static func hero_bounds(footprint: Vector2) -> Rect2:
 	# The rig stands ON its target and is drawn upward, so its head needs
 	# this much clear frame above the highest point it may stand on.
 	var top := maxf(footprint.y * (1.0 - HERO_BAND_FRACTION), hero_drawn_height())
+	# Inset past both framing trunks, not merely off the frame's own edges.
+	# Keeping the hero IN FRAME is not the same as keeping it in the
+	# PICTURE: a rendered seed had it hard against the left edge, tucked
+	# under that side's canopy, with the whole middle of the panel empty
+	# beside it. The trunks' own inset is the natural bound -- the clear
+	# span the composition already leaves between them (see
+	# framing_tree_positions, which never drifts a trunk further in than
+	# this).
+	# The FURTHEST in a trunk can end up, not where it starts: trunks drift
+	# inward per seed (TREE_DRIFT_FRACTION), and a lane bounded by the base
+	# inset alone still reaches the ones that drifted.
+	var trunk_inset := (
+		float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE * TREE_FRAME_INSET_FRACTION
+	) * (1.0 + TREE_DRIFT_FRACTION)
+	var left := trunk_inset + half_width
 	return Rect2(
-		Vector2(half_width, top),
+		Vector2(left, top),
 		Vector2(
-			maxf(footprint.x - hero_drawn_width(), 0.0),
+			maxf(footprint.x - left * 2.0, 0.0),
 			maxf(footprint.y - top, 0.0)
 		)
 	)
@@ -392,6 +407,14 @@ const TREE_FRAME_INSET_FRACTION := 0.35
 ## that band's own height -- enough that two seeds don't look identical,
 ## little enough that both trees stay clearly "at the back".
 const TREE_DEPTH_JITTER := 0.45
+
+## How far a framing trunk may drift INWARD from its base inset, as a
+## fraction of that inset. Inward only -- outward would push a trunk off
+## the frame, and a floating canopy with no trunk under it is the failure
+## the original placement inset was added to stop. Shared with
+## hero_bounds, which has to inset the hero's lane past wherever a trunk
+## can end up, not merely past where it starts.
+const TREE_DRIFT_FRACTION := 0.5
 
 ## How far from the frame's own centreline the ambient boar stands, as a
 ## fraction of the footprint's width. Off-centre on purpose: dead centre it
@@ -421,7 +444,7 @@ static func framing_tree_positions(footprint: Vector2, rng: RandomNumberGenerato
 		# Drift inward only -- outward would push a trunk off the frame,
 		# and a floating canopy with no visible trunk is the failure the
 		# original tree_bounds inset was added to stop.
-		var drift := rng.randf_range(0.0, inset * 0.5)
+		var drift := rng.randf_range(0.0, inset * TREE_DRIFT_FRACTION)
 		x += drift if side == 0.0 else -drift
 		var depth := band.end.y - rng.randf_range(0.0, band.size.y * TREE_DEPTH_JITTER)
 		positions.append(Vector2(x, depth))

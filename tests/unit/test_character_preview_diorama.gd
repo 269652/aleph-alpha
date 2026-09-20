@@ -103,7 +103,10 @@ func test_build_creates_the_expected_number_of_butterflies():
 func test_build_creates_one_ambient_boar():
 	assert_not_null(diorama.boar_node)
 	assert_true(diorama.boar_node.is_inside_tree())
-	assert_eq(diorama.boar_node.position, diorama.get("_layout").boar_position)
+	# global_position: the boar hangs under a scaling holder now (see
+	# _build_boar), so its own position is local to that holder. Where it
+	# STANDS in the scene is what the layout decided and what this is about.
+	assert_eq(diorama.boar_node.global_position, diorama.get("_layout").boar_position)
 
 
 ## The pond is a Node2D grouping several tile sprites now (see the grid
@@ -999,7 +1002,42 @@ func test_the_ambient_boar_wears_no_combat_ui():
 ## hero's 19.8 -- more than twice the height and three times the width, in
 ## a panel whose whole job is to show the hero.
 func test_the_hero_reads_taller_than_the_ambient_boar():
-	var boar_height: float = diorama.boar_node.texture.get_height() * diorama.boar_node.scale.y
+	# get_used_rect, NOT the texture's own height: every illustrated animal
+	# frame is composited onto one shared 340x330 canvas with its feet on a
+	# shared baseline (IllustratedAnimalSprite.CANVAS_SIZE/BASELINE_Y), so
+	# the texture is mostly transparent padding and its height says nothing
+	# about how big the animal reads. Measuring the canvas is how the first
+	# version of this test passed while the boar was still visibly dwarfing
+	# the hero in a rendered frame.
+	# Measured in WORLD space after the scene has been running, not off the
+	# marker's own local scale at the instant it was built. A CreatureMarker
+	# owns its scale: it recomputes it from its species profile and its
+	# current growth on every animation step (_apply_action_scale), so a
+	# value written to it from outside survives exactly until the marker's
+	# next frame -- which is why the first version of this passed while the
+	# boar still visibly dwarfed the hero in a rendered frame.
+	# The BOAR's own _process, called directly the way the real SceneTree
+	# calls it every frame in a live game -- the same convention
+	# test_fish_move_through_their_own_real_process uses. The diorama's own
+	# _process does not drive it (it is an independent node in the tree),
+	# so stepping only the diorama leaves the marker frozen on the scale it
+	# was built with and measures nothing.
+	# The marker is made to do the exact thing that broke this in a real
+	# rendered frame: write its own scale. _apply_action_scale recomputes it
+	# from the species profile on every animation step, so whatever the
+	# diorama wrote at build time lasted until the marker's next frame --
+	# measured live at 29.4 x 19.9 world units against the hero's 19.6
+	# (tools/probe_diorama_render.gd), while this assertion passed.
+	#
+	# Forced here rather than reached through _process, because which of
+	# _process's early-return branches a world-less marker takes is the
+	# marker's business and not what this test is about. What it IS about
+	# is that the staged size survives it.
+	diorama.boar_node.scale = Vector2.ONE * 4.0
+	for step in 5:
+		diorama._process(0.1)
+	var drawn: Rect2i = diorama.boar_node.texture.get_image().get_used_rect()
+	var boar_height: float = float(drawn.size.y) * diorama.boar_node.global_scale.y
 	assert_lt(
 		boar_height,
 		CharacterPreviewLayout.hero_drawn_height(),
@@ -1048,3 +1086,49 @@ func test_a_tile_the_pond_does_not_reach_is_still_land():
 		floori(layout.pond_center.y / tile_size)
 	)
 	assert_eq(diorama.biome_at_global(far_tile.x, far_tile.y), CharacterPreviewDioramaScript.GROUND_BIOME)
+
+
+## The creator opens on a composed frame, not on wherever a seed happened
+## to drop the hero. The first thing a player sees is this panel's still
+## first frame, and the hero was spawned at a random clear point across the
+## whole footprint -- which rendered, on one seed, as a hero tucked into
+## the left edge with the middle of the panel empty beside it. It starts
+## centre-stage in its own lane now and strolls out from there.
+func test_the_hero_opens_centre_stage():
+	var lane: Rect2 = CharacterPreviewLayout.hero_bounds(CharacterPreviewDioramaScript.FOOTPRINT)
+	for seed_value in [1, 42, 99, 1234, 4021]:
+		var staged = CharacterPreviewDioramaScript.new()
+		add_child(staged)
+		staged.build(seed_value)
+		assert_almost_eq(
+			staged.character_view.position.x, lane.get_center().x, 0.01,
+			"seed %d opened at %s" % [seed_value, staged.character_view.position]
+		)
+		assert_true(lane.has_point(staged.character_view.position), "seed %d" % seed_value)
+		remove_child(staged)
+		staged.free()
+
+
+## ...facing the camera while it does. This panel is a character portrait
+## before it is anything else, and the opening frame caught the hero from
+## behind whenever its first stroll target happened to lie upstage.
+func test_the_hero_opens_facing_the_camera():
+	for seed_value in [1, 42, 99, 1234, 4021]:
+		var staged = CharacterPreviewDioramaScript.new()
+		add_child(staged)
+		staged.build(seed_value)
+		var opened_at: Vector2 = staged.character_view.position
+		# Stepped, not just built: the opening frame a player sees is a few
+		# process calls in, and the hero turned upstage the moment its first
+		# stroll target happened to lie that way (seen in a rendered
+		# opening frame, tools/probe_diorama_render.gd). The hero holds a
+		# beat facing the camera before it goes about its business.
+		for step in 8:
+			staged._process(0.1)
+		assert_eq(
+			staged.character_view.facing, staged.character_view.Facing.DOWN,
+			"seed %d opened facing %s" % [seed_value, staged.character_view.facing]
+		)
+		assert_eq(staged.character_view.position, opened_at, "seed %d walked off its mark" % seed_value)
+		remove_child(staged)
+		staged.free()

@@ -671,3 +671,32 @@ func test_generate_stages_the_scene_in_depth():
 		for tree in result.tree_positions:
 			assert_lt(tree.y, lane.position.y, "seed %d: tree in the hero's lane" % seed_value)
 		assert_lt(result.boar_position.y, lane.position.y, "seed %d: boar in the hero's lane" % seed_value)
+
+
+## The lane stops short of both framing trunks. Keeping the hero merely IN
+## frame is not the same as keeping it in the PICTURE: a rendered seed put
+## it hard against the left edge, tucked under that side's canopy, with the
+## whole middle of the panel empty beside it. The inset is the trunks' own,
+## so the hero always strolls in the clear span the composition leaves
+## between them.
+func test_the_heros_lane_stops_short_of_both_framing_trunks():
+	var fp := Vector2(96, 48)
+	var lane := CharacterPreviewLayout.hero_bounds(fp)
+	var half_width := CharacterPreviewLayout.hero_drawn_width() * 0.5
+	for seed_value in 40:
+		var trees := CharacterPreviewLayout.generate(seed_value, fp).tree_positions
+		var xs := [trees[0].x, trees[1].x]
+		xs.sort()
+		assert_gte(lane.position.x - half_width, xs[0], "seed %d: lane reaches the left trunk" % seed_value)
+		assert_lte(lane.end.x + half_width, xs[1], "seed %d: lane reaches the right trunk" % seed_value)
+
+
+## ...and still leaves a real span to stroll in, rather than pinning the
+## hero to one spot.
+func test_the_heros_lane_is_still_wide_enough_to_stroll_in():
+	var fp := Vector2(96, 48)
+	var lane := CharacterPreviewLayout.hero_bounds(fp)
+	assert_gt(
+		lane.size.x, CharacterPreviewLayout.hero_drawn_width() * 4.0,
+		"a lane only %.1f units wide is a mark to stand on, not a walk" % lane.size.x
+	)
