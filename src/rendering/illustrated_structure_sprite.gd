@@ -75,6 +75,15 @@ const GRID_DIVIDERS := "dividers"
 ## cottage_3.png: the divider band is rows 421..569 where the art really
 ## runs 390..570, and the columns lose 13px a side as well.
 const GRID_CONTENT := "content"
+
+## Every grid kind _cell_rect_for can actually read.
+##
+## Listed off the constants rather than written out again wherever
+## somebody needs to check one, so a sheet declaring a kind this reader
+## does not have fails loudly instead of silently falling through to the
+## even cut -- which is exactly how cottage_*.png spent its life being read
+## the wrong way.
+const GRID_KINDS: Array[String] = [GRID_EVEN, GRID_GUTTERS, GRID_DIVIDERS, GRID_CONTENT]
 const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
 
 ## Same measured thresholds as illustrated_beehive_sprite.gd/
