@@ -122,6 +122,12 @@ changed no behaviour and the recalibration can be judged on its own.
 - ✅ **`FOOD_PER_HOUSEHOLD` is measured**: 1.2, off the villagers' own hunger
   clock, pinned by two tests — one that runs the measurement and one that
   ties it to the ethogram profile it comes from.
+- ✅ **The larder is derived from it too** (2026-09-20). A village's
+  minimum stock (what the cart never sells below) is this draw over the
+  cart's cover in assessments, and a household's "full larder" is this
+  draw over a lived day — `FOOD_STOCK_PER_HOUSEHOLD_TARGET` had been left
+  at one assessment of the *old* draw. See
+  [village_economy_balance.md](village_economy_balance.md).
 - ✅ **`ASSESSMENT_SECONDS` is declared where it is used and pinned across
   the seam** to `SETTLEMENT_STEP_INTERVAL`, which `SettlementState` cannot
   import (that module is preloaded by the manager, so the dependency runs

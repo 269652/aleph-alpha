@@ -121,6 +121,19 @@ structure does today. `remove_building` reverses all of it.
 `building_at_global(x, y)` answers for any footprint cell;
 `building_door_near(pixel, radius)` finds a doorstep for the Enter prompt.
 
+**A building entity stops walkers too, and that took a second report**
+(2026-09-20). The `StaticBody2D` above is what stops the *player*. Every
+other walker in the game is a `Sprite2D` that moves by assigning
+`position`, so no body has ever had the slightest effect on one — they ask
+a gate instead, and that gate asked `piece_blocks_movement_at_global`,
+which is about legacy `BuildingPiece` walls and answers `false` on every
+cell of a building entity. Hence *"NPCs still walk through houses and
+ignore the hitbox"*, reported after the gates already existed.
+`AgentPassability.structure_blocks` now asks both questions, and
+`has_building_at_global` covers exactly the footprint this body covers (a
+test pins the two rects against each other). Entering is untouched: the
+doorstep is outside the footprint by construction.
+
 **A house stands IN its plot, not across it** (2026-09-19). Reported live
 with a screenshot of three cottages in a row: *"make the cottages a bit
 smaller and add a padding so they have a gap between them and the top
@@ -967,6 +980,43 @@ was erroring on `cottage_3` rather than guarding, while the bug shipped one
 chain along. It reads through `SpriteSheetLoader` now, which falls back to
 the file's own bytes.
 
+**Somebody is working on it (2026-09-20).** Asked for directly, watching a
+village raise a cottage: *"the construction site should show a builder
+working on it"*. A site was a picture of a building going up and nothing
+else: the stage sprite changed as labour accrued, and the plot was
+otherwise empty ground.
+
+The labour is not abstract, so the worker is not decoration. A settlement
+spends real spare hands on its projects — `SettlementSpareCapacity` scaled
+by `settlement_productivity`, the `builder_count` `ConstructionCatchup`
+charges the project's required hours against — and that number is already
+the difference between a hall that rises and one that does not. The
+builder is that number made visible.
+
+- **One builder per site that is really being worked.** A
+  `ConstructionWorkerMarker` stands on the plot while its settlement has
+  hands on the work, and is gone the moment the project completes, is
+  abandoned, or its chunk unloads — the site node's own life exactly
+  (`_sync_construction_site`/`_free_construction_site`), because a worker
+  outliving the site he works is a ghost.
+- **Nobody, when nobody is working.** `builder_count` is zero for a
+  settlement with no spare capacity — everyone fed, gathering, or too few
+  households to spare one — and a site that is accruing no labour shows no
+  worker. A figure standing over a project that has not moved in a week is
+  a lie the ledger would be telling for us.
+- **One figure, not a crew.** `builder_count` is settlement-WIDE and shared
+  across every project that settlement has going, so drawing one worker per
+  unit at each site would show the same hands two and three times over. One
+  builder per site is the honest reading of a shared number: somebody is
+  working here.
+- **A small purpose-built walker**, like the Farmer and the Lumberjack and
+  for the same reason — not the `NpcMarker` schedule stack. He paces his
+  own plot, works a spell, and moves on, and he never leaves the footprint:
+  the site is the job. Drawn by `ProceduralBuilderSprite` in the same tiny
+  silhouette style at the same `SIZE`, with a mallet up rather than an axe
+  held or a shaft pulled, so the three workers a village has out at once
+  are told apart at a glance.
+
 **The house tiers read as a ladder (2026-09-19).** Asked in the same breath:
 *"also scale down cottage to be smaller than house"*. Measured, a cottage
 drew 26.0 × 26.0 world px against a house's 39.5 × 24.0 — the smallest tier
@@ -1182,6 +1232,14 @@ tile, no dividers, no directional variants (see
   still the street. Full account in
   [civic_construction.md](civic_construction.md) "Meeting Hall". Tested
   (`test_civic_build_decision.gd`,
+  `test_earth_chunk_manager_city_hall_rising.gd`).
+- ✅ **Somebody is working on the site** (2026-09-20).
+  `ConstructionWorkerMarker` + `ProceduralBuilderSprite`: one builder on a
+  site its settlement really has hands on, gone with the site itself, and
+  legible at the size he is really drawn (both failures of the first draft
+  are pinned as measurements, not taste). Full account above, "Somebody is
+  working on it". Tested (`test_procedural_builder_sprite.gd`,
+  `test_construction_worker_marker.gd`,
   `test_earth_chunk_manager_city_hall_rising.gd`).
 - ✅ **The square under a hall, and the kerb round every plot**
   (2026-09-20). The overlay rule above leaves a building showing the

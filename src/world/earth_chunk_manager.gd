@@ -47,6 +47,8 @@ const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_spri
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const IllustratedFernPatch = preload("res://src/rendering/illustrated_fern_patch.gd")
 const ForestFern = preload("res://src/world/forest_fern.gd")
+const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
+const IllustratedBrambleSprite = preload("res://src/rendering/illustrated_bramble_sprite.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
@@ -78,6 +80,7 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
 const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
+const ConstructionWorkerMarker = preload("res://src/rendering/construction_worker_marker.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -840,6 +843,12 @@ var _grass_sims: Dictionary = {}  # Vector2i chunk_coord -> TallGrass
 ## had (docs/concept/ferns.md).
 var _fern_sims: Dictionary = {}  # Vector2i chunk_coord -> ForestFern
 var _fern_sprites: Dictionary = {}  # Vector2i chunk_coord -> {band index int -> MultiMeshInstance2D}
+## Vector2i chunk_coord -> BlackberryBramble, and its own sprites. One
+## ordinary Sprite2D per thicket rather than the fern's banded MultiMesh:
+## brambles are sparse and woody, and do not sway (see
+## IllustratedBrambleSprite).
+var _bramble_sims: Dictionary = {}
+var _bramble_sprites: Dictionary = {}  # chunk_coord -> {local cell Vector2i -> Sprite2D}
 ## Vector2i chunk_coord -> FlowerPatch, and the Sprite2D per flower cell.
 var _flower_patches: Dictionary = {}
 var _flower_sprites: Dictionary = {}
@@ -3890,6 +3899,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# stall somebody can buy a meal from this tick.
 		_step_stall_restock(settlement_id, village_market)
 		_step_merchant_visits(settlement_id, market, village_market)
+		# ...and the village pays its households out of what he paid
+		# (docs/concept/village_economy_balance.md mechanism 1) -- AFTER the
+		# cart, so gold that arrives this assessment is in a wallet this
+		# assessment, and out of the SAME purse he pays into, loaded or not.
+		_pay_village_wages(
+			settlement_id, village_market if village_market != null else market, household_ids
+		)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
@@ -4415,20 +4431,35 @@ func _step_village_estates(
 ## is what is left of it when nobody is looking. Taking from the live one
 ## first means a village burns the firewood in front of it before the
 ## firewood in its books.
+##
+## AND THE LARDER SHELVES (docs/concept/village_economy_balance.md
+## mechanism 5): _settlement_larder_stocks, the same STRUCTURE_MEAL_SOURCE_
+## IDS set a villager may eat off and the food reading already counts.
+## MEASURED before this (tools/probe_village_economy.gd, a real village
+## east of Berlin): the herbalist's crop sat on the farmhouse shelf -- 13,
+## 21, 43 units -- while the stall held none, so every cottage read "Herb
+## 0%" against a station basket asking for a tenth of a herb a day. A
+## household eats from the village, not from one of its cupboards. Drawn
+## stall, ledger, shelves: what the player can walk up to and open is the
+## last thing to go, the same rule the merchant's sale keeps.
 func _draw_estate_basket(market, village_market, settlement_id: String, demand: Dictionary) -> Dictionary:
 	if demand.is_empty():
 		return {}
+	var shelves: Array = _settlement_larder_stocks(settlement_id)
 	var stock := {}
 	if village_market != null:
 		for item_id in village_market.stock:
 			stock[item_id] = float(stock.get(item_id, 0.0)) + float(village_market.stock[item_id])
 	for item_id in market.stock:
 		stock[item_id] = float(stock.get(item_id, 0.0)) + float(market.stock[item_id])
+	for shelf in shelves:
+		for item_id in shelf.stock:
+			stock[item_id] = float(stock.get(item_id, 0.0)) + float(shelf.stock[item_id])
 
 	var result: Dictionary = EstateConsumption.draw(demand, stock, [])
 	for item_id in result["taken"]:
 		_take_from_settlement_stock(
-			market, village_market, settlement_id, str(item_id), float(result["taken"][item_id])
+			market, village_market, settlement_id, str(item_id), float(result["taken"][item_id]), shelves
 		)
 	return result["satisfaction"]
 
@@ -4541,8 +4572,12 @@ static func _is_fully_supplied(satisfaction: Dictionary) -> bool:
 ## is CARRIED here and only whole units are ever taken off that market; the
 ## live VillageMarket holds floats and takes its share exactly, needing no
 ## carry at all.
+##
+## `shelves` are the larder's StructureStocks (docs/concept/
+## village_economy_balance.md mechanism 5), drawn LAST and in whole units
+## like the emergence Market, against the same carry.
 func _take_from_settlement_stock(
-	market, village_market, settlement_id: String, item_id: String, amount: float
+	market, village_market, settlement_id: String, item_id: String, amount: float, shelves: Array = []
 ) -> void:
 	var left := amount
 	if left <= 0.0:
@@ -4558,19 +4593,30 @@ func _take_from_settlement_stock(
 	var carry: Dictionary = _settlement_estate_draw_carry.get(settlement_id, {})
 	var owed: float = float(carry.get(item_id, 0.0)) + left
 	var whole := int(floor(owed + 0.000001))
-	if whole > market.stock_of(item_id):
+	var taken := 0
+	if whole > 0:
+		var from_market := mini(whole, market.stock_of(item_id))
+		if from_market > 0:
+			market.remove_stock(item_id, float(from_market))
+			taken += from_market
+		for shelf in shelves:
+			if taken >= whole:
+				break
+			var from_shelf := mini(whole - taken, shelf.stock_of(item_id))
+			if from_shelf > 0 and shelf.remove_stock(item_id, from_shelf):
+				taken += from_shelf
+	if taken < whole:
 		# The village simply had less than it wanted, and does NOT go into
 		# debt for the rest -- the same rule EstateConsumption.draw itself
 		# keeps. Carrying the shortfall would turn one empty shelf into a
 		# bill the village pays off out of every future delivery, which is
 		# a famine that never ends.
-		whole = market.stock_of(item_id)
-		owed = float(whole)
-	if whole > 0:
-		market.remove_stock(item_id, float(whole))
-		var taken: Dictionary = _settlement_estate_whole_units_drawn.get(settlement_id, {})
-		taken[item_id] = int(taken.get(item_id, 0)) + whole
-		_settlement_estate_whole_units_drawn[settlement_id] = taken
+		whole = taken
+		owed = float(taken)
+	if taken > 0:
+		var drawn: Dictionary = _settlement_estate_whole_units_drawn.get(settlement_id, {})
+		drawn[item_id] = int(drawn.get(item_id, 0)) + taken
+		_settlement_estate_whole_units_drawn[settlement_id] = drawn
 	# maxf for the same reason VillageImmigration's own carry needs one: the
 	# epsilon that stops a float 0.9999999 from losing a whole unit can also
 	# carry `owed` just past `whole`, and a negative remainder compounds.
@@ -4735,7 +4781,12 @@ func _collect_estate_tax(
 	var households: Array = []
 	var balances: Array = []
 	for household_id in _households_in_settlement(settlement_id):
-		var household = _household_store.household_for(household_id)
+		# By the household's OWN id (get_household), not household_for, which
+		# looks a household up by one of its MEMBERS' entity ids and answered
+		# null for every household id here -- so the tax debited nobody and
+		# credited nothing, and its own test passed only because the same
+		# fixture's stock drew a merchant who funded the purse instead.
+		var household = _household_store.get_household(household_id)
 		if household == null or household.wallet == null:
 			continue
 		households.append(household)
@@ -4756,6 +4807,69 @@ func _collect_estate_tax(
 ## cannot yet collect, since a Wallet holds only whole gold. Carried rather
 ## than rounded (see _collect_estate_tax).
 var _settlement_tax_carry: Dictionary = {}
+
+## settlement_id -> the sub-coin remainder of its wage bill carried into the
+## next assessment (see _pay_village_wages).
+var _settlement_wage_carry: Dictionary = {}
+
+
+## docs/concept/village_economy_balance.md mechanism 1: every assessment,
+## the village pays its households a living wage out of `purse_market`'s
+## purse -- the object the merchant pays into, so the two cannot be
+## different tanks.
+##
+## MEASURED before this existed (tools/probe_village_economy.gd): a purse
+## reading 0 -> 20 -> 1 -> 1 -> 19 -> 1, wallets 0 at every sample, ten of
+## ten villagers broke and "worst: income" permanent, because the only wage
+## in the game was the meal a villager could not afford.
+##
+## A TRANSFER, never a faucet: every coin here leaves the purse through
+## NpcEconomy.pay_wage_from_purse, which debits and credits in one call.
+## Three rules, each deliberate and each test-pinned
+## (test_earth_chunk_manager_village_wages.gd):
+##
+## - **Whole coins, remainder carried.** A Wallet holds integer gold and a
+##   household's wage is a fraction of a coin a step, so the sub-coin part
+##   of the bill is carried per settlement -- the same idiom the tax and
+##   the estate draw already run on.
+## - **The poorest are paid first** when the purse cannot cover the bill
+##   (VillageWages.wage_payouts, deterministic).
+## - **A village pays what it has, not what it owes.** The unpaid part of a
+##   bill is NOT banked as arrears: the tax already refuses to keep a debt a
+##   household can never pay, and a debt the purse can never pay is the
+##   same fiction from the other side.
+func _pay_village_wages(settlement_id: String, purse_market, household_ids: Array[String]) -> void:
+	if purse_market == null or household_ids.is_empty():
+		return
+	var owed: float = (
+		VillageWages.wage_bill_for(household_ids.size(), 1.0)
+		+ float(_settlement_wage_carry.get(settlement_id, 0.0))
+	)
+	var coins := int(floor(owed + 0.000001))
+	_settlement_wage_carry[settlement_id] = maxf(owed - float(coins), 0.0)
+	if coins <= 0:
+		return
+	var households: Array = []
+	var balances: Array = []
+	for household_id in household_ids:
+		var household = _household_store.get_household(household_id)
+		if household == null or household.wallet == null:
+			continue
+		households.append(household)
+		balances.append(int(household.wallet.balance))
+	if households.is_empty():
+		return
+	# What is really there to pay, and no more: the shortfall is simply not
+	# paid, never owed.
+	coins = mini(coins, int(floor(NpcEconomy.purse_of(purse_market) + 0.000001)))
+	if coins <= 0:
+		return
+	var payouts: Array = VillageWages.wage_payouts(balances, coins)
+	for index in payouts.size():
+		var payout := int(payouts[index])
+		if payout <= 0:
+			continue
+		NpcEconomy.pay_wage_from_purse(purse_market, households[index].wallet, payout)
 
 ## settlement_id -> StaffedProduction's own per-recipe batch remainder.
 var _settlement_staffed_production_carry: Dictionary = {}
@@ -4896,6 +5010,30 @@ func _add_sawmill_timber_bonus(settlement_id: String, market, spare_capacity: in
 ## per-settlement remainder gathering and immigration already keep.
 var _settlement_merchant_carry: Dictionary = {}
 
+## settlement_id -> how many assessments of labour the village has done
+## since the cart last paid it; absent until it has ever been paid. Counted
+## on the assessment clock the wage bill is measured on rather than read
+## off the world age, so a settlement is paid for exactly the assessments
+## it worked, loaded or not.
+var _settlement_assessments_since_visit: Dictionary = {}
+
+
+## What the cart owes this village for the labour since his last call
+## (docs/concept/village_economy_balance.md mechanism 2): the wage bill
+## over that interval, times the ratio the request names. A FIRST call
+## pays for one round (SettlementSurplus.cover_assessments), and every
+## interval after is CAPPED at the round: a village that had nothing to
+## sell for a season is not owed a season's wages when it finally has one
+## herb; it is owed the round.
+func _merchant_labour_value_for(settlement_id: String) -> float:
+	var cover := SettlementSurplus.cover_assessments()
+	var assessments := cover
+	if _settlement_assessments_since_visit.has(settlement_id):
+		assessments = mini(int(_settlement_assessments_since_visit[settlement_id]), cover)
+	return MerchantVisit.labour_value_for(
+		VillageWages.wage_bill_for(_households_in_settlement(settlement_id).size(), float(assessments))
+	)
+
 
 ## A traveling merchant buys this settlement's surplus and pays gold into
 ## its shared purse (docs/concept/traveling_merchants.md).
@@ -4959,7 +5097,10 @@ func _step_stall_restock(settlement_id: String, village_market) -> void:
 func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
-	var reserved := _construction_reserve_for(settlement_id)
+	# This assessment's labour is owed whether or not he comes today; it is
+	# paid for on the call that follows it (see _merchant_labour_value_for).
+	if _settlement_assessments_since_visit.has(settlement_id):
+		_settlement_assessments_since_visit[settlement_id] = int(_settlement_assessments_since_visit[settlement_id]) + 1
 	# Every container this settlement really keeps goods in, market FIRST
 	# (docs/concept/traveling_merchants.md). He used to price market.stock
 	# alone while SettlementFood counted the shelves too, so a village that
@@ -4982,30 +5123,7 @@ func _step_merchant_visits(settlement_id: String, market, village_market = null)
 	views.append(market.stock)
 	for shelf in shelves:
 		views.append(shelf.stock)
-	# And the LARDER. `reserved` already holds back what the village's next
-	# BUILDING needs; nobody was holding back what its PEOPLE eat, so a
-	# merchant carried off the food and left the gold. Measured
-	# (tools/probe_village_famine.gd): purse climbing 21 -> 24 -> 25 with
-	# market food 0 at every sample, and the village dead by t=900.
-	#
-	# The cover is DERIVED, not picked: he calls at most VISITS_PER_DAY
-	# times a day when a village is barely worth the detour, so 1 /
-	# VISITS_PER_DAY days is exactly the longest a village may have to wait
-	# between sales -- the food it must still have when he next appears.
-	var census := _household_store.estate_census(_households_in_settlement(settlement_id))
-	if not census.is_empty():
-		var cover_days := 1.0 / MerchantVisit.VISITS_PER_DAY
-		var season := SeasonCycle.new().season_at(_world_age_seconds)
-		var eaten: float = float(
-			EstateConsumption.demand_for(census, cover_days, season)
-				.get(VillageEstates.FOOD_KIND_TOKEN, 0.0)
-		)
-		if eaten > 0.0:
-			var larder := SettlementSurplus.larder_reserve(
-				views, _merchant_food_ids(), int(ceil(eaten))
-			)
-			for item_id in larder:
-				reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
+	var reserved := _merchant_reserve_for(settlement_id, views)
 	var surplus := SettlementSurplus.combined(views)
 
 	var result: Dictionary = MerchantVisit.arrivals(
@@ -5016,9 +5134,12 @@ func _step_merchant_visits(settlement_id: String, market, village_market = null)
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(surplus, reserved)
-	if int(sale["paid"]) <= 0:
+	var sale: Dictionary = MerchantVisit.purchase(
+		surplus, reserved, _merchant_labour_value_for(settlement_id)
+	)
+	if float(sale["paid"]) <= 0.0:
 		return
+	_settlement_assessments_since_visit[settlement_id] = 0
 	# Out of the real containers the goods were actually in: paying for
 	# warehouse fish and taking them out of the market would invent goods in
 	# one place and destroy them in another.
@@ -5043,6 +5164,53 @@ func _step_merchant_visits(settlement_id: String, market, village_market = null)
 	# gold somewhere nobody could ever spend it.
 	var purse_market = village_market if village_market != null else market
 	NpcEconomy.deposit_to_purse(purse_market, float(sale["paid"]))
+
+
+## What the cart may NOT buy: item_id -> whole units held back, across the
+## `views` he is shown -- the construction reserve (what the village's next
+## building needs) plus the LARDER (docs/concept/village_economy_balance.md
+## mechanism 3): the village's minimum stock, SettlementSurplus.
+## minimum_stock_for, spread across whatever food it really has.
+##
+## `reserved` already held back the building's timber; nobody was holding
+## back what the PEOPLE eat, so a merchant carried off the food and left
+## the gold (tools/probe_village_famine.gd: purse climbing 21 -> 24 -> 25
+## with market food 0, village dead by t=900). The first larder was the
+## estate basket over 2.5 days -- a 3600-second-day basket handed a
+## 60-second-day cover -- and measured at 25 units for ten households, two
+## assessments of food (tools/probe_village_economy.gd). It is the
+## granary's own draw over the cart's own round now, in the same clock.
+func _merchant_reserve_for(settlement_id: String, views: Array) -> Dictionary:
+	var reserved := _construction_reserve_for(settlement_id)
+	var minimum := SettlementSurplus.minimum_stock_for(_households_in_settlement(settlement_id).size())
+	if minimum > 0:
+		var larder := SettlementSurplus.larder_reserve(views, _merchant_food_ids(), minimum)
+		for item_id in larder:
+			reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
+	# And the woodpile: `wood` is the fuel every hearth burns AND a good on
+	# the buy list, so a cart that carries the whole surplus stripped it
+	# every visit (fuel 0.00, roster 10 -> 6, measured). The minimum stock
+	# is the whole subsistence basket, not food alone.
+	var fuel := SettlementSurplus.minimum_fuel_for(_fuel_burn_over_cover_for(settlement_id))
+	if fuel > 0:
+		reserved[VillageEstates.FUEL_ITEM_ID] = int(reserved.get(VillageEstates.FUEL_ITEM_ID, 0)) + fuel
+	return reserved
+
+
+## What this settlement's estates burn as firewood over the cart's cover
+## (MerchantVisit.cover_seconds), in this season -- the basket's own fuel
+## term on the economy day it is priced in. 0.0 for a settlement nobody
+## founded.
+func _fuel_burn_over_cover_for(settlement_id: String) -> float:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return 0.0
+	var demand := EstateConsumption.demand_for(
+		_household_store.estate_census(household_ids),
+		MerchantVisit.cover_seconds() / ConstructionCatchup.SECONDS_PER_DAY,
+		_season_cycle.season_at(_world_age_seconds)
+	)
+	return float(demand.get(VillageEstates.FUEL_ITEM_ID, 0.0))
 
 
 ## The food on the merchant's own buy list, in the order he would take it.
@@ -9665,6 +9833,39 @@ func step_ferns(delta_seconds: float) -> void:
 ## coarser chunk-level _decorates gate, the same two-stage cutoff
 ## _sync_grass_sprites documents: a chunk is CHUNK_SIZE tiles square while
 ## the camera only ever shows a much smaller window.
+## One Sprite2D per standing thicket, added and freed as the sim changes --
+## the same shape _sync_scrub_sprites uses, and for the same reason: at
+## BlackberryBramble.MAX_PATCHES (36) a chunk's brambles are nowhere near the
+## density that would need instancing.
+func _sync_bramble_sprites(chunk_coord: Vector2i) -> void:
+	var sim = _bramble_sims.get(chunk_coord)
+	var sprites: Dictionary = _bramble_sprites.get(chunk_coord, {})
+	if sim == null:
+		return
+	for cell in sprites.keys():
+		if not sim.has_bramble(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in sim.get_patch_cells():
+		if sprites.has(cell):
+			continue
+		var texture := IllustratedBrambleSprite.frame_for(origin + cell)
+		if texture == null:
+			continue  # no sheet on disk: draw nothing rather than a box
+		var sprite := Sprite2D.new()
+		sprite.texture = texture
+		sprite.scale = Vector2.ONE * IllustratedBrambleSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+	_bramble_sprites[chunk_coord] = sprites
+
+
 func _sync_fern_sprites(chunk_coord: Vector2i) -> void:
 	if not _decorates(chunk_coord):
 		_drop_decoration(_fern_sprites, chunk_coord)
@@ -10481,6 +10682,51 @@ func tall_grass_growth_at(pixel_position: Vector2) -> float:
 ## `radius_tiles`, dropping plant fibre as a ground item (the fibre in the
 ## stick+shard+fibre crude-blade recipe). Returns true if a patch was
 ## harvested. Only mature patches yield fibre -- young shoots tear uselessly.
+## Picks the blackberries off a ripe bramble the player is standing at or
+## beside, dropping them on the ground through WorldItemBus -- the same real
+## ground-drop path harvest_grass_near uses, so nothing about carrying,
+## stacking or picking the item back up is special-cased here.
+##
+## Returns whether anything was actually picked. False is the ordinary
+## answer for most of the year: fruit is only ripe across autumn (see
+## BlackberryBramble.ripeness_at), and a patch already picked this bearing
+## year gives nothing more until the next one. Both refusals are the sim's,
+## not this function's -- it only asks.
+##
+## The CANE always survives, so unlike harvest_grass_near this does not
+## remove anything from the sim and the sprite stays exactly where it is: a
+## bramble is not an annual, and the same patch bears again next year.
+##
+## `year` is whole years elapsed, which is what makes "already picked" mean
+## "this season" rather than "ever" -- derived from the same world clock the
+## season itself comes from, so the two can never disagree.
+func pick_blackberries_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
+	var year_fraction := _season_cycle.year_fraction(_world_age_seconds)
+	var year := int(floor(_world_age_seconds / SeasonCycle.SECONDS_PER_YEAR))
+	var center_tile := _world_tile_for_pixel(pixel_position)
+	for dy in range(-radius_tiles, radius_tiles + 1):
+		for dx in range(-radius_tiles, radius_tiles + 1):
+			var tile := center_tile + Vector2i(dx, dy)
+			var chunk_coord := _chunk_coord_for_tile(tile)
+			var sim = _bramble_sims.get(chunk_coord)
+			if sim == null:
+				continue
+			var local := _local_coord(tile.x, tile.y)
+			var picked: int = sim.pick(local, year_fraction, year)
+			if picked <= 0:
+				continue
+			var drop_position := Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			WorldItemBus.item_dropped.emit(
+				ItemStack.new(Item.new("blackberry", "Blackberry", "food", 20), picked),
+				drop_position
+			)
+			return true
+	return false
+
+
 func harvest_grass_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
 	var center_tile := _world_tile_for_pixel(pixel_position)
 	for dy in range(-radius_tiles, radius_tiles + 1):
@@ -10657,6 +10903,12 @@ func plant_grass_at(pixel_position: Vector2) -> bool:
 ## ever touched the cosmetic per-tuft TallGrass sim, never
 ## EcosystemSimulation's aggregate density/land-health.
 func _graze_by_herbivores() -> void:
+	# Chunks where a fern was really taken, so their cards are rebuilt ONCE
+	# at the end rather than once per mouthful — a bite has to disappear on
+	# the frame the muzzle is in it (docs/concept/ecosystem_dynamics.md,
+	# "What is visible is what is real"), and re-syncing a whole chunk's
+	# bands per creature would pay for that many times over.
+	var cropped_ferns: Dictionary = {}
 	for chunk_key in _loaded_creatures.keys():
 		var chunk_coord: Vector2i = chunk_key
 		var sim: TallGrass = _grass_sims.get(chunk_coord)
@@ -10670,9 +10922,50 @@ func _graze_by_herbivores() -> void:
 			var growth := sim.get_growth(local)
 			if growth >= 1.0 and sim.graze(local):
 				_ecosystem.record_vegetation_harvest(chunk_coord, growth)
+			elif _crop_a_fern_under(chunk_coord, local):
+				cropped_ferns[chunk_coord] = true
 			_step_seed_dispersal(creature)
 			_step_grass_seed_caching(creature)
 			_step_squirrel_nut_caching(creature)
+	for chunk_coord in cropped_ferns:
+		_sync_fern_sprites(chunk_coord)
+
+
+## The mouthful a grazer takes when there is no grass under it: the fern
+## (docs/concept/ferns.md). Asked for directly — *"make ferns grazeable by
+## herbivores"*.
+##
+## A fern is what is taken when nothing better is underfoot, which is
+## exactly the model ecosystem_dynamics.md already states: *"an animal that
+## can see no bite but stands on living ground crops what is under it"*.
+## It fits what a real grazer does, too — bracken is toxic to livestock
+## and most grazers leave it standing while there is grass to be had, and
+## deer browse fronds mainly when the grazing is poor.
+##
+## The `elif` that puts grass first is a RAIL, not a preference a grazer
+## ever gets to express, and saying so here saves the next reader working
+## it out: grass is gated to grassland and ferns to forest, so no cell can
+## carry both and the contest cannot arise. A test pins that
+## (test_a_cell_is_either_meadow_or_wood_so_the_two_never_compete), because
+## an `elif` that looks like it settles something is worse than one that
+## says it settles nothing.
+##
+## Deliberately NOT a new GrazerForaging food kind. Those are things an
+## animal SEES and walks to, and nothing walks across a wood to reach a
+## fern. This is the standing-on-it path and only that.
+##
+## Mature only, the same rule grass has: what is croppable is what is
+## grown. True when something was really taken, so the caller knows whose
+## cards to rebuild.
+func _crop_a_fern_under(chunk_coord: Vector2i, local: Vector2i) -> bool:
+	var ferns = _fern_sims.get(chunk_coord)
+	if ferns == null:
+		return false
+	var growth: float = ferns.get_growth(local)
+	if growth < 1.0 or not ferns.graze(local):
+		return false
+	_ecosystem.record_vegetation_harvest(chunk_coord, growth)
+	return true
 
 
 ## Rodent scatter-hoarding (see SeedCaching / docs/concept/long_grass.md's
@@ -16370,7 +16663,7 @@ func _despawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i) -> vo
 func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
 	if local_cells.is_empty():
 		return
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims, _bramble_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.block_cells(local_cells)
@@ -16380,7 +16673,7 @@ func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> 
 ## The reverse, for a destroyed piece: bare ground again, open to the next
 ## seed like any other cell.
 func _unblock_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims, _bramble_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.unblock_cells(local_cells)
@@ -16391,6 +16684,8 @@ func _resync_ground_cover_sprites(chunk_coord: Vector2i) -> void:
 		_sync_grass_sprites(chunk_coord)
 	if _fern_sims.has(chunk_coord):
 		_sync_fern_sprites(chunk_coord)
+	if _bramble_sims.has(chunk_coord):
+		_sync_bramble_sprites(chunk_coord)
 	if _flower_patches.has(chunk_coord):
 		_sync_flower_sprites(chunk_coord)
 	if _scrub_sims.has(chunk_coord):
@@ -16568,10 +16863,28 @@ func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	# which edge and how thick, so physics and the step rule read the same
 	# source.
 	var rail := VillageFarm.fence_collider_rect(
-		tile_id, float(TerrainRenderer.TILE_SIZE), VillageFarm.FENCE_COLLIDER_THICKNESS_PX
+		tile_id, float(TerrainRenderer.TILE_SIZE), VillageFarm.FENCE_COLLIDER_THICKNESS_PX,
+		_rail_wood_height(tile_id)
 	)
 	if rail.size != Vector2.ZERO:
 		_spawn_rail_collision(global_cell, rail)
+
+
+## How tall this rail's wood is actually DRAWN, in tile-local pixels.
+##
+## A horizontal rail stands at the foot of its wood, and the two facings
+## anchor their art to opposite ends of the cell, so where that foot is
+## cannot be guessed from the tile -- it has to be read off the same
+## picture the player sees. Reported live: "The horizontal fences should
+## have the hitbox at the bottom of the rail ... so it should use fence
+## height instead of thickness".
+##
+## Measured by the sprite class rather than here (placed_art_rect), so the
+## body and the art can never drift apart.
+func _rail_wood_height(tile_id: String) -> float:
+	if not _illustrated_structure_sprite.has_subject(tile_id):
+		return 0.0
+	return _illustrated_structure_sprite.placed_art_rect(tile_id, TerrainRenderer.TILE_SIZE).size.y
 
 
 func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
@@ -17970,6 +18283,17 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_fern_sprites[chunk_coord] = {}
 	_sync_fern_sprites(chunk_coord)
 
+	# What the wood GIVES, beside what it is: the identical mask again, so a
+	# bramble no more seeds in a river or through a persisted floor than a
+	# fern or a blade does (docs/concept/brambles.md).
+	_bramble_sims[chunk_coord] = BlackberryBramble.new(
+		hash("%d_%d_blackberry_bramble" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width, chunk.height, chunk.biome, growth_blockers
+	)
+	_bramble_sims[chunk_coord].block_cells(built_cells)
+	_bramble_sprites[chunk_coord] = {}
+	_sync_bramble_sprites(chunk_coord)
+
 	# Aquatic vegetation (see AquaticVegetation, docs/concept/
 	# aquatic_foraging.md "Aquatic Foraging") -- only chunks that actually
 	# contain water get a real sim, the same "don't allocate a sim for a
@@ -18599,6 +18923,10 @@ func _advance_construction_labor(
 			_place_completed_construction_project(project)
 		elif is_building:
 			_sync_construction_site(chunk_coord, project)
+			# ... and the builder working it, present exactly while the
+			# crew above is real (docs/concept/building.md, "Somebody is
+			# working on it").
+			_sync_construction_worker(chunk_coord, project, float(capacity["builder_count"]))
 
 
 ## The real, live chunk-load caller for docs/concept/timber_construction.md's
@@ -19363,6 +19691,13 @@ func _place_completed_building_project(project) -> void:
 ## on chunk unload; rebuilt by the next labour tick after a reload.
 var _construction_site_nodes: Dictionary = {}
 
+## The builder working each of those sites -- chunk_coord -> {origin_local
+## -> ConstructionWorkerMarker}, the same shape as the sites themselves and
+## kept in step with them (see _sync_construction_worker). Asked for
+## directly, watching a village raise a cottage: "the construction site
+## should show a builder working on it".
+var _construction_site_workers: Dictionary = {}
+
 
 func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
@@ -19416,6 +19751,57 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
 
 
+## Keeps the builder on a site in step with whether anybody is really
+## working it (docs/concept/building.md, "Somebody is working on it").
+##
+## `builder_count` is the crew the ledger is actually spending on this
+## settlement's projects this tick -- its spare hands scaled by its own
+## productivity. Zero is a real answer (a village with nobody to spare
+## builds nothing), and a site accruing no labour shows no worker rather
+## than a figure standing over work that is not happening.
+##
+## ONE builder, never a crew of `builder_count`: that number is
+## settlement-WIDE and shared across every project the settlement has
+## going, so drawing one worker per unit at each site would show the same
+## hands twice over. One figure per site is the honest reading of it.
+func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: float) -> void:
+	if project == null:
+		return
+	var origin_local: Vector2i = project.origin
+	if builder_count <= 0.0:
+		_free_construction_worker(chunk_coord, origin_local)
+		return
+	if not _construction_site_workers.has(chunk_coord):
+		_construction_site_workers[chunk_coord] = {}
+	var by_origin: Dictionary = _construction_site_workers[chunk_coord]
+	var standing = by_origin.get(origin_local)
+	if standing != null and is_instance_valid(standing):
+		return
+	var footprint := BuildingCatalog.footprint_of(project.blueprint_id)
+	var plot := Rect2(
+		Vector2(chunk_coord * CHUNK_SIZE + origin_local) * TerrainRenderer.TILE_SIZE,
+		Vector2(footprint) * TerrainRenderer.TILE_SIZE
+	)
+	var worker := ConstructionWorkerMarker.new()
+	worker.plot = plot
+	# The site's own seed, so one builder works one site the same way on
+	# every reload -- the same seed the stage sprite is picked from.
+	worker.seed_value = _house_site_seed(
+		chunk_coord, chunk_coord * CHUNK_SIZE + origin_local, project.blueprint_id
+	)
+	worker.position = plot.position + plot.size * 0.5
+	_entities_parent.add_child(worker)
+	by_origin[origin_local] = worker
+
+
+func _free_construction_worker(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
+	var by_origin: Dictionary = _construction_site_workers.get(chunk_coord, {})
+	var worker = by_origin.get(origin_local)
+	if worker != null and is_instance_valid(worker):
+		worker.free()
+	by_origin.erase(origin_local)
+
+
 ## The first sheet of `chain` (BuildingCatalog.finished_sheet_chain /
 ## construction_sheet_chain) whose file is really on disk, as a texture
 ## scaled to a `footprint_width_tiles`-wide footprint -- null when none of
@@ -19450,6 +19836,9 @@ func _free_construction_site(chunk_coord: Vector2i, origin_local: Vector2i) -> v
 	if node != null and is_instance_valid(node):
 		node.free()
 	by_origin.erase(origin_local)
+	# The builder goes with the site he works -- a worker standing over a
+	# finished building is a ghost.
+	_free_construction_worker(chunk_coord, origin_local)
 
 
 func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
@@ -19457,6 +19846,12 @@ func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
 	for origin_local in by_origin.keys():
 		_free_construction_site(chunk_coord, origin_local)
 	_construction_site_nodes.erase(chunk_coord)
+	# A builder whose site was never spawned this session (a project that
+	# advanced while the chunk was loaded but never drew a stage) still has
+	# to go with the chunk he works in.
+	for origin_local in _construction_site_workers.get(chunk_coord, {}).keys():
+		_free_construction_worker(chunk_coord, origin_local)
+	_construction_site_workers.erase(chunk_coord)
 
 
 ## The house pieces the water reclaims (see _reclaim_pieces_standing_in_
@@ -19842,6 +20237,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		mmi.free()
 	_fern_sprites.erase(chunk_coord)
 	_fern_sims.erase(chunk_coord)
+
+	for sprite in _bramble_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_bramble_sprites.erase(chunk_coord)
+	_bramble_sims.erase(chunk_coord)
 
 	for markers_by_crop in _wild_crop_markers.get(chunk_coord, {}).values():
 		for marker in markers_by_crop.values():

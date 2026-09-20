@@ -909,18 +909,28 @@ func test_a_real_chunk_load_leaves_the_plaza_paved():
 
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
+const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
+const VillageWages = preload("res://src/world/village_wages.gd")
 
 
+## A village keeps its minimum stock (docs/concept/village_economy_balance
+## .md mechanism 3), so the catch it is paid for is what lies ABOVE it.
 func test_a_village_with_goods_is_eventually_paid_by_a_merchant():
 	var market = _market()
-	market.add_stock("fish", 60.0)
+	var kept := SettlementSurplus.minimum_stock_for(manager.household_count_for_settlement(_settlement_id))
+	var stocked := float(kept + 60)
+	market.add_stock("fish", stocked)
 	assert_eq(NpcEconomy.purse_of(market), 0.0, "precondition: an empty purse")
 
 	for i in 400:
 		manager._step_merchant_visits(_settlement_id, market)
 
 	assert_gt(NpcEconomy.purse_of(market), 0.0, "somebody carried the catch away and paid for it")
-	assert_lt(market.stock.get("fish", 0.0), 60.0, "and the fish really left the village")
+	assert_lt(market.stock.get("fish", 0.0), stocked, "and the fish really left the village")
+	assert_true(
+		float(market.stock.get("fish", 0.0)) >= float(kept),
+		"but never the minimum stock: %s fish left of %d kept" % [market.stock.get("fish", 0.0), kept]
+	)
 
 
 func test_a_village_with_nothing_to_sell_is_never_paid():
@@ -931,11 +941,19 @@ func test_a_village_with_nothing_to_sell_is_never_paid():
 
 
 ## The gold and the goods have to balance: this is the one place new money
-## enters a village, so it must enter for a reason.
+## enters a village, so it must enter for a reason. What the beams are
+## worth is their farm-gate value, or the village's labour value when that
+## is more (docs/concept/village_economy_balance.md mechanism 2: a first
+## call pays for one round of the wage bill, and the cart takes the whole
+## surplus to pay it).
 func test_the_gold_paid_is_exactly_the_goods_taken():
 	var market = _market()
 	market.add_stock("beam", 40.0)
 	var before: float = market.stock["beam"]
+	var labour: float = MerchantVisit.labour_value_for(VillageWages.wage_bill_for(
+		manager.household_count_for_settlement(_settlement_id),
+		float(SettlementSurplus.cover_assessments())
+	))
 
 	for i in 200:
 		manager._step_merchant_visits(_settlement_id, market)
@@ -943,7 +961,7 @@ func test_the_gold_paid_is_exactly_the_goods_taken():
 	var taken: float = before - float(market.stock.get("beam", 0.0))
 	assert_gt(taken, 0.0, "precondition: a sale happened")
 	assert_almost_eq(
-		NpcEconomy.purse_of(market), taken * MerchantVisit.price_of("beam"), 0.001,
+		NpcEconomy.purse_of(market), maxf(taken * MerchantVisit.price_of("beam"), labour), 0.001,
 		"the purse holds exactly what the beams were worth"
 	)
 
