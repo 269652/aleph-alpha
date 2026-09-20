@@ -197,9 +197,11 @@ func _process(delta: float) -> void:
 ## WORK_SECONDS, pick the next. Leaves for the store once he has worked
 ## what one load is worth and there is another load waiting for him.
 ##
-## Ungated on purpose -- he never crosses a tile boundary that WalkGate
-## could refuse here, and a builder frozen against his own site by a gate
-## would be strictly worse than one walking over its bare ground.
+## Ungated and unrouted on purpose: the plot IS his own bare site -- a
+## project's footprint stays clear ground until the finished building is
+## placed on it, and he is freed the same moment that happens -- so there
+## is nothing here for a gate to refuse, and a builder frozen against his
+## own site would be strictly worse than one walking over it.
 func _step_working(delta: float) -> void:
 	if _spells_since_load >= WORK_SPELLS_PER_LOAD and not _next_load().is_empty():
 		_phase = Phase.FETCHING
