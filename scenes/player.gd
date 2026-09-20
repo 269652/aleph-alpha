@@ -1881,6 +1881,11 @@ func apply_venom() -> void:
 	active_venom_debuffs = _debuff_stack.apply(
 		active_venom_debuffs, VenomModel.DEBUFF_ID, VenomModel.DURATION_SECONDS, VenomModel.MAX_STACKS
 	)
+	# You learn poison from being poisoned (docs/concept/spell_weaving.md).
+	# The only thing that applies venom is the venomous snake, which lives
+	# only in the far country -- so this particular mote is a souvenir of
+	# having gone somewhere dangerous, which is the pacing working.
+	witness(SpellMote.PHENOMENON_ENVENOMATED)
 
 
 ## Authority-only: deals venom's real damage-over-time (see
@@ -2421,6 +2426,17 @@ func _authority_step(delta: float) -> void:
 
 	_answer_clock_seconds += delta
 	survival.advance(delta)
+	# What this moment teaches, if anything (docs/concept/spell_weaving.md).
+	# Both are conditions the step already knows about; witness() is a
+	# no-op after the first time, so this is a dictionary probe per frame.
+	if survival.is_freezing():
+		witness(SpellMote.PHENOMENON_FROZE)
+	elif not _motes.has(SpellMote.first_witness_atom_for(SpellMote.PHENOMENON_WARMED_AT_A_FIRE)):
+		# Only asked while it could still teach something: _has_campfire is
+		# a real world-proximity scan and is not worth running every frame
+		# for a character who already learned fire.
+		if _has_campfire():
+			witness(SpellMote.PHENOMENON_WARMED_AT_A_FIRE)
 	# Running costs the legs (docs/concept/survival.md's "Stamina scope",
 	# SprintCost). Only while actually MOVING: standing still with the
 	# sprint key held is not running, and charging the player for it would

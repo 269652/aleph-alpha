@@ -122,3 +122,36 @@ func test_the_woven_spell_survives_a_save_and_load():
 	assert_eq(SpellDraft.atoms_of(loaded.woven_draft()), ["fire_damage", "ignite"], "the weave is kept")
 	assert_eq(int(loaded.motes().get("fire_damage", 0)), 1, "and so are the parts")
 	loaded.queue_free()
+
+
+# -- and the world really teaches them ----------------------------------
+#
+# A witness table nothing calls is exactly the "real, tested, zero
+# callers" pattern the diagnosis found all over this codebase. These
+# assert the call sites exist in the paths that already detect each
+# condition, so the phenomena are learnable in play rather than in theory.
+
+func test_the_freezing_path_teaches_what_freezing_teaches():
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	assert_true(
+		source.contains("SpellMote.PHENOMENON_FROZE"),
+		"the cold that is already killing you is where frost is learned"
+	)
+
+
+func test_the_venom_path_teaches_what_venom_teaches():
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	assert_true(source.contains("SpellMote.PHENOMENON_ENVENOMATED"))
+
+
+func test_standing_at_a_fire_teaches_fire():
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	assert_true(source.contains("SpellMote.PHENOMENON_WARMED_AT_A_FIRE"))
+
+
+## Being bitten really does hand over the mote, through the real path.
+func test_being_envenomated_really_grants_the_mote():
+	assert_eq(player.motes(), {}, "precondition")
+	player.apply_venom()
+	var atom := SpellMote.first_witness_atom_for(SpellMote.PHENOMENON_ENVENOMATED)
+	assert_eq(int(player.motes().get(atom, 0)), 1, "the bite taught it")

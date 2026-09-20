@@ -291,10 +291,16 @@ holds both halves of pillar 6 at once.
   nothing on screen lets them arrange one: the socket row, the pouch and
   the live name/cost/reaction header are the next slice. Until then the
   loop is reachable only through code.
-- ⬜ **Nothing calls `witness` from the world yet**, so the phenomena
-  (standing at a fire, freezing, being envenomated, caught in a storm)
-  grant nothing in play. Each is a one-line call at a site that already
-  detects the condition.
+- ✅ **Three phenomena really teach, in play** (2026-09-20). Being
+  envenomated (`Player.apply_venom` — and the only thing that applies
+  venom is the far country's snake, so that mote is a souvenir of having
+  gone somewhere dangerous, which is the pacing working), freezing, and
+  standing at a fire you lit, each called from the path that already
+  detects the condition. `witness` is a no-op after the first time, so the
+  per-frame cost is a dictionary probe; the fire check, which is a real
+  world scan, is only run while it could still teach something.
+- ⬜ The storm, the dark and the hard climb are specified and tabled but
+  have no call site yet.
 
 
 - ✅ `SpellMote`: `mote_for`, `display_name_for`, `rarity_of`,
