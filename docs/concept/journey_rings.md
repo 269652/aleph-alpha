@@ -162,6 +162,30 @@ construction.
   want", and stops.
 - Not a fence. See pillar 3; the reflection test is the enforcement.
 
+## Two scales, both true
+
+This project carries a deliberate scale fiction, named in
+`src/world/cave_network.gd`'s own header: the **same** chunk is 32 km of
+real Earth on the map and about 45 m of ground underfoot at play scale.
+Both are real. A distance is only meaningful once it says which one it
+is, so this module answers both and never blurs them:
+
+| question | function | the far country (61 chunks) |
+|---|---|---|
+| where is this on the planet | `metres_from_spawn` | 1 952 000 m |
+| how far will I walk | `walking_metres_from_spawn` | ~2 784 m |
+
+The planet's figure is what a map, a latitude or a climate band must
+use. The walking figure is what any line a **player** reads must use,
+and it is the same scale [survival.md](survival.md)'s `SprintCost`
+measures a burst in — so "the village is 340 m away" and "one burst
+carries 80 m" are numbers that can honestly be compared.
+
+Found in adversarial review: this module reported the far country at
+1 952 000 m while the sprint tests measured the safe ring at 684 m from
+the *same* `RegionDifficulty` radii. Neither was wrong; one word was
+doing two jobs.
+
 ## Status
 
 - ✅ `JourneyRing` pure module: table, `ring_at`, `tier_at_distance`,

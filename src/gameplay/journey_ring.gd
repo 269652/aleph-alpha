@@ -226,3 +226,36 @@ static func crossing_between(from_distance: int, to_distance: int) -> Dictionary
 ## out this is in a unit a person owns rather than in chunks.
 static func metres_from_spawn(distance: int) -> float:
 	return float(distance) * METRES_PER_CHUNK
+
+
+## The play-scale tile, in pixels, and the pixels a real metre is
+## (GroundSlide.PX_PER_METER -- the player-height yardstick every other
+## real-world-grounded size in this codebase is read against). Restated
+## rather than preloaded for the same purity reason KM_PER_TILE is, and
+## pinned against their real sources by test.
+const TILE_SIZE_PX := 16
+const PX_PER_METRE := 11.22
+
+
+## How far `distance` chunks really is ON FOOT, in metres of ground.
+##
+## This project carries a deliberate scale fiction (see
+## src/world/cave_network.gd's own note on it): the SAME chunk is 32 km of
+## real Earth on the map and about 45 m of ground underfoot at play scale.
+## Both are true and neither is a bug -- but they answer different
+## questions, and a distance is only meaningful once it says which one it
+## is.
+##
+## `metres_from_spawn` above is the planet's answer, and is what a map, a
+## latitude or a climate band must use. THIS is the player's answer, and
+## is what any line a player reads about walking somewhere must use: the
+## same scale `SprintCost.burst_distance_metres` measures a sprint in, so
+## "the village is 340 m away" and "one burst carries 80 m" are numbers
+## that can honestly be compared.
+##
+## Found in adversarial review: this module reported the far country as
+## 1 952 000 m while test_sprint_cost.gd measured the safe ring at 684 m
+## from the same RegionDifficulty radii. Neither was wrong; the same word
+## was doing two jobs.
+static func walking_metres_from_spawn(distance: int) -> float:
+	return float(distance) * float(CHUNK_SIZE_TILES) * float(TILE_SIZE_PX) / PX_PER_METRE

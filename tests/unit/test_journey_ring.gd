@@ -416,3 +416,62 @@ func test_crossing_between_is_exactly_a_change_of_ring_for_every_pair():
 					"%d -> %d is inside one ring but reported a crossing"
 					% [from_distance, to_distance]
 				)
+
+
+# -- the two scales, both true, never confused -------------------------
+#
+# This project has a deliberate, documented scale fiction (see
+# src/world/cave_network.gd's own note): the SAME chunk is 32 km of real
+# Earth on the map and about 45 m of ground underfoot at play scale. Both
+# are real; a distance is only meaningful once it says which one it is.
+#
+# Found in adversarial review: metres_from_spawn returns the map figure
+# (1 952 000 m for the far country) while test_sprint_cost.gd converts the
+# same RegionDifficulty radii through the play scale (684 m for the safe
+# ring). Neither was wrong; they answered different questions with the
+# same word. A player-facing "the village is N metres away" must be the
+# one they will WALK.
+
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+const SprintCost = preload("res://src/gameplay/sprint_cost.gd")
+
+
+func test_the_map_metres_are_the_earth_scale_figure():
+	assert_almost_eq(
+		JourneyRing.metres_from_spawn(1), float(JourneyRing.METRES_PER_CHUNK), 0.001,
+		"one chunk of the real planet"
+	)
+
+
+func test_the_walking_metres_are_the_play_scale_figure():
+	assert_almost_eq(
+		JourneyRing.walking_metres_from_spawn(1),
+		float(JourneyRing.CHUNK_SIZE_TILES) * float(SprintCost.TILE_SIZE_PX) / GroundSlide.PX_PER_METER,
+		0.01,
+		"one chunk of ground underfoot, at the same scale sprint range is measured in"
+	)
+
+
+## The whole point of separating them: they must not be the same number,
+## and the walking one must be the small one.
+func test_walking_a_chunk_is_far_shorter_than_the_map_says():
+	assert_lt(
+		JourneyRing.walking_metres_from_spawn(1), JourneyRing.metres_from_spawn(1),
+		"the ground underfoot is the play scale, not the planet's"
+	)
+
+
+## And it agrees with the module that measures how far a burst carries:
+## the safe ring in walking metres is what SprintCost's own test asserts
+## a burst cannot cross.
+func test_the_walking_scale_agrees_with_what_a_sprint_can_cover():
+	var safe_ring_metres := JourneyRing.walking_metres_from_spawn(RegionDifficulty.EASY_RADIUS_CHUNKS)
+	assert_gt(
+		safe_ring_metres, SprintCost.burst_distance_metres() * 5.0,
+		"the same relationship test_sprint_cost.gd pins, read through this module"
+	)
+
+
+func test_the_restated_play_scale_constants_are_their_real_sources():
+	assert_eq(JourneyRing.TILE_SIZE_PX, SprintCost.TILE_SIZE_PX)
+	assert_almost_eq(JourneyRing.PX_PER_METRE, GroundSlide.PX_PER_METER, 0.0001)
