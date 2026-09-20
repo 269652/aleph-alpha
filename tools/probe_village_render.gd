@@ -25,11 +25,15 @@ const STEPS := 30
 const OUT_DIR := "res://tools/village_ground_renders"
 const VIEW := Vector2i(720, 480)
 
-## The middle of each frame, saved again at 4x: a kerb is EDGE_PIXELS +
-## TOP_PIXELS art pixels wide, which is a few screen pixels at the game's
-## own zoom -- big enough to read in play, too small to judge in a
-## screenshot without magnifying it.
-const CLOSEUP := Vector2i(240, 160)
+## The middle of each frame, saved again at CLOSEUP_SCALE: a kerb is
+## ProceduralFootprintKerbSprite.BAND_PIXELS art pixels wide, which is a
+## few screen pixels at the game's own zoom -- big enough to read in play,
+## too small to judge in a screenshot without magnifying it. Wide enough
+## to hold the biggest footprint in the catalog (a 4x3 hall is 256x192
+## screen pixels at that zoom) plus the kerb round its outside, since the
+## kerb is exactly the thing this crop exists to show.
+const CLOSEUP := Vector2i(320, 240)
+const CLOSEUP_SCALE := 3
 
 const Player = preload("res://scenes/player.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -98,12 +102,12 @@ func _init() -> void:
 		var path := "%s/%s.png" % [OUT_DIR, shot["name"]]
 		image.save_png(path)
 		print("saved %s   centred on tile %s" % [path, shot["tile"]])
-		# ... and the same frame's own middle at 4x, which is the only way
-		# to actually look at a kerb three art pixels wide.
+		# ... and the same frame's own middle, magnified: the only way to
+		# actually look at a kerb a few art pixels wide.
 		var closeup := image.get_region(Rect2i(
 			VIEW.x / 2 - CLOSEUP.x / 2, VIEW.y / 2 - CLOSEUP.y / 2, CLOSEUP.x, CLOSEUP.y
 		))
-		closeup.resize(CLOSEUP.x * 4, CLOSEUP.y * 4, Image.INTERPOLATE_NEAREST)
+		closeup.resize(CLOSEUP.x * CLOSEUP_SCALE, CLOSEUP.y * CLOSEUP_SCALE, Image.INTERPOLATE_NEAREST)
 		var closeup_path := "%s/%s_closeup.png" % [OUT_DIR, shot["name"]]
 		closeup.save_png(closeup_path)
 		print("saved %s" % closeup_path)

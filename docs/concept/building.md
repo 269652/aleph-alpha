@@ -320,7 +320,12 @@ its art, built from the same `footprint_px` the `StaticBody2D`'s
 picture of one that can drift from it, which is what
 `test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect` pins.
 Its middle is fully transparent: the kerb marks the plot, it never paints
-over the ground the rule above just chose. A construction site draws no
+over the ground the rule above just chose. "Visible" is measured, not
+eyeballed: `contrast_over` composites the kerb's own drawn pixels onto a
+ground and returns how far they land from it, and every ground a kerb can
+lie on must clear `MIN_GROUND_CONTRAST` -- 0.44 over the village's
+cobbles, 0.28 over a worn yard, 0.31 over the grass a yard dithers into,
+against a floor of 0.12. A construction site draws no
 kerb -- it has no collision body yet, and a border round a hitbox that
 does not exist would be a lie.
 

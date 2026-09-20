@@ -23946,7 +23946,14 @@ drift from it, pinned by
 `test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect`. Its
 middle is fully transparent, so it never paints over the ground the rule
 above just chose. A construction site draws none — it has no collision
-body yet.
+body yet. "Visible" is a measured property rather than an eyeballed one:
+`contrast_over` composites the kerb's own drawn pixels onto a ground and
+returns how far they land from it, and
+`test_the_kerb_stands_out_from_every_ground_it_can_lie_on` holds all
+three real grounds above `MIN_GROUND_CONTRAST` — 0.44 over the village's
+cobbles, 0.28 over a worn yard, 0.31 over the grass a yard dithers into,
+against a floor of 0.12 — with a second test recomputing that number off
+the image itself so the function cannot drift from the drawing.
 
 **After, on the same three villages:** 3 halls and 3 street-corner plots
 on cobbles, 20 yards dithering into grassland or forest, 2 fully enclosed

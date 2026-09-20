@@ -83,3 +83,60 @@ func test_a_single_tile_footprint_still_gets_a_whole_kerb():
 	assert_eq(image.get_width(), TerrainRenderer.ART_TILE_SIZE)
 	for x in image.get_width():
 		assert_gt(image.get_pixel(x, 0).a, 0.0, "top edge at x=%d" % x)
+
+
+# -- visible against every ground it can lie on ----------------------------
+#
+# "So the hitbox is visible" is the whole ask, and a kerb lies on three
+# real grounds: the village's cobbles (a hall on its square), the worn
+# earth yard of a plot on open ground, and -- where the yard dithers into
+# it -- the grass beside the plot. A colour that reads against one and
+# washes out on another is a border only some of the time, so the margin
+# is measured rather than eyeballed.
+
+## Measured off the real render tools/probe_village_render.gd produces,
+## inside a cottage's own kerb: rgb(0.21, 0.29, 0.07). The open grass
+## beside it reads rgb(0.22, 0.33, 0.06); this is the harder of the two
+## because it is what the kerb's own dark band sits closest to.
+const GRASS_BESIDE_A_PLOT := Color(0.22, 0.33, 0.06)
+
+
+func _grounds() -> Array:
+	return [
+		{"name": "the village's cobbles", "color": TerrainRenderer.ROAD_COLOR},
+		{"name": "a worn earth yard", "color": TerrainRenderer.EARTH_COLOR},
+		{"name": "the grass beside a plot", "color": GRASS_BESIDE_A_PLOT},
+	]
+
+
+func test_the_kerb_stands_out_from_every_ground_it_can_lie_on():
+	for ground in _grounds():
+		assert_gt(
+			kerb.contrast_over(ground["color"]),
+			ProceduralFootprintKerbSprite.MIN_GROUND_CONTRAST,
+			"a kerb washed out against %s is not a visible hitbox" % ground["name"]
+		)
+
+
+## The contrast is a property of the PIXELS the kerb really draws, not of
+## a palette constant somebody could change without it -- recomputed here
+## straight off the image, so the two cannot drift apart.
+func test_that_contrast_is_measured_off_the_pixels_it_really_draws():
+	var image := kerb.generate_image(Vector2i(1, 1))
+	for ground in _grounds():
+		var background: Color = ground["color"]
+		var strongest := 0.0
+		for y in image.get_height():
+			for x in image.get_width():
+				var drawn := image.get_pixel(x, y)
+				if drawn.a <= 0.0:
+					continue
+				var over := Vector3(
+					drawn.a * drawn.r + (1.0 - drawn.a) * background.r,
+					drawn.a * drawn.g + (1.0 - drawn.a) * background.g,
+					drawn.a * drawn.b + (1.0 - drawn.a) * background.b
+				)
+				strongest = maxf(
+					strongest, (over - Vector3(background.r, background.g, background.b)).length()
+				)
+		assert_almost_eq(kerb.contrast_over(background), strongest, 0.0001, ground["name"])

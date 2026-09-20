@@ -46,6 +46,18 @@ const TOP_PIXELS := 1
 ## it wants to know which pixels are kerb and which are the plot inside it.
 const BAND_PIXELS := EDGE_PIXELS + TOP_PIXELS
 
+## The least any ground may wash the kerb out, as a distance in the RGB
+## unit cube once the kerb's own pixels are composited over it. "So the
+## hitbox is visible" is the whole point of drawing it, and a kerb lies on
+## three real grounds: the village's cobbles under a hall on its square,
+## the worn earth yard of a plot on open ground, and the grass a yard
+## dithers into. Measured, this drawing clears it on all three -- 0.44
+## over cobbles, 0.28 over a worn yard, 0.31 over grass -- so this is a
+## floor with real margin beneath every one of them rather than a number
+## fitted to them (see
+## test_the_kerb_stands_out_from_every_ground_it_can_lie_on).
+const MIN_GROUND_CONTRAST := 0.12
+
 ## One joint every this many art pixels along the run -- 8 art pixels is a
 ## quarter of a tile, so a 2x2 plot shows eight stones a side rather than
 ## one long curb or a dotted line.
@@ -81,6 +93,29 @@ func generate_image(footprint: Vector2i) -> Image:
 				# you cannot see.
 				image.set_pixel(x, y, _KERB_TOP)
 	return image
+
+
+## How far this kerb's own drawn pixels end up from `ground` once
+## composited over it -- the RGB distance of whichever band stands out
+## most, which is what decides whether the outline reads at all. Measured
+## off a real generated image rather than off the palette constants, so a
+## change to the drawing is a change to this answer.
+func contrast_over(ground: Color) -> float:
+	var image := generate_image(Vector2i(1, 1))
+	var beneath := Vector3(ground.r, ground.g, ground.b)
+	var strongest := 0.0
+	for y in image.get_height():
+		for x in image.get_width():
+			var drawn := image.get_pixel(x, y)
+			if drawn.a <= 0.0:
+				continue
+			var over := Vector3(
+				drawn.a * drawn.r + (1.0 - drawn.a) * ground.r,
+				drawn.a * drawn.g + (1.0 - drawn.a) * ground.g,
+				drawn.a * drawn.b + (1.0 - drawn.a) * ground.b
+			)
+			strongest = maxf(strongest, (over - beneath).length())
+	return strongest
 
 
 ## That outline scaled for a Sprite2D lying on a footprint at `tile_size`
