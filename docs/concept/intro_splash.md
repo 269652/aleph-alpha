@@ -1462,6 +1462,13 @@ Asked directly: *"Can you frame stabilize the intro sprite animation?"* —
 the same thing this file had been re-reported for repeatedly
 (*"stabilize the intro video"*, *"it jumps left to right"*).
 
+> **Superseded (2026-09-20).** This section concluded that the sheet
+> shipping then was already stable, on a measurement that turned out to be
+> saturated — the ruler could not move. See "The wobble is in the art, not
+> in where it was cut" at the end of this file. The reasoning below about
+> geometry versus lighting is still correct and still worth keeping; the
+> conclusion it was used to reach was not.
+
 **On the sheet shipping now, it is already stable, and that is measured
 rather than assumed.** The globe's right limb sits at **exactly the same
 column in all 100 frames past the fade-in — zero spread**, not merely a
@@ -1612,3 +1619,134 @@ fixed. `DISPLAY_SCALE` is **2**, the option that does not go under the 237
 the player accepted; 1 is a one-line change if a smaller intro is wanted.
 The test now asserts that reachable property rather than a literal that
 nothing can satisfy.
+
+
+## The wobble is in the art, not in where it was cut (2026-09-20)
+
+Reported live, after five separate stabilisation passes had each shipped a
+real fix: *"Can you properly stabilize the intro animation? The earth
+should be scaled and stabilized so there's no jitter and zooming"*.
+
+### What was measured
+
+Every consecutive pair of frames was registered against the next
+(`tools/probe_intro_stability.gd`, and a full 2-D similarity fit offline).
+The jitter is not spread through the sequence at all:
+
+| transitions | movement | rescale |
+|---|---|---|
+| the 45 **inside** a contact-sheet row | ≤ 1px | ≤ 0.5% |
+| the 4 that **cross** a row boundary | 4.5–9px | up to 6% |
+
+And the direction is consistent: the earth is drawn **about 4% smaller and
+a few pixels higher in each successive row of the sheet**. As drawn, its
+lit band runs **136, 131, 127, 118 px** across rows 1 to 4. At 10fps with
+ten frames to a row, that is a lurch once every second — which is exactly
+the report.
+
+### Why five earlier passes could not fix it
+
+`intro.png` is a 10×5 contact sheet **drawn by an image model**, not a
+rendered video cut into cells. Nothing made it draw the earth at one size
+in all five rows.
+
+Passes eight through twelve each corrected the *pipeline* — the upscale
+factor, the texture filter, the crop window, the display size — and every
+one of them found something real and fixed it. None of them could have
+worked. A crop cannot make two drawings the same drawing.
+
+### The ruler that was blind
+
+`test_the_globe_holds_the_same_position_in_every_frame` existed precisely
+to catch this, and reported **zero spread across every frame**. Its ruler,
+`_globe_right_limb`, takes the rightmost pixel above 0.02 luminance
+anywhere in the frame — and on this sheet the glow and the light streak
+reach the frame's own right edge in essentially every frame. It returns
+the last column, saturated, whatever the art does.
+
+It even has a mutation test, `test_the_limb_measurement_would_notice_a_
+frame_that_moved`, and that test passes: a frame blitted 3px left really
+does read as 3px moved, because the blit leaves black at the right edge
+where the real frames have glow.
+
+**A ruler can pass its own mutation test and still be pointed at a
+quantity that cannot move.** The mutation has to be applied to the real
+data, not to a synthetic case constructed to be measurable.
+
+### What a frame is now
+
+Three steps, one per thing that is wrong with reading a fixed window out
+of this sheet (`IntroSplashSheet._frame_image`):
+
+1. **Every clean cell is resampled to one size.** The cells are not on a
+   pitch — the clean widths run 171/165/164/164/163/164/163/163/165/170
+   and the heights 192/185/193/178/185 — and each holds the same drawing
+   at its own cell's size (measured: content reaches all four edges of
+   every cell). This is what fixed the sideways jump on the first column
+   of every row: 4.5–5.5px before, at most 2px after.
+2. **Each row is corrected by `_ROW_DRAWN_SCALE` / `_ROW_EARTH_ANCHOR`.**
+   Measured by registering each row's cells against the row above, same
+   column, ten frames apart — by then the earth has finished arriving, so
+   anything that moves between two such frames is the sheet and not the
+   animation. The steps came out 1.015, 1.040 and 1.060 in scale with 3,
+   5 and 8px of drift, agreeing to ±0.005 and ±1px across all seven
+   interior columns. Residual after correction: 0.990, 1.010, 0.995, at
+   most 1px.
+3. **What is left is laid into the frame canvas centred on the EARTH**,
+   not on the cell, so the thing the eye tracks is the thing held still.
+
+**Row 0 takes row 1's correction.** The earth is arriving through the
+whole of row 0, so the one measurable step into row 1 carries a frame of
+real animation as well as the sheet's own offset, and the two cannot be
+told apart. Whatever is left of it lands inside the one second of five
+where the earth is deliberately moving fast.
+
+**The approach is kept.** The earth still grows in from a crescent through
+the first second — that is the ident's own arc, and it is what varies
+*within* a row. Only what steps *between* rows is corrected, which is a
+decomposition the art itself supplies: a per-row constant cannot encode
+per-frame animation. Locking the earth for all five seconds is a different
+ask and a small change (`_ROW_DRAWN_SCALE`/`_ROW_EARTH_ANCHOR` per frame
+rather than per row) if it is ever wanted.
+
+### The tests are local, not absolute
+
+`test_the_picture_does_not_jump_where_the_sheet_changes_row` and
+`test_the_picture_is_not_resized_where_the_sheet_changes_row` both assert
+the same shape: **a transition that crosses a contact-sheet row may not
+move, or resize, the picture more than the transitions around it do.**
+
+Local rather than absolute for two reasons, both about this art:
+
+- The earth genuinely moves — it approaches through the whole first
+  second. An absolute "nothing may move more than 1px" would either fail
+  on the approach or have to be told where the approach ends, and where
+  the approach ends is a fact about the art that goes stale on the next
+  swap. This file has already had four.
+- The last three frames bloom into gold sparkles that fill the frame, so
+  the lit band genuinely grows by 15px with nothing moving at all. An
+  absolute reading puts the spread over the second half at 19px when 7 of
+  those are the bloom. Comparing a boundary with its own neighbours costs
+  nothing there, because the bloom is in the neighbours too.
+
+Both were confirmed red first, and both were re-confirmed by mutation:
+flattening `_ROW_DRAWN_SCALE` to all-1.0, and `_ROW_EARTH_ANCHOR` to one
+shared anchor, each fail them.
+
+### What the probe does not do
+
+`tools/probe_intro_stability.gd` reports the lit band per frame, the
+per-row median, and that median with the row's own correction divided back
+out — the size the sheet really drew the earth at, from checked-in code.
+
+It deliberately does **not** register one row against another. That was
+tried both as a 2-D search and as a 1-D fit on the row-brightness profile,
+and at the boundary that matters most — rows 2 to 3, where the ring and
+the wordmark arrive — both rail at the end of their own range. Two frames
+a second apart in this animation are not the same picture shifted, so a
+fit that assumes they are finds nothing. The numbers behind
+`_ROW_DRAWN_SCALE` came from a full 2-D similarity registration over all
+seven interior columns of each boundary, where the **agreement between
+columns** (±0.005) is what says the answer is real. A probe that reported
+a railing fit as though it were a measurement would be the blind ruler
+again, one layer down.

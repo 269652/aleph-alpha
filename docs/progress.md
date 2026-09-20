@@ -30521,3 +30521,96 @@ same failure: **a fact written in one place, and read from another.** What
 made it findable was a probe that prints each gate condition *separately*
 rather than the outcome they jointly produce — the roster alone said only
 "it stopped", which is consistent with at least four different causes.
+
+
+## The intro's wobble was in the art, not in the crop (`concept/intro_splash.md`, 2026-09-20)
+
+Reported live, after five separate stabilisation passes had each shipped a
+real fix: *"Can you properly stabilize the intro animation? The earth
+should be scaled and stabilized so there's no jitter and zooming"*.
+
+### ✅ Measured first, and the measurement moved the diagnosis
+
+Every consecutive pair of frames registered against the next
+(`tools/probe_intro_stability.gd`, new, plus a full 2-D similarity fit
+offline). The jitter is not spread through the sequence at all: the **45
+transitions inside a contact-sheet row move the picture by at most 1px and
+rescale it by at most 0.5%**, while the **4 that cross a row boundary move
+it 4.5–9px and rescale it by up to 6%**. The earth is drawn about **4%
+smaller and a few pixels higher in each successive row**; as drawn, its lit
+band runs **136, 131, 127, 118 px** across rows 1 to 4. At 10fps with ten
+frames to a row, that is a lurch once a second.
+
+`intro.png` is a 10×5 contact sheet **drawn by an image model**, not a
+rendered video cut into cells, and nothing made it draw the earth at one
+size in all five rows. That is why passes eight through twelve could not
+fix it: each corrected the pipeline — upscale factor, texture filter, crop
+window, display size — and each was right about what it found. A crop
+cannot make two drawings the same drawing.
+
+### ✅ A frame is now built in three steps
+
+1. Every **clean cell is resampled to one size**. The cells are not on a
+   pitch (clean widths 171/165/164/164/163/164/163/163/165/170, heights
+   192/185/193/178/185) and each holds the same drawing at its own cell's
+   size — measured: content reaches all four edges of every cell. This
+   fixed the sideways jump on the first column of every row: 4.5–5.5px
+   before, at most 2px after.
+2. Each row is corrected by `_ROW_DRAWN_SCALE` / `_ROW_EARTH_ANCHOR`,
+   measured by registering each row's cells against the row above, same
+   column, ten frames apart. Steps of 1.015, 1.040, 1.060 with 3, 5 and 8px
+   of drift, agreeing to ±0.005 and ±1px across all seven interior columns.
+   Residual after correction: 0.990, 1.010, 0.995, at most 1px.
+3. What is left is laid into the frame **centred on the earth**, not on the
+   cell.
+
+The **approach is kept** — the earth still grows in from a crescent through
+the first second, which is the ident's own arc and is what varies *within*
+a row. Only what steps *between* rows is corrected, a decomposition the art
+supplies: a per-row constant cannot encode per-frame animation. Locking the
+earth for all five seconds is a different ask and a small change if wanted.
+
+### ⚠️ A ruler that passed its own mutation test and was blind anyway
+
+`test_the_globe_holds_the_same_position_in_every_frame` existed precisely
+to catch this and reported **zero spread across every frame**. Its ruler
+takes the rightmost pixel above 0.02 luminance anywhere in the frame — and
+on this sheet the glow reaches the frame's own right edge in essentially
+every frame, so it returns the last column, saturated, whatever the art
+does.
+
+It even carries a mutation test, and that test passes: a frame blitted 3px
+left really does read as moved, because the blit leaves black where the
+real frames have glow. **The mutation has to be applied to the real data,
+not to a synthetic case constructed to be measurable.**
+
+`concept/intro_splash.md`'s "Frame stabilisation" section, which concluded
+from that ruler that the sheet was already stable, is marked superseded in
+place rather than rewritten — its reasoning about geometry versus lighting
+is still right, only the conclusion was wrong.
+
+### ✅ The new tests are local, not absolute
+
+Both new tests assert the same shape: a transition that crosses a
+contact-sheet row may not move, or resize, the picture more than the
+transitions around it do. Local because the earth genuinely moves during
+the approach (an absolute bound would have to be told where the approach
+ends, a fact about the art that goes stale on the next swap — there have
+been four), and because the last three frames bloom into gold sparkles that
+grow the lit band by 15px with nothing moving at all.
+
+Red first; re-confirmed by mutation — flattening `_ROW_DRAWN_SCALE` to
+all-1.0, and `_ROW_EARTH_ANCHOR` to one shared anchor, each fail them.
+
+### ⬜ Not done
+
+The probe deliberately does **not** register one row against another: tried
+both as a 2-D search and as a 1-D profile fit, and at rows 2→3 — where the
+ring and wordmark arrive — both rail at the end of their range, because two
+frames a second apart in this animation are not the same picture shifted.
+The constants came from an offline 2-D registration whose agreement across
+columns (±0.005) is what says the answer is real. Shipping a railing fit as
+a measurement would be the blind ruler again, one layer down.
+
+Tested: `test_intro_splash_sheet.gd` (+3, one blind test left in place and
+documented as superseded).
