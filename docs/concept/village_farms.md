@@ -808,6 +808,34 @@ relieving a good at 0.9, which is the same "a household with all the bread
 in the world and no fuel is cold" minimum rule `EstateConsumption` already
 applies one level up.
 
+**A tie is the normal state of a hungry village, and it decides the crop.**
+Reported live with the panels open: *"The farmers produce mostly herbs even
+though it says it can feed 0 / 10 ... the supply chain needs to be stable,
+so that happiness can saturate at 100% and unlock second tier buildings"*.
+Measured on three real villages with the settlement step really running
+(`tools/probe_village_cropping.gd`):
+
+```
+satisfaction: { "wood": 1.0, "herb": 0.0, "kind:food": 0.0 }
+scores:       { "herb": 0.0, "carrot": 0.0, "potato": 0.0, "wheat": inf }
+a wheat-farmer sows: herb
+```
+
+Both goods at 0.0 means every food crop scores **identically** — and that
+is what a village which needs feeding always looks like, not an edge case.
+The tie fell through to declaration order, and `herb` is declared first, so
+every field in a starving village sowed the crop that feeds it least: a 20g
+bunch of herbs against a 170g potato, eight and a half times the food per
+harvest.
+
+So below `HUNGRY_BELOW` the tie is broken by **what the harvest really
+weighs** (`FOOD_WEIGHT_KG`, the `ItemCatalog`'s own real produce masses,
+test-pinned against them), and only then by the farmer's own crop. Above
+it, nothing changes. The floor is bounded by the two readings that define
+it — strictly above the starving villages measured, no higher than the
+half-fed case the occupation rule was written for — and both bounds are
+test-pinned rather than asserted.
+
 **Occupation survives as a tie-break, not as the rule.** Among crops the
 village needs equally, an herbalist reaches for herbs. `VillageFarm.
 crop_for` keeps its second job untouched — three callers use it as the

@@ -92,7 +92,58 @@ static func goods_answered_by(crop_id: String) -> Array:
 ## go on (a marker with no world to ask, a village nobody has assessed) or
 ## when nothing sowable answers any good asked for -- the same fail-open
 ## shape every other world hook in the farm path already uses.
+## How much one harvest of each food crop really weighs, in kilograms --
+## the ItemCatalog's own real produce masses (a medium potato 150-200g, a
+## medium carrot 60-70g, a cut bunch of herbs 20-25g), pinned against them
+## by test_the_crop_food_weights_are_the_catalogs_own_real_masses rather
+## than restated here as numbers of their own.
+##
+## This is the tie-break, and the tie is the NORMAL state of a village that
+## needs feeding. Measured on three real villages
+## (tools/probe_village_cropping.gd):
+##
+##     satisfaction: { "wood": 1.0, "herb": 0.0, "kind:food": 0.0 }
+##     scores:       { "herb": 0.0, "carrot": 0.0, "potato": 0.0 }
+##     a wheat-farmer sows: herb
+##
+## Both goods at 0.0 means every food crop scores identically, and the tie
+## used to fall to declaration order -- `herb` is declared first, so every
+## field in a starving village sowed the crop that feeds it least: eight and
+## a half herb bunches to one potato. Reported as "The farmers produce
+## mostly herbs even though it says it can feed 0 / 10".
+const FOOD_WEIGHT_KG := {
+	"herb": 0.02,
+	"carrot": 0.07,
+	"potato": 0.17,
+}
+
+
+## How well fed a village has to be before what a farmer traditionally
+## grows may decide a tie at all.
+##
+## Below it the village is going hungry, and feeding it comes before
+## flavouring it: a tie is then broken by the heavier harvest. Above it the
+## occupation tie-break stands exactly as documented -- among crops the
+## village needs equally, an herbalist reaches for herbs.
+##
+## Half, and the measurement is what puts it there rather than taste: every
+## real village measured was at 0.0 (tools/probe_village_cropping.gd), and
+## the case the occupation rule was written for sits at 0.5 -- half fed,
+## half herbed, nobody starving (test_the_traditional_crop_breaks_a_tie_but_
+## does_not_decide). A floor between them has to be strictly above 0.0 and
+## no higher than 0.5, and both bounds are test-pinned rather than asserted
+## here.
+const HUNGRY_BELOW := 0.5
+
+
+## The crop to sow for this reading.
+##
+## The SCORE decides first and is unchanged: a crop relieving a good at 0.0
+## beats one relieving a good at 0.9. What follows it is what happens when
+## two crops are equally needed -- and that tie is the normal state of a
+## village that needs feeding, not an edge case.
 static func choose(satisfaction: Dictionary, can_bake: bool, default_crop: String) -> String:
+	var hungry := float(satisfaction.get(VillageEstates.FOOD_KIND_TOKEN, 1.0)) < HUNGRY_BELOW
 	var best := ""
 	var best_score := INF
 	for crop_id in SOWABLE:
@@ -104,9 +155,30 @@ static func choose(satisfaction: Dictionary, can_bake: bool, default_crop: Strin
 		if score < best_score:
 			best_score = score
 			best = crop_id
-		elif score == best_score and crop_id == default_crop:
-			best = crop_id  # tied, and it is the one already in this farmer's hands
+		elif score == best_score and _breaks_the_tie(crop_id, best, default_crop, hungry):
+			best = crop_id
 	return best if best != "" else default_crop
+
+
+## Between two crops the village needs exactly as much, which goes in the
+## ground.
+##
+## A HUNGRY village asks the harvest first: the crop that really feeds more
+## wins, and the farmer's own crop only settles it between two that feed the
+## same. A fed one asks the farmer first, which is the occupation tie-break
+## exactly as it was. A crop with no weight (one that answers no food good)
+## never wins on weight -- this tie-break is about feeding, and a crop that
+## does not feed has nothing to win it with.
+static func _breaks_the_tie(
+	crop_id: String, incumbent: String, default_crop: String, hungry: bool
+) -> bool:
+	if not hungry:
+		return crop_id == default_crop
+	var mine := float(FOOD_WEIGHT_KG.get(crop_id, 0.0))
+	var theirs := float(FOOD_WEIGHT_KG.get(incumbent, 0.0))
+	if mine != theirs:
+		return mine > theirs
+	return crop_id == default_crop
 
 
 ## The worst satisfaction among the goods this crop answers that the village
