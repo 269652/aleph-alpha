@@ -657,3 +657,15 @@ func test_the_kerb_is_drawn_beneath_the_yard_and_the_building_alike():
 	var kerb := _building_child_named(_origin, "FootprintKerb")
 	var art := _building_child_named(_origin, "Art")
 	assert_lt(node.get_children().find(kerb), node.get_children().find(art))
+
+
+## End to end, because a catalog answer nothing draws is a comment: a hut
+## placed in the world really grows the yard node it borrows.
+func test_a_placed_fisher_hut_stands_in_a_borrowed_yard():
+	assert_true(manager.place_building(_chunk_coord, _origin, "fisher_hut", Vector2i(0, 1), 5, ""))
+	assert_not_null(
+		_building_child_named(_origin, "Yard"),
+		"a hut drawn as a farmhouse must stand in a farmhouse's yard"
+	)
+	var art := _building_child_named(_origin, "Art") as Sprite2D
+	assert_not_null(art, "and still draw the building itself")
