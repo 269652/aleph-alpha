@@ -259,6 +259,29 @@ becomes its own piece of work:
 
 ## Status
 
+- ✅ **First light reaches the sky** (2026-09-20). `World` records a new
+  character's arrival (`_record_arrival_for_first_light`, on the NEW-game
+  spawn only) and routes the local hour the sun is computed from through
+  `DawnClause.local_hour_for`. Whatever hour a player presses New Game at,
+  the first frame is first light; the real-Earth clock returns on its own
+  by `CONVERGENCE_DAYS`, measured in real time because the sky is.
+
+  Three properties hold by construction and are pinned
+  (`test_world_first_light.gd`): a **loaded save is never shifted** (it
+  records no arrival, so the clause is the identity and a save made on day
+  9 loads on day 9 under the real sky); a console-pinned clock (`/time`,
+  `/day`, `/night`) **wins outright**, because the shift is in the `else`
+  of that branch; and once converged the arrival is cleared so the call
+  stops being made at all.
+
+  Deliberately **not persisted**: the shift exists for a first impression,
+  and a character old enough to have been saved has already had one.
+- ⬜ `ArrivalBriefing` is built and tested but not yet raised on screen;
+  the three lines it produces need the spawn's river name, the nearest
+  settlement's bearing and the live shortfall projection handed to it at
+  the moment the world finishes loading.
+
+
 - ✅ **`DawnClause`, the hour itself** (2026-09-20).
   `local_hour_for` / `offset_at_arrival` / `decay_fraction` /
   `offset_hours` / `clock_rate_for` / `arrival_hour_for`, pure and pinned

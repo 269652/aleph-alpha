@@ -156,6 +156,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
+const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -2210,6 +2211,54 @@ const ANSWER_FLOAT_FONT_SIZE := 14
 const ANSWER_FLOAT_START_OFFSET_Y := -36.0
 const ANSWER_FLOAT_RISE_PX := 24.0
 const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
+
+
+## The local hour a YOUNG character's sky should read, or NO_FORCED_HOUR
+## when this character is old enough to live under the real one
+## (DawnClause, docs/concept/arrival.md).
+##
+## `_arrival_unix_seconds` is when this character first opened their eyes
+## and `_arrival_real_hour` is the local hour it really was then, both set
+## at spawn. Days elapsed is measured in REAL time because the sky is: an
+## in-game day is DawnClause.REAL_HOURS_PER_IN_GAME_DAY of it. A character
+## loaded from a save has no recorded arrival and so is never shifted,
+## which is exactly the "a save made on day 9 loads on day 9" rule.
+func _dawn_shifted_local_hour(longitude: float) -> float:
+	if _arrival_real_hour < 0.0:
+		return NO_FORCED_HOUR
+	var now := Time.get_datetime_dict_from_system(true)
+	var real_hour := _solar_position.local_hour(
+		float(now.hour) + float(now.minute) / 60.0 + float(now.second) / 3600.0, longitude
+	)
+	var elapsed_real_hours := (
+		float(Time.get_unix_time_from_system() - _arrival_unix_seconds) / 3600.0
+	)
+	var days := elapsed_real_hours / DawnClause.REAL_HOURS_PER_IN_GAME_DAY
+	if days >= DawnClause.CONVERGENCE_DAYS:
+		# Converged: stop asking, and stop paying for the call every frame.
+		_arrival_real_hour = -1.0
+		return NO_FORCED_HOUR
+	return DawnClause.local_hour_for(real_hour, days, _arrival_real_hour)
+
+
+## When this character first opened their eyes, and what the local hour
+## really was then. Set only on a NEW character (see
+## _record_arrival_for_first_light); a loaded save leaves them at -1 and is
+## never shifted. Not persisted on purpose: the shift exists for a first
+## impression, and a character old enough to have been saved has had one.
+var _arrival_real_hour := -1.0
+var _arrival_unix_seconds := 0
+
+
+## Marks this instant as a new character's arrival, so their first days
+## open at first light (docs/concept/arrival.md). Called from the NEW-game
+## spawn only.
+func _record_arrival_for_first_light(longitude: float) -> void:
+	_arrival_unix_seconds = int(Time.get_unix_time_from_system())
+	var now := Time.get_datetime_dict_from_system(true)
+	_arrival_real_hour = _solar_position.local_hour(
+		float(now.hour) + float(now.minute) / 60.0 + float(now.second) / 3600.0, longitude
+	)
 
 
 ## Shown INSTEAD OF building the rest of the world when LicenseGate finds no
@@ -6896,6 +6945,16 @@ func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(multiplayer.get_unique_id())
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
+	# This character's first morning (docs/concept/arrival.md). NEW game
+	# only: _spawn_local_singleplayer_from_save is a separate function and
+	# never records an arrival, which is what makes a loaded save read the
+	# real sky.
+	_record_arrival_for_first_light(
+		_geo_coordinates.longitude_for_tile(
+			int(player.position.x / TerrainRenderer.TILE_SIZE),
+			EarthChunkGenerator.WORLD_WIDTH_TILES
+		)
+	)
 	player.respawn_position = player.position
 	# BEFORE apply_class: the class start node it grants is a real web node, and
 	# what that node is worth to this character depends on the resonance the
@@ -7907,6 +7966,24 @@ func _client_process(delta: float) -> void:
 	# together instead of the readout drifting away from the sky.
 	if _forced_local_hour != NO_FORCED_HOUR:
 		utc_hour = _solar_position.utc_hour_for_local(_forced_local_hour, longitude)
+	else:
+		# A brand-new character opens their eyes at first light, whatever
+		# the wall clock says, and the real-Earth clock comes back on its
+		# own within a few in-game days (DawnClause, docs/concept/
+		# arrival.md). Measured as possibly the single biggest factor in a
+		# bad first impression: the sun is driven by the REAL clock at the
+		# spawn latitude, so a game shown to someone after work opens in
+		# darkness with Cold chips in spring, and they never see the world
+		# the screenshots promise.
+		#
+		# The clause is the IDENTITY for an old character, so a save made
+		# on day 9 loads on day 9 under the real sky -- the game never
+		# lies about the planet for longer than the first few days of a
+		# life. A console-pinned clock wins outright: /time means what it
+		# says.
+		var shifted := _dawn_shifted_local_hour(longitude)
+		if shifted != NO_FORCED_HOUR:
+			utc_hour = _solar_position.utc_hour_for_local(shifted, longitude)
 
 	var elevation := forced_elevation_for(
 		_forced_sky,
