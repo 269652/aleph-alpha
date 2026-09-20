@@ -157,13 +157,39 @@ Work that costs no hours reads as **laid by hand** rather than as "0 hours"
 applies, said in the menu instead of discovered at the site.
 
 **The selected slot is visibly the selected one.** A toggled button in a
-`ButtonGroup`, so exactly one can be pressed at a time and the mode's own
+`ButtonGroup`, so exactly one can be armed at a time and the mode's own
 "nothing selected" state is a real state rather than a stuck-looking
 button.
 
-`BlueprintPaletteModel` is the whole model — categories, what each slot
-says, what a hover reads — pure and tested without standing up a `World`,
-the same split `ViewMode` already keeps for the mode itself.
+A `ButtonGroup` alone turned out not to be enough, and both gaps were
+found by *rendering* the thing (`tools/probe_build_palette.gd`) rather
+than by reading it:
+
+- Godot draws a toggled button in its `pressed` stylebox, which in this
+  theme is a shade *darker* than normal — about 5% of value, invisible
+  over the card's own dark background. A menu whose selection cannot be
+  seen is a menu with no selection, so an armed slot and an open tab wear
+  `UiTheme.selected_button_stylebox` instead: the gold `ACCENT` that
+  already means "this one" everywhere else in this UI, over a background
+  that *lifts* out of the card. Applied per control rather than in the
+  shared `Theme`, because `pressed` there also means a momentary click on
+  every ordinary button in the game.
+- `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so
+  a tab opened from code — arming a blueprint that lives in another
+  category, or the palette's own first build — left the previous tab
+  looking open too. The siblings are put down by hand.
+
+`BlueprintPaletteModel` is the words — categories, what each slot says,
+what a hover reads — pure and tested without standing up a `World`, the
+same split `ViewMode` already keeps for the mode itself.
+`BlueprintPaletteView` is the menu itself, its own `Control` for the
+reason every other panel in this game already is one (`CreaturePanel`,
+`HousePanel`): a menu with tabs, a selection and a footer is a thing with
+*behaviour*, and behaviour buried in a 19k-line `World` can only be tested
+by reading its source. What stays in `World` is only what is genuinely
+`World`'s — where the card sits, and the two numbers the view is not
+allowed to invent, which arrive as the same calls the raising path itself
+makes.
 
 ### The plan ledger
 
@@ -421,6 +447,30 @@ whole.
   *Named:* standing at a wireframe while also within reach of a cart or a
   tame animal, the same slot can still do both — the context slots are polled
   by `Player` as well as read here. Rare, and both outcomes are harmless.
+- ✅ **The palette is a build menu rather than a row of words** (2026-09-20)
+  — asked directly, with a screenshot of ten identical text buttons:
+  *"Make the Planner / Building HUD more professional and more like Anno
+  1806. Add Icons not only text"*. See "The build palette" above for the
+  spec this landed against. `BlueprintPaletteModel` 22/22,
+  `BlueprintIcon` 12/12, `BlueprintPaletteView` 15/15, `UiTheme` 12/12,
+  and `test_world_planner_mode_wiring` 31/31 with its palette half
+  rewritten: what the menu *does* is now driven for real rather than read
+  out of `World`'s source, which is the point of the view being its own
+  class.
+
+  Icons are cut from each building's own `finished_sheet_chain` — the
+  very sheet `EarthChunkManager` draws the real building from — so there
+  is no second picture of any building to drift from the first. Measured
+  per slot by the probe: every icon is a 48px box that is 50–100% real
+  art rather than transparent padding.
+
+  *Named:* the palette still offers exactly the ids it offered before
+  (pavement + `BUILDING_IDS` + `PRODUCTION_BUILDING_IDS` +
+  `CIVIC_BUILDING_IDS`), pinned by a test. `CHARTERED_BUILDING_IDS` is
+  still absent — a charter is a settlement-tier gate
+  ([settlement_charter.md](settlement_charter.md)), and offering a
+  blueprint a player could plan but never raise is a different question
+  from how the menu looks.
 - ⬜ **A raised build in progress does not survive a reload.** The project
   itself is persisted, but `_hired_builds`/`_player_builds` — the records
   that say *whose* hours advance it — live only in memory. A raised build
