@@ -1894,6 +1894,14 @@ func farm_plot_with_field(
 	var seed_value := VillageLayout.seed_for(chunk_coord)
 	var renderer := self
 	var accepts_origin := func(origin: Vector2i) -> bool:
+		# One clear column or row between this yard and every standing
+		# neighbour's, for the line of rails two fields share to stand on
+		# (VillageFarm.yards_touch). The frontage lays farmhouses at that
+		# pitch by itself; the outskirts search does not, and packed two
+		# farmsteads together whose fields then had no side between them.
+		for standing in standing_origins:
+			if VillageFarm.yards_touch(origin, standing):
+				return false
 		# The candidate itself joins the origins it is judged against: a
 		# farmhouse owns ground by being nearest to it, so it cannot be
 		# weighed against its neighbours without being in the running.

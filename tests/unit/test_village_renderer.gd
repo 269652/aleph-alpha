@@ -4247,3 +4247,29 @@ func test_a_farmstead_is_refused_a_fence_line_a_road_runs_down():
 		),
 		"a fence line with a road down it at %s is not a fence line" % str(spur_cell)
 	)
+
+
+## docs/concept/village_farms.md "One search, whoever asks": two fields can
+## share one line of rails, so the siting keeps one clear column or row
+## between two farmsteads' yards for that line to stand on. Measured red on
+## the stub villages once the founding roster raised five farmsteads: the
+## outskirts search packed (6,24) and (9,24) together and both fields lost
+## their inner side (test_every_farmstead_really_gets_its_enclosure).
+func test_no_two_farmsteads_stand_yard_to_yard():
+	var touching: Array = []
+	var farmsteads := 0
+	for coord in _settlement_chunks_with_farmers(3, 14):
+		var world := StubWorld.new()
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var origins: Array = []
+		for call in _placed(world, VillageFarm.FARM_BUILDING_ID):
+			origins.append(call["origin_local"])
+		farmsteads += origins.size()
+		for i in origins.size():
+			for j in range(i + 1, origins.size()):
+				if VillageFarm.yards_touch(origins[i], origins[j]):
+					touching.append("%s: %s and %s" % [str(coord), str(origins[i]), str(origins[j])])
+	assert_gt(farmsteads, 1, "precondition: villages with more than one farmstead were founded")
+	assert_eq(touching.size(), 0, "farmsteads yard to yard, with no room for a rail line: %s" % str(touching.slice(0, 5)))

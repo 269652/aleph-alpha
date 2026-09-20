@@ -469,6 +469,29 @@ static func next_action(plots: Array) -> int:
 ## really stand on a given cell -- water, paving, something already built
 ## there -- is the caller's question, and the caller leaving the paving open
 ## is what makes the gate.
+## Whether two farmsteads at `a` and `b` stand yard to yard: their
+## footprints touching, side by side or at a corner, with no clear column
+## or row between them.
+##
+## Two fields can share ONE line of rails (SHARED_FENCE_TILE_IDS), and that
+## line needs a cell to stand on. A field lies nearest its own house, so
+## two houses with no gap between them get two fields with no gap between
+## them, and each field's inner rail line falls on the other's beds -- a
+## field open along a side, which is not an enclosure. Measured on the
+## stub villages once the founding roster raised five farmsteads: the
+## outskirts search packed farmhouses at (6,24) and (9,24) together, and
+## 28 rails were missing across the villages sampled. One clear column or
+## row between the yards is the room the shared line stands on, which is
+## exactly the pitch the street frontage already lays farmhouses at.
+##
+## The siting gate (VillageRenderer.farm_plot_with_field) refuses a plot
+## that would touch a standing neighbour's yard. Pure, so the rule can be
+## pinned by itself.
+static func yards_touch(a: Vector2i, b: Vector2i, building_id: String = FARM_BUILDING_ID) -> bool:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	return Rect2i(a, footprint).grow(1).intersects(Rect2i(b, footprint))
+
+
 static func fence_cells(worked_cells: Array, origin: Vector2i, building_id: String) -> Array:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO or worked_cells.is_empty():

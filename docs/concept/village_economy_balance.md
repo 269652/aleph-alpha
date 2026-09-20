@@ -366,7 +366,11 @@ number the world produces:
 Five farmsteads for ten households is the historical ratio, and it is
 paid in frontage: each is a 3×2 house on the street with a fenced 3×2
 field behind it, so the last street of a founding village is now a belt of
-farms right up to the chunk's south edge. Two packing tests measured it.
+farms right up to the chunk's south edge. Two packing tests measured it,
+and a third caught the belt packing two farmsteads yard to yard on the
+outskirts with no column for the rail line their fields share — the
+search keeps one clear column or row between two yards now
+(`VillageFarm.yards_touch`, [village_farms.md](village_farms.md)).
 A village of fourteen with its food works really standing has a plot or
 two of frontage left, where it used to have four (the growth test that
 asked for a house after a rung now asks for a farmstead, which the

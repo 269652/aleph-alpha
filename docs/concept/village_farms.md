@@ -150,6 +150,18 @@ raised through the village's own ledger is never one the founding rule
 would have refused ([village_economy_balance.md](village_economy_balance.md)
 mechanism 6).
 
+**Two yards keep a line between them.** Two fields can share one line of
+rails, and that line needs a cell to stand on: the search refuses a plot
+whose footprint would touch a standing farmhouse's, side by side or at a
+corner (`VillageFarm.yards_touch`), so one clear column or row always
+lies between two yards. The street frontage lays farmhouses at that pitch
+by itself; the outskirts search did not, and once the founding roster
+raised five farmsteads it packed (6,24) and (9,24) together on the stub
+villages, each field's inner rail line falling on the other's beds — 28
+open sides across the villages sampled
+(`test_every_farmstead_really_gets_its_enclosure`, and
+`test_no_two_farmsteads_stand_yard_to_yard` pins the rule at the siting).
+
 **One rule, two callers** (2026-09-19). "Has real room" and "here is your
 field" were two separate copies of the same question — `_field_fits_at` at
 siting, `_workable_field_of` at derivation — and they had drifted. The
@@ -1138,6 +1150,10 @@ ordinary ground is the rule, not an accident, so standing in it is allowed.
   both ask it (`test_earth_chunk_manager_farm_growth_site.gd`: the site
   fits a field, it is the founding search's own answer, and the next farm
   keeps off the first one's ground).
+- ✅ **Two yards keep a rail line between them** (2026-09-20).
+  `VillageFarm.yards_touch` (pure, `test_village_farm.gd`, 5 pins) and the
+  shared search refusing a touching plot; every farmstead on the stub
+  villages fully enclosed again (`test_village_renderer.gd`).
 - ✅ **`NpcMarker._step_farm`.** The villager walks out to their own field
   during their work block and really tills, waters and harvests it through
   the same `FarmPlot` lifecycle a player's own plot uses. Each farming
