@@ -2300,7 +2300,7 @@ const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
 
 ## The crossing card's own banner and the time left on it
 ## (docs/concept/discovery.md). The duration is never a constant here:
-## Discovery.seconds_to_read gives each card its OWN word count at the
+## Answerback.seconds_to_read gives each card its OWN word count at the
 ## reading rate the feedback layer already grounds itself on, because the
 ## hearth's card is seventeen words and the far country's is thirty-four
 ## and showing both for the same six seconds means one of them is wrong.
@@ -2339,7 +2339,7 @@ func _discovery_step(local_player: Player, delta: float) -> void:
 	var card := String(report.get("message", ""))
 	if card != "":
 		_set_message_banner(_discovery_banner, card)
-		_discovery_card_seconds_left = Discovery.seconds_to_read(card)
+		_discovery_card_seconds_left = Answerback.seconds_to_read(card)
 
 
 ## Clears the crossing card once it has been up long enough to read. Kept

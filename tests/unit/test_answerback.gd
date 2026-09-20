@@ -479,3 +479,50 @@ func test_neither_partition_repeats_an_action():
 	for action in both:
 		assert_false(seen.has(action), "%s is listed twice in the partition" % action)
 		seen[action] = true
+
+
+# -- how long a passage needs to be on screen ----------------------------
+#
+# A duration nobody derived is a duration somebody eyeballed. This one is
+# the passage's OWN word count at the rate this module already grounds
+# itself on.
+
+#
+# A duration nobody derived is a duration somebody eyeballed. This one is
+# the card's OWN word count at the reading rate the feedback layer already
+# grounds itself on (Brysbaert 2019's 238 wpm, via Answerback).
+
+
+
+func test_a_card_with_nothing_on_it_stays_up_for_no_time_at_all():
+	assert_eq(Answerback.seconds_to_read(""), 0.0)
+
+
+func test_the_dwell_is_the_cards_own_words_at_the_repos_own_reading_rate():
+	var card := "one two three four five six seven eight nine ten"
+	assert_almost_eq(
+		Answerback.seconds_to_read(card),
+		10.0 / Answerback.WORDS_PER_MINUTE_SILENT_READING * 60.0,
+		0.0001,
+		"derived from the rate the rest of the feedback layer already uses"
+	)
+
+
+func test_twice_the_words_takes_twice_as_long():
+	var short_card := "one two three four five six seven eight nine ten"
+	var long_card := short_card + " " + short_card
+	assert_almost_eq(
+		Answerback.seconds_to_read(long_card),
+		Answerback.seconds_to_read(short_card) * 2.0,
+		0.0001
+	)
+
+
+## A one-word card is still a sentence, and a sentence has to be read --
+## Answerback's own floor, not a second opinion about it.
+func test_a_very_short_card_still_gets_the_shared_sentence_floor():
+	assert_almost_eq(
+		Answerback.seconds_to_read("Hearth"),
+		Answerback.DELIBERATE_INTERVAL_SECONDS,
+		0.0001
+	)

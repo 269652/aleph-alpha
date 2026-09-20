@@ -321,45 +321,11 @@ func test_nothing_here_can_refuse_entry():
 
 # -- how long the card stays up -----------------------------------------
 #
-# A duration nobody derived is a duration somebody eyeballed. This one is
-# the card's OWN word count at the reading rate the feedback layer already
-# grounds itself on (Brysbaert 2019's 238 wpm, via Answerback).
+# The rule itself is Answerback's (seconds_to_read, and the ceiling it is
+# held to); what is pinned here is that the real ring table produces cards
+# the rule can actually show.
 
 const Answerback = preload("res://src/gameplay/answerback.gd")
-
-
-func test_a_card_with_nothing_on_it_stays_up_for_no_time_at_all():
-	assert_eq(Discovery.seconds_to_read(""), 0.0)
-
-
-func test_the_dwell_is_the_cards_own_words_at_the_repos_own_reading_rate():
-	var card := "one two three four five six seven eight nine ten"
-	assert_almost_eq(
-		Discovery.seconds_to_read(card),
-		10.0 / Answerback.WORDS_PER_MINUTE_SILENT_READING * 60.0,
-		0.0001,
-		"derived from the rate the rest of the feedback layer already uses"
-	)
-
-
-func test_twice_the_words_takes_twice_as_long():
-	var short_card := "one two three four five six seven eight nine ten"
-	var long_card := short_card + " " + short_card
-	assert_almost_eq(
-		Discovery.seconds_to_read(long_card),
-		Discovery.seconds_to_read(short_card) * 2.0,
-		0.0001
-	)
-
-
-## A one-word card is still a sentence, and a sentence has to be read --
-## Answerback's own floor, not a second opinion about it.
-func test_a_very_short_card_still_gets_the_shared_sentence_floor():
-	assert_almost_eq(
-		Discovery.seconds_to_read("Hearth"),
-		Answerback.DELIBERATE_INTERVAL_SECONDS,
-		0.0001
-	)
 
 
 ## The property that matters on screen: every card the real ring table can
@@ -367,9 +333,9 @@ func test_a_very_short_card_still_gets_the_shared_sentence_floor():
 func test_every_real_crossing_card_is_readable_and_none_becomes_furniture():
 	for ring in JourneyRing.RINGS:
 		for outward in [true, false]:
-			var seconds := Discovery.seconds_to_read(Discovery.crossing_card(ring, outward))
+			var seconds := Answerback.seconds_to_read(Discovery.crossing_card(ring, outward))
 			assert_gt(seconds, 2.0, "%s is gone before it can be read" % ring["name"])
 			assert_true(
-				seconds < Discovery.MAX_CARD_SECONDS,
+				seconds < Answerback.MAX_CARD_SECONDS,
 				"%s has become a HUD element rather than a message" % ring["name"]
 			)

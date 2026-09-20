@@ -31,7 +31,6 @@ extends RefCounted
 
 const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
 const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
-const Answerback = preload("res://src/gameplay/answerback.gd")
 
 ## A chunk is CHUNK_SIZE tiles square. Restated rather than preloading
 ## EarthChunkManager -- a pure gameplay rule must not drag the whole
@@ -72,16 +71,6 @@ const FAR_COUNTRY_KILLS := 2
 ## to stop reading banners (docs/concept/feedback.md).
 const NEW_GROUND_LABEL := "New ground"
 
-
-## The longest a crossing card may ever need. Not a clamp -- `seconds_to_read`
-## never truncates, because a card cut off mid-warning is worse than a card
-## shown a moment too long. It is the ceiling a test holds the real ring
-## table to, so a ring description that grows into an essay fails loudly
-## instead of quietly becoming a HUD element. The figure is
-## `World.ANCIENT_TERMINAL_MESSAGE_DURATION`, the longest passage this HUD
-## already shows anywhere, restated (a pure rule must not preload a scene
-## script) and held to it by test.
-const MAX_CARD_SECONDS := 12.0
 
 
 ## The chunk a global tile sits in. `floori` rather than integer division:
@@ -200,34 +189,3 @@ static func report_for(from_distance: int, to_distance: int, is_new_ground: bool
 		"message": crossing_card(crossing, outward),
 		"float_text": ("%s  +%d XP" % [NEW_GROUND_LABEL, xp]) if xp > 0 else "",
 	}
-
-
-## Words in a passage, counting across the line breaks a card is built from.
-static func word_count(text: String) -> int:
-	var flattened := text.replace("\n", " ").replace("\t", " ").strip_edges()
-	if flattened == "":
-		return 0
-	return flattened.split(" ", false).size()
-
-
-## How long a card must stay on screen: its OWN word count at the reading
-## rate the feedback layer already grounds itself on (Brysbaert's 2019
-## meta-analysis, 238 wpm, via `Answerback.WORDS_PER_MINUTE_SILENT_READING`).
-##
-## Derived rather than picked, because a duration nobody derived is a
-## duration somebody eyeballed -- and a card is not one length: the hearth's
-## is seventeen words and the far country's is thirty-four, and showing both
-## for the same six seconds means one of them is wrong.
-##
-## The floor is `Answerback.DELIBERATE_INTERVAL_SECONDS`, that module's own
-## "a sentence has to be read" interval, so a very short card is still a
-## sentence rather than a flash. Nothing at all to read is no time at all --
-## the caller has no business showing an empty card.
-static func seconds_to_read(text: String) -> float:
-	var words := word_count(text)
-	if words <= 0:
-		return 0.0
-	return maxf(
-		Answerback.DELIBERATE_INTERVAL_SECONDS,
-		float(words) / Answerback.WORDS_PER_MINUTE_SILENT_READING * 60.0
-	)

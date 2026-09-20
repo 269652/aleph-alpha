@@ -15,6 +15,7 @@ extends GutTest
 
 const World = preload("res://scenes/world.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
+const Answerback = preload("res://src/gameplay/answerback.gd")
 
 
 func _world_source() -> String:
@@ -100,7 +101,7 @@ func test_the_step_returns_early_when_nothing_happened():
 ## than preloading this scene script. A restated number is a number that can
 ## drift, and this is what stops it.
 func test_the_restated_card_ceiling_is_the_huds_own_longest_passage():
-	assert_eq(Discovery.MAX_CARD_SECONDS, World.ANCIENT_TERMINAL_MESSAGE_DURATION)
+	assert_eq(Answerback.MAX_CARD_SECONDS, World.ANCIENT_TERMINAL_MESSAGE_DURATION)
 
 
 ## A card that never clears is furniture. It has to decay on every frame,
@@ -116,4 +117,4 @@ func test_the_card_decays_on_every_frame_rather_than_only_on_a_crossing():
 
 ## Each card is shown for its own length, never a constant somebody picked.
 func test_the_dwell_is_the_cards_own_reading_time():
-	assert_true(_function_body("_discovery_step").contains("Discovery.seconds_to_read"))
+	assert_true(_function_body("_discovery_step").contains("Answerback.seconds_to_read"))
