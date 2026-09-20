@@ -18,6 +18,7 @@ const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
+const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 
 ## Emitted when the player clicks a node they can actually take. Inspection
 ## (selected_node_id) happens for any node, including locked ones.
@@ -304,6 +305,23 @@ func node_label(node_id: String) -> String:
 		SkillTreeWindow.stat_label(String(variant["stat_name"])), cost]
 
 
+## What this character already has and already owns, for the payoff preview
+## (docs/concept/skill_payoff.md). Facts the consumers need (does this
+## character own spells, a companion, a weapon) and the bonuses they have
+## already allocated, so "before" is really THEIR before. Empty is safe:
+## the consumers fall back to a neutral character and the tooltip simply
+## reads against a baseline.
+func set_payoff_facts(facts: Dictionary, current_bonuses: Dictionary = {}) -> void:
+	_payoff_facts = facts
+	_payoff_bonuses = current_bonuses
+	queue_redraw()
+
+
+## The character's own facts and allocated bonuses for the payoff preview.
+var _payoff_facts: Dictionary = {}
+var _payoff_bonuses: Dictionary = {}
+
+
 ## Full hover text for `node_id`, one entry per line. Empty for an unknown node.
 ##
 ## Everything here is resolved for THIS character -- the DNA-chosen variant, the
@@ -328,9 +346,28 @@ func node_tooltip(node_id: String) -> Array:
 			lines.append(described)
 	else:
 		var variant := _web.flavored_variant(node_id, _dna_seed)
+		var stat_name := String(variant["stat_name"])
+		var amount := _web.effective_bonus(node_id, _resonance)
 		lines.append("+%s %s" % [
-			String.num(_web.effective_bonus(node_id, _resonance), 1).trim_suffix(".0"),
-			SkillTreeWindow.stat_label(String(variant["stat_name"]))])
+			String.num(amount, 1).trim_suffix(".0"),
+			SkillTreeWindow.stat_label(stat_name)])
+		# ...and what that actually BUYS, by asking the real consumer twice
+		# (docs/concept/skill_payoff.md). A node that said "+2 attack_damage"
+		# told a player nothing; "Boar: 4 -> 3 hits" is a sentence about
+		# something they have watched. A stat nothing reads yet says nothing
+		# here rather than inventing an effect for itself.
+		for preview in NodePayoff.preview_for(
+			[{"stat_name": stat_name, "amount": amount}],
+			_payoff_bonuses,
+			NodePayoff.default_consumers(_payoff_facts)
+		):
+			if String(preview.get("unit", "")) == NodePayoff.UNIT_DECLARED:
+				continue
+			lines.append("%s %s \u2192 %s" % [
+				String(preview["label"]),
+				String.num(float(preview["before"]), 1).trim_suffix(".0"),
+				String.num(float(preview["after"]), 1).trim_suffix(".0"),
+			])
 
 	match state_of(node_id):
 		STATE_ALLOCATED:

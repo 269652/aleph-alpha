@@ -154,6 +154,7 @@ const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
+const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -2113,13 +2114,44 @@ func _refresh_skill_window(local_player: Player) -> void:
 		local_player.skill_web,
 		local_player.character_class,
 		local_player.dna_resonance,
-		local_player.dna_seed
+		local_player.dna_seed,
+		_payoff_facts_for(local_player),
+		_allocated_bonuses_for(local_player)
 	)
 	_skill_window.refresh(
 		local_player.experience.unspent_points,
 		local_player.allocated_nodes,
 		local_player.unlocked_keystones
 	)
+
+
+## The stat bonuses this character has ALREADY allocated, for the payoff
+## preview's "before" (docs/concept/skill_payoff.md). Read through
+## Player.skill_bonus, the one reader for every stat the web grants, so
+## this can never disagree with what the character really has.
+func _allocated_bonuses_for(local_player: Player) -> Dictionary:
+	var bonuses := {}
+	for stat_name in NodePayoff.CONSUMER_STATS:
+		bonuses[stat_name] = local_player.skill_bonus(stat_name)
+	return bonuses
+
+
+## What this character already is, for the skill web's payoff preview
+## (docs/concept/skill_payoff.md): the consumers need to know what they are
+## computing against -- the weapon really in hand, the health they really
+## have, the spell they really know -- so a node's "before" is the player's
+## own before rather than a textbook one. Every key is optional; NodePayoff
+## falls back to a neutral character for anything missing.
+func _payoff_facts_for(local_player: Player) -> Dictionary:
+	var facts := {
+		"base_max_health": float(local_player.max_health),
+		"knows_spells": 1.0 if local_player.known_spell_ids().size() > 0 else 0.0,
+		"has_companion": 1.0 if local_player.bonded_companions.size() > 0 else 0.0,
+	}
+	var weapon = local_player.held_weapon()
+	if weapon != null:
+		facts["held_weapon"] = weapon
+	return facts
 
 
 ## Shown INSTEAD OF building the rest of the world when LicenseGate finds no

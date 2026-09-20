@@ -258,9 +258,15 @@ func _build_tabs() -> Control:
 ## opens on their own class's start node -- a map that opens on someone else's
 ## corner of it is a map you have to find yourself on first.
 func configure_web(web: SkillWeb, archetype: String, resonance: Dictionary,
-		dna_seed: int) -> void:
+		dna_seed: int, payoff_facts: Dictionary = {},
+		current_bonuses: Dictionary = {}) -> void:
 	_web = web
 	web_view.configure(web, archetype, resonance, dna_seed)
+	# What this character already is, so the payoff preview's "before" is
+	# really THEIR before (docs/concept/skill_payoff.md). Optional: a caller
+	# that has no character yet -- the creator's read-only preview -- simply
+	# gets the baseline.
+	web_view.set_payoff_facts(payoff_facts, current_bonuses)
 	web_view.focus_on(web.start_node_for(archetype))
 
 

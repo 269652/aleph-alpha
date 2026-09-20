@@ -3373,6 +3373,15 @@ func _held_weapon():
 	return null if _equipped_item_is_broken() else equipped_item
 
 
+## The weapon really in hand right now, for anything outside this script
+## that has to reason about what a swing would do -- the skill web's payoff
+## preview asks (docs/concept/skill_payoff.md), so a node can say what it
+## buys with the weapon the player is actually holding rather than with a
+## textbook one. Null when empty-handed or when the held item has broken.
+func held_weapon():
+	return _held_weapon()
+
+
 func _equipped_item_is_broken() -> bool:
 	return _item_wear.is_broken(equipped_item.wear, _item_catalog.material_of(equipped_item.id))
 
