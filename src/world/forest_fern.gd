@@ -76,13 +76,38 @@ var _spread_tick := 0
 ## shape).
 var _blocked: Dictionary = {}
 
+## Ground nothing may grow on that the BIOME ARRAY cannot see {D} water, and
+## a building already standing on a reloaded chunk. The same mask TallGrass
+## takes as `is_river` and for the same reason its own doc comment gives: a
+## river never changes the biome array, so a grassland check cannot see it
+## on its own, and "grass grows in rivers" was reported live before it did.
+## A fern seeded before anything has a chance to BLOCK it is the same bug
+## one chunk load earlier.
+##
+## Optional and empty by default, the same optional-trailing-parameter
+## shape TallGrass's own addition used: a caller that never passes one is
+## treated as "nothing is blocked" rather than getting an index error.
+var _growth_blocked: PackedByteArray
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	growth_blocked: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_growth_blocked = growth_blocked
 	_seed_initial_patches()
+
+
+## True when (x, y) is ground nothing may grow on {D} size-checked, so a
+## caller that passed no mask reads as "nothing is blocked" rather than
+## running off the end of an empty array.
+func _is_growth_blocked_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _growth_blocked.size() and _growth_blocked[index] == 1
 
 
 func get_patch_cells() -> Array:
@@ -146,6 +171,8 @@ func plant(cell: Vector2i) -> bool:
 		return false
 	if _biome[cell.y * _width + cell.x] != HOME_BIOME:
 		return false
+	if _is_growth_blocked_at(cell.x, cell.y):
+		return false
 	if _patches.has(cell) or _blocked.has(cell):
 		return false
 	_patches[cell] = 0.0  # a new rhizome, not a full frond
@@ -167,6 +194,8 @@ func _seed_initial_patches() -> void:
 			if _patches.size() >= MAX_PATCHES:
 				return
 			if _biome[y * _width + x] != HOME_BIOME:
+				continue
+			if _is_growth_blocked_at(x, y):
 				continue
 			var h := absi(hash("%d_%d_%d_fern_seed" % [_seed_value, x, y]))
 			if float(h % 10000) / 10000.0 < SEED_CHANCE:
@@ -191,6 +220,8 @@ func _step_spread() -> void:
 		if target.x < 0 or target.x >= _width or target.y < 0 or target.y >= _height:
 			continue
 		if _biome[target.y * _width + target.x] != HOME_BIOME:
+			continue
+		if _is_growth_blocked_at(target.x, target.y):
 			continue
 		if _patches.has(target) or _blocked.has(target):
 			continue

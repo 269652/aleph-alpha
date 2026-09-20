@@ -182,3 +182,40 @@ func test_a_planted_fern_starts_as_a_shoot_and_must_grow():
 	var bare := _a_bare_cell(ferns)
 	assert_true(ferns.plant(bare))
 	assert_almost_eq(ferns.get_growth(bare), 0.0, 0.0001)
+
+
+# -- ground nothing may grow on, handed in at construction -------------------
+#
+# The same mask TallGrass takes as `is_river` and for the same reason: a
+# river never changes the biome array (docs/concept/rivers.md), and neither
+# does a building already standing on a reloaded chunk. Without it a fresh
+# sim seeds ferns into water and through floors on every chunk load, before
+# anything has a chance to block them.
+
+func test_ferns_never_seed_on_blocked_ground():
+	var blocked := PackedByteArray()
+	blocked.resize(WIDTH * HEIGHT)
+	blocked.fill(1)
+	var ferns := ForestFern.new(3, WIDTH, HEIGHT, _biome_all("forest"), blocked)
+	assert_eq(ferns.get_patch_cells().size(), 0, "every cell of this wood is water or floor")
+
+
+func test_ferns_never_creep_onto_blocked_ground():
+	var blocked := PackedByteArray()
+	blocked.resize(WIDTH * HEIGHT)
+	for y in HEIGHT:
+		for x in WIDTH:
+			blocked[y * WIDTH + x] = 1 if x >= WIDTH / 2 else 0
+	var ferns := ForestFern.new(3, WIDTH, HEIGHT, _biome_all("forest"), blocked)
+	for _tick in 400:
+		ferns.advance(ForestFern.SPREAD_INTERVAL, 1.0)
+	for cell in ferns.get_patch_cells():
+		assert_lt((cell as Vector2i).x, WIDTH / 2, "a fern crept into %s" % str(cell))
+
+
+## And a caller that never passes one behaves exactly as before -- the same
+## optional-trailing-parameter shape TallGrass's own is_river addition used.
+func test_a_sim_given_no_mask_grows_the_way_it_always_did():
+	var with_none := ForestFern.new(3, WIDTH, HEIGHT, _biome_all("forest"))
+	var with_empty := ForestFern.new(3, WIDTH, HEIGHT, _biome_all("forest"), PackedByteArray())
+	assert_eq(with_none.get_patch_cells(), with_empty.get_patch_cells())
