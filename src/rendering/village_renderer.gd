@@ -448,7 +448,7 @@ func spawn_village(
 			if prop != null:
 				spawned.append(prop)
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
-	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
+	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size, world)
 	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
 	_hand_out_the_store_round(npcs, npc_markers, chunk_coord, chunk_size, world, parent, spawned)
 	return spawned
@@ -469,6 +469,119 @@ func spawn_village(
 ## player walks out -- a cart is not a node this renderer leaks behind. That
 ## is not hypothetical: a porter and a cart left alive on every load/unload
 ## cycle is the measured cause of the reported framerate decay.
+## Settles the village's GROUND around the people already standing in it,
+## without rebuilding one of them (docs/concept/village_ponds.md, "A pond
+## dug the day the fisher's house stands"). Run by the world the moment a
+## building it raised stands (EarthChunkManager._place_completed_building_
+## project); nothing here is new, it is the founding's own passes:
+##
+## 1. a house its owner lives in carries their trade and seed -- the
+##    recovery's backfill (_recover_existing_village), done now rather than
+##    on the next load, so the pond pass below can see a fisher's house;
+## 2. the fields, the ponds and the huts, through the same idempotent
+##    `_if_missing` passes founding and reload run, against the same
+##    reserved ground;
+## 3. every villager standing is handed their own ground again -- a field,
+##    a pond -- as plain properties on the marker they already are;
+## 4. whoever now owns a house lives at its door.
+##
+## Deliberately NOT _respawn_village. Measured with the economy probe when
+## a completed house re-derived the whole village: every villager restarted
+## their errand, the fields lost a cycle (309 units harvested in twenty
+## lived days against 360), the food fell and half the village left. A
+## house standing is its owner's day, not a reason to start everybody's
+## over.
+func settle_the_ground(
+	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int,
+	world, nodes: Array
+) -> void:
+	if world == null or not world.has_method("buildings_in_chunk"):
+		return
+	_buildable_memo.clear()
+	_dry_memo.clear()
+	_skeleton_memo.clear()
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
+		_population_for(chunk_coord, world),
+		_is_dry_local(chunk_coord, chunk_size, world),
+		(
+			world.seeded_region_for_chunk(chunk_coord)
+			if world.has_method("seeded_region_for_chunk") else null
+		)
+	)
+	var npcs: Array = settlement.npcs
+	_claim_owned_houses(chunk_coord, npcs, world)
+
+	var landmark_block := _landmark_cells(settlement.landmarks, tile_size, world)
+	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world, landmark_block)
+	var pond_reserved := landmark_block.duplicate()
+	for origin in farm_fields:
+		for global_cell in farm_fields[origin]:
+			pond_reserved[global_cell as Vector2i] = true
+	var fisher_ponds := _dig_fisher_ponds_if_missing(chunk_coord, chunk_size, world, pond_reserved)
+	_place_fisher_huts_if_missing(chunk_coord, chunk_size, world, fisher_ponds)
+
+	# The people standing, aligned to the roster by their own seed; null
+	# where nobody stands for a roster index, so the handouts keep the
+	# founding's order and skip them.
+	var by_seed := {}
+	for node in nodes:
+		if is_instance_valid(node) and node is NpcMarker and node.identity != null:
+			by_seed[node.identity.seed_value] = node
+	var npc_markers: Array = []
+	for i in npcs.size():
+		npc_markers.append(by_seed.get(npcs[i].seed_value, null))
+	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
+	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size, world)
+
+	if not world.has_method("house_origin_for_villager"):
+		return
+	for i in npcs.size():
+		var marker = npc_markers[i]
+		if marker == null:
+			continue
+		var owned_origin = world.house_origin_for_villager(chunk_coord, npcs[i].seed_value)
+		if owned_origin == null:
+			continue
+		var building_id := ""
+		for record in world.buildings_in_chunk(chunk_coord):
+			if record.get("origin_local") == owned_origin:
+				building_id = String(record.get("id", ""))
+				break
+		if building_id == "":
+			continue
+		var doorstep_global: Vector2i = (
+			chunk_coord * chunk_size + (owned_origin as Vector2i) + BuildingCatalog.doorstep_of(building_id)
+		)
+		var door := Vector2((doorstep_global.x + 0.5) * tile_size, (doorstep_global.y + 0.5) * tile_size)
+		if marker.home_position == door:
+			continue
+		marker.home_position = door
+		var workspot = _grounded_position(
+			door + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
+		)
+		marker.workspot_position = workspot if workspot != null else door
+
+
+## A house its owner lives in carries their trade and seed: the recovery's
+## own backfill rule (_recover_existing_village), applied to the houses the
+## world says these villagers own. A record that already remembers its
+## villager is left alone.
+func _claim_owned_houses(chunk_coord: Vector2i, npcs: Array, world) -> void:
+	if not world.has_method("house_origin_for_villager") or not world.has_method("set_building_resident"):
+		return
+	var records_by_origin := {}
+	for record in world.buildings_in_chunk(chunk_coord):
+		records_by_origin[record.get("origin_local", Vector2i(-1, -1))] = record
+	for npc in npcs:
+		var owned_origin = world.house_origin_for_villager(chunk_coord, npc.seed_value)
+		if owned_origin == null or not records_by_origin.has(owned_origin):
+			continue
+		if int(records_by_origin[owned_origin].get("resident_seed", 0)) != 0:
+			continue
+		world.set_building_resident(chunk_coord, owned_origin, npc.occupation, npc.seed_value)
+
+
 ## Brings the villagers standing in an already-built village into line with
 ## the settlement's real roster (docs/concept/village_mortality.md
 ## mechanism 4). Returns the village's nodes, newcomers included.
@@ -1332,6 +1445,9 @@ func _hand_out_farm_fields(
 		if next_farmhouse >= origins.size():
 			return
 		var origin: Vector2i = origins[next_farmhouse]
+		next_farmhouse += 1
+		if npc_markers[i] == null:
+			continue  # stands nowhere (settle_the_ground); their farmhouse keeps its place in the order
 		npc_markers[i].field_cells = fields[origin]
 		# WHICH farmhouse, not just which ground: a harvest fills the
 		# farmhouse this villager works for, and the village gets it when
@@ -1339,7 +1455,6 @@ func _hand_out_farm_fields(
 		# haul_farmhouse_stock_to_village). Global, like field_cells --
 		# `fields` is keyed by the LOCAL origin _farmhouse_origins returns.
 		npc_markers[i].stock_building_cell = chunk_coord * chunk_size + origin
-		next_farmhouse += 1
 
 
 ## Digs every fisher's own pond, fenced like a farmhouse's beds (see
@@ -1605,34 +1720,71 @@ func _pond_water_near(
 	return water
 
 
-## Hands every fisher the water they work and the building they fill -- the
-## same pairing, in the same roster order, that _hand_out_farm_fields does
-## for a farmer, and for the same reason: this is the only thing that knows
-## whose pond is whose.
+## Hands every fisher the water they work and the building they fill.
+##
+## A pond is dug beside the house its fisher LIVES in, and the house's own
+## record says who that is (place_building's resident_seed, backfilled on
+## reload and claimed the day a newcomer's house stands), so each pond goes
+## to the villager whose house it lies beside. What no record claims -- a
+## house from before houses remembered their villager -- is handed out in
+## roster order, the pairing this always used. Measured red with the
+## order alone: a village whose third fisher had just been housed handed
+## the two ponds to the first two fishers in the roster and the newcomer,
+## whose own water had been dug that day, worked none.
+## `npc_markers` is aligned to `npcs`; an entry may be null for a villager
+## who stands nowhere (settle_the_ground), whose pond then waits for them.
 func _hand_out_fisher_ponds(
-	npcs: Array, npc_markers: Array, ponds: Dictionary, chunk_coord: Vector2i, chunk_size: int
+	npcs: Array, npc_markers: Array, ponds: Dictionary, chunk_coord: Vector2i, chunk_size: int,
+	world = null
 ) -> void:
 	if ponds.is_empty() or npc_markers.size() < npcs.size():
 		return
-	var origins: Array = ponds.keys()
+	var resident_by_origin := {}
+	if world != null and world.has_method("buildings_in_chunk"):
+		for record in world.buildings_in_chunk(chunk_coord):
+			resident_by_origin[record.get("origin_local", Vector2i(-1, -1))] = int(record.get("resident_seed", 0))
+	var handed := {}
+	var unclaimed: Array = []
+	for origin in ponds:
+		var i := _roster_index_of(npcs, int(resident_by_origin.get(origin, 0)))
+		if i < 0 or npcs[i].occupation != FISHER_OCCUPATION or npc_markers[i] == null:
+			unclaimed.append(origin)
+			continue
+		_give_pond(npc_markers[i], ponds[origin], origin, chunk_coord, chunk_size)
+		handed[i] = true
 	var next_pond := 0
 	for i in npcs.size():
-		if npcs[i].occupation != FISHER_OCCUPATION:
+		if npcs[i].occupation != FISHER_OCCUPATION or handed.has(i):
 			continue
-		if next_pond >= origins.size():
+		if next_pond >= unclaimed.size():
 			return
-		var origin: Vector2i = origins[next_pond]
-		var water: Array = ponds[origin]
+		var origin: Vector2i = unclaimed[next_pond]
 		next_pond += 1
-		if water.is_empty():
-			continue
-		var global_water: Array[Vector2i] = []
-		for cell in water:
-			global_water.append(chunk_coord * chunk_size + (cell as Vector2i))
-		npc_markers[i].pond_cells = global_water
-		# Their own house is the building they fill: a fisher lives in an
-		# ordinary one, so the pond's own origin IS their stock building.
-		npc_markers[i].stock_building_cell = chunk_coord * chunk_size + origin
+		if npc_markers[i] != null:
+			_give_pond(npc_markers[i], ponds[origin], origin, chunk_coord, chunk_size)
+
+
+func _give_pond(marker, water: Array, origin: Vector2i, chunk_coord: Vector2i, chunk_size: int) -> void:
+	if water.is_empty():
+		return
+	var global_water: Array[Vector2i] = []
+	for cell in water:
+		global_water.append(chunk_coord * chunk_size + (cell as Vector2i))
+	marker.pond_cells = global_water
+	# Their own house is the building they fill: a fisher lives in an
+	# ordinary one, so the pond's own origin IS their stock building.
+	marker.stock_building_cell = chunk_coord * chunk_size + origin
+
+
+## The roster index of the villager with this seed, -1 for nobody (a seed
+## of 0 is a record that remembers no villager).
+static func _roster_index_of(npcs: Array, seed_value: int) -> int:
+	if seed_value == 0:
+		return -1
+	for i in npcs.size():
+		if npcs[i].seed_value == seed_value:
+			return i
+	return -1
 
 
 ## Whether this house already has water in reach.

@@ -5395,6 +5395,20 @@ func admit_household(chunk_coord: Vector2i) -> String:
 	return household_id
 
 
+## Settles the ground of the village standing in `chunk_coord` around the
+## people already in it (VillageRenderer.settle_the_ground): the houses
+## their owners live in, the fields, the ponds, the huts, and who works
+## what -- without rebuilding a villager. A no-op unless the village is
+## really on screen, like _respawn_village below.
+func _settle_the_ground(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	_village_renderer.settle_the_ground(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		self, _loaded_villages[chunk_coord]
+	)
+
+
 ## Re-derives the village standing in `chunk_coord`, so the people on screen
 ## are the households that really live there.
 ##
@@ -19872,18 +19886,17 @@ func _place_completed_building_project(project) -> void:
 		project.chunk_coord, project.origin, building_id, seed_value, project.household_id, true
 	):
 		return
-	# The village re-derives itself the moment something it raised stands,
-	# the way an arrival already makes it (admit_household). Placed alone,
-	# a newcomer's house carried the household that owns it and nothing
-	# about who lives there, so their trade reached its record, their pond
-	# was dug, their hut raised and their marker spawned only on the next
-	# chunk load -- measured with the town at eleven households: a fisher
-	# counted as a producer with no water to work for the rest of the run
+	# The ground settles around what now stands, the moment it stands.
+	# Placed alone, a newcomer's house carried the household that owns it
+	# and nothing about who lives there, so their trade reached its record,
+	# their pond was dug and their hut raised only on the next chunk load
+	# -- measured with the town at eleven households: a fisher counted as
+	# a producer with no water to work for the rest of the run
 	# (docs/concept/village_ponds.md, "A pond dug the day the fisher's
-	# house stands"). spawn_village's passes are all idempotent, so this
-	# digs nothing twice; a farmstead the assembly raises gets its beds and
-	# rails the same day by the same rule.
-	_respawn_village(project.chunk_coord)
+	# house stands"). Not a re-derivation of the village: that restarted
+	# every villager's errand and was measured costing the fields a cycle
+	# and the village half its roster.
+	_settle_the_ground(project.chunk_coord)
 
 
 ## Construction sites: chunk_coord -> {origin_local -> Node2D}, one per

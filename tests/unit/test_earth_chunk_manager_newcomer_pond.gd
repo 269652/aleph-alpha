@@ -15,6 +15,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 
 const CHUNK_SIZE := EarthChunkManager.CHUNK_SIZE
@@ -140,11 +141,9 @@ func _pond_cells() -> int:
 	return count
 
 
-## Admits the newcomer and completes the ladder's house for them exactly
-## as the labour tick does (_advance_construction_labor): the project on
-## the growth site is marked complete -- which is what grants the household
-## its property -- and then placed in the world.
-func _house_the_newcomer() -> Dictionary:
+## Admits the newcomer: the arrival itself, which re-derives the village
+## the way arrivals always have (admit_household -> _respawn_village).
+func _admit_the_newcomer() -> String:
 	# Loading a village already takes a growth decision, so a house project
 	# of the village's own can be queued on the very plot the site search
 	# answers with (it deliberately lands on its own earlier project). Those
@@ -155,13 +154,27 @@ func _house_the_newcomer() -> Dictionary:
 		manager._place_completed_construction_project(queued)
 	var household_id: String = manager.admit_household(_chunk_coord)
 	assert_ne(household_id, "", "precondition: the household arrived")
+	return household_id
+
+
+## Completes the ladder's house for them exactly as the labour tick does
+## (_advance_construction_labor): the project on the growth site is marked
+## complete -- which is what grants the household its property -- and then
+## placed in the world.
+func _complete_their_house(household_id: String) -> Vector2i:
 	var origin = manager._growth_site_for(_chunk_coord, HOUSE)
 	assert_not_null(origin, "precondition: the village has a plot for them")
+	var store = manager.construction_project_store()
 	var project = store.start_project(_chunk_coord, origin, HOUSE, household_id)
 	assert_eq(project.household_id, household_id, "precondition: the project is the newcomer's own")
 	assert_true(store.complete_project(project.id, manager.household_store()), "precondition: the project completes")
 	manager._place_completed_construction_project(project)
-	return {"household_id": household_id, "origin": origin}
+	return origin
+
+
+func _house_the_newcomer() -> Dictionary:
+	var household_id := _admit_the_newcomer()
+	return {"household_id": household_id, "origin": _complete_their_house(household_id)}
 
 
 func test_the_premise_the_next_villager_here_fishes():
@@ -193,3 +206,56 @@ func test_a_further_re_derivation_digs_no_second_pond():
 	assert_gt(dug, 0, "precondition: a pond was dug")
 	manager._respawn_village(_chunk_coord)
 	assert_eq(_pond_cells(), dug, "a second re-derivation dug more water")
+
+
+func _villager_markers() -> Array:
+	var markers: Array = []
+	for node in manager._loaded_villages.get(_chunk_coord, []):
+		if is_instance_valid(node) and node is NpcMarker:
+			markers.append(node)
+	return markers
+
+
+func _marker_of(seed_value: int):
+	for marker in _villager_markers():
+		if marker.identity != null and marker.identity.seed_value == seed_value:
+			return marker
+	return null
+
+
+## The house standing is the newcomer's day, not everybody's: the village
+## is not rebuilt around them. Measured with the economy probe when it
+## was: every villager restarted their errand the moment a house
+## completed, the fields lost a cycle (309 units harvested against 360),
+## the food fell, and half the village left.
+func test_a_house_standing_does_not_rebuild_the_rest_of_the_village():
+	var household_id := _admit_the_newcomer()
+	var before: Array = []
+	for marker in _villager_markers():
+		before.append(marker.get_instance_id())
+	assert_gt(before.size(), 1, "precondition: a village of villagers stands")
+	_complete_their_house(household_id)
+	var after := {}
+	for marker in _villager_markers():
+		after[marker.get_instance_id()] = true
+	var rebuilt := 0
+	for id in before:
+		if not after.has(id):
+			rebuilt += 1
+	assert_eq(rebuilt, 0, "%d of %d villagers were rebuilt for somebody else's house" % [rebuilt, before.size()])
+
+
+func test_the_newcomer_fisher_is_handed_their_pond():
+	_house_the_newcomer()
+	var newcomer = _marker_of(_newcomer.seed_value)
+	assert_not_null(newcomer, "the newcomer stands in the village")
+	assert_false(newcomer.pond_cells.is_empty(), "the newcomer works no water")
+
+
+func test_the_newcomers_home_is_their_own_door():
+	var housed := _house_the_newcomer()
+	var newcomer = _marker_of(_newcomer.seed_value)
+	assert_not_null(newcomer)
+	var doorstep: Vector2i = _chunk_coord * CHUNK_SIZE + housed["origin"] + BuildingCatalog.doorstep_of(HOUSE)
+	var door := Vector2((doorstep.x + 0.5) * TerrainRenderer.TILE_SIZE, (doorstep.y + 0.5) * TerrainRenderer.TILE_SIZE)
+	assert_eq(newcomer.home_position, door, "the newcomer's home is not their own door")
