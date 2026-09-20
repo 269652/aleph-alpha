@@ -59,6 +59,24 @@ const LEGACY_FENCE_TILE_IDS: Array[String] = [
 	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
 
+## A SHARED LINE: one tile carrying the rails of two different fields, and
+## which facings each one carries.
+##
+## Where two farmsteads sit side by side their rings meet on one column (or
+## row) of cells, and a rail is an ordinary chunk modification -- a tile
+## holds ONE id. So the second field's rail found the cell occupied and was
+## skipped, leaving that enclosure open along the whole shared side.
+## Reported with both in shot: *"It should be possible to build two rails
+## on a single tile so both enclosures are fenced properly."*
+##
+## Only the OPPOSITE pairs are here, and that is the whole set: two fields
+## meeting share a line, and a line has a field on each side of it. Rails
+## that meet at right angles belong to one ring's corner, not to two rings.
+const SHARED_FENCE_TILE_IDS := {
+	"farm_fence_east_west": ["east", "west"],
+	"farm_fence_north_south": ["north", "south"],
+}
+
 ## The shapes a farmhouse's field may take -- asked for directly, with the
 ## broken ring circled in a screenshot: "The fence should enclose a 2x3 or
 ## 3x2 area". Six beds either way, which is also exactly where the measured
@@ -529,12 +547,62 @@ static func fence_tile_for(facing: String) -> String:
 	return FENCE_TILE_IDS.get(facing, "")
 
 
+## The rail tile ids really standing on one cell: one for an ordinary rail,
+## TWO for a shared line between two fields. [] for ground that is not a
+## rail at all.
+##
+## This is what makes a shared line cost nothing downstream. A shared id is
+## DEFINED as the two ordinary rails standing there, so the art, the inner
+## edge each is drawn on and the collider each carries are the ones the
+## game already had -- nothing new is drawn, priced or blocked, it is
+## simply drawn twice on the one tile.
+static func fence_pieces_of(tile_id: String) -> Array[String]:
+	var pieces: Array[String] = Array([], TYPE_STRING, "", null)
+	if SHARED_FENCE_TILE_IDS.has(tile_id):
+		for facing in SHARED_FENCE_TILE_IDS[tile_id]:
+			pieces.append(fence_tile_for(String(facing)))
+		return pieces
+	if is_fence_tile(tile_id):
+		pieces.append(tile_id)
+	return pieces
+
+
+## What a cell already carrying `standing` becomes when a second field asks
+## it for `facing` -- or "" when the two do not make a shared line.
+##
+## Reported with both enclosures in shot: *"It should be possible to build
+## two rails on a single tile so both enclosures are fenced properly."*
+## Measured (tools/probe_neighbouring_fences.gd) on a real village with
+## four farmhouses: every contested cell along the line between two fields
+## was wanted as `east` by one and `west` by the other, and carried only
+## the first -- so one enclosure was open along its whole shared side.
+##
+## ONLY OPPOSITE rails, and never the same one twice. Two fields cannot
+## want a cell closed on the same side, a rail meeting one at right angles
+## is a corner of one ring rather than a line between two, and the same
+## rail asked for again is a RELOAD re-deriving the ring it already built
+## -- which _fence_the_fields' own doc comment requires to build nothing.
+static func shared_fence_tile_for(standing: String, facing: String) -> String:
+	if standing == "" or facing == "":
+		return ""
+	var standing_facing := fence_facing_of(standing)
+	if standing_facing == "" or standing_facing == facing:
+		return ""
+	for shared_id in SHARED_FENCE_TILE_IDS:
+		var pair: Array = SHARED_FENCE_TILE_IDS[shared_id]
+		if pair.has(standing_facing) and pair.has(facing):
+			return shared_id
+	return ""
+
+
 ## Whether this tile id is one of a village farm's rails, whichever way it
 ## faces -- the one question a creature's movement and the art registry both
 ## have to ask, so neither re-lists the ids.
 static func is_fence_tile(tile_id: String) -> bool:
 	if tile_id == "":
 		return false
+	if SHARED_FENCE_TILE_IDS.has(tile_id):
+		return true
 	return FENCE_TILE_IDS.values().has(tile_id) or LEGACY_FENCE_TILE_IDS.has(tile_id)
 
 
@@ -656,15 +724,42 @@ static func fence_collider_normal(tile_id: String) -> Vector2i:
 ## It spans the tile FULLY across the edge it lies on, so two rails side by
 ## side meet and leave no seam to squeeze through, and it never reaches
 ## outside its own tile.
-static func fence_collider_rect(tile_id: String, tile_size: float, thickness: float) -> Rect2:
+##
+## `fence_height` is how tall this rail's WOOD is actually drawn, in the same
+## tile-local pixels -- because a HORIZONTAL rail stands at the FOOT of its
+## wood, not on the tile edge its normal names. Reported live: "The
+## horizontal fences should have the hitbox at the bottom of the rail ... so
+## it should use fence height instead of thickness".
+##
+## It matters because the two horizontal facings anchor their art to
+## OPPOSITE ends of the cell (IllustratedStructureSprite.footprint_offset:
+## `inner.y > 0` bottom-anchors, `inner.y < 0` top-anchors). A north rail's
+## wood really does end at the tile's bottom edge, so its collider never
+## moved. A south rail's hangs DOWN from the top edge, so pinning its
+## collider to that named edge stopped the player at the rail's HEAD --
+## seven pixels short of the line they could see. A fence stops things where
+## its posts meet the ground, and nowhere else.
+##
+## The height only ever moves a horizontal rail. A VERTICAL one is anchored
+## left or right, so its foot is not a y coordinate at all and the edge its
+## normal names is still exactly where it stands.
+##
+## The foot is clamped into [thickness, tile_size] so the strip stays inside
+## its own cell whatever height it is handed -- art that measures taller than
+## the tile, or shorter than the strip is deep, must not put a rail body in
+## the NEIGHBOUR'S cell and wall a run that should be open.
+static func fence_collider_rect(
+	tile_id: String, tile_size: float, thickness: float, fence_height: float
+) -> Rect2:
 	var normal := fence_collider_normal(tile_id)
 	if normal == Vector2i.ZERO:
 		return Rect2()
 	if normal.x != 0:
 		var x := tile_size - thickness if normal.x > 0 else 0.0
 		return Rect2(x, 0.0, thickness, tile_size)
-	var y := tile_size - thickness if normal.y > 0 else 0.0
-	return Rect2(0.0, y, tile_size, thickness)
+	var foot := tile_size if normal.y > 0 else fence_height
+	foot = clampf(foot, thickness, tile_size)
+	return Rect2(0.0, foot - thickness, tile_size, thickness)
 
 
 ## Whether a step from one cell to the next CROSSES a rail's inner edge --
@@ -699,6 +794,13 @@ static func rails_block_step(from_tile_id: String, to_tile_id: String, step: Vec
 ## a first pass failed at all four corners. Nothing is opened by it: every
 ## cardinal way in is still shut by the run's own rail.
 static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
+	# A SHARED LINE is two rails, and it stops what either of them stops --
+	# there is a crop on both sides of it (see SHARED_FENCE_TILE_IDS).
+	if SHARED_FENCE_TILE_IDS.has(tile_id):
+		for piece in fence_pieces_of(tile_id):
+			if _rail_stops_step(piece, step):
+				return true
+		return false
 	var inner := fence_inner_direction(tile_id)
 	if inner == Vector2i.ZERO or step == Vector2i.ZERO:
 		return false

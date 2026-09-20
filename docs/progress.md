@@ -2035,6 +2035,12 @@ Fixed in `StarterKit.DEFAULT_CHOICES` itself, not here -- see the Starting Kit e
 
 ✅ **A sapling is a different drawing, not a pruned adult** (2026-09-07; `assets/sprites/trees/sapling.png`, `IllustratedTree.sapling_frame`/`sapling_frame_for_progress`, `TreeGrowth.BRANCH_START_FRACTION`/`sapling_progress`/`canopy_growth_fraction`, `TreeMorphShader`, wired through `ChoppableTree._redraw_canopy`/`refresh_sapling_display` and `TreeRenderer._build_tree_node`). Reported: "small newborn trees are not saplings but rather have a miniaturized full canopy... they should grow like the player's height before branches start growing... also make it so that the branches grow individually using the same mechanic the season transitions use... so that each individual tree looks different when maturing and growing branches." Even the branch-pruned canopy above is still fundamentally the mature crown's own pixels, cut back -- this instead swaps in a real ten-frame growth-stage illustration (one shared sheet across all six species, a named v1 simplification) below `CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` -- reused rather than a second invented threshold, since that constant already IS "the player's own height as a fraction of a tree's" by construction -- and, past it, dissolves the sheet's last frame OUT into the real mature texture via a genuine per-clump GPU shader (`TreeMorphShader`, spliced into `WindSway`'s existing shared canopy material the same way canopy snow sparkle already is) as the tree keeps growing. Two procedural approaches were tried and rejected first, each confirmed by rendering and comparing rather than assumed: literal bare-branch-line extraction read as "almost as scaling the entire canopy" rather than a real seedling, and a CPU-composited trunk-outward flood fill for the morph itself (the exact technique the season turn/growth trace above already share) read as a wave sweeping up from the ground, not individual leaves coming in -- corrected on direct instruction ("use real gpu shading techniques similar to the season transitions per leaf and not bottom up"). The shipped hash is a trig-free lattice hash (mirroring `RiverFlowShader`'s own, for the same float32-precision reasons documented there) keyed by a per-tree variant seed (`ProceduralTreeSprite.tree_variant_for`), so two trees at identical progress scatter differently. Caught only on a real GPU, not the float64 CPU mirror every GLSL hash here also carries: a canopy-sized clump grid's smallest hashed roll can land close enough to zero (~0.0008) that float32 rounds it down to exactly 0, letting one clump reveal at zero progress -- fixed with an explicit "progress <= 0 shows nothing" short-circuit mirroring the shader's own pre-existing fast path at the fully-grown end. The hand-off back to ordinary rendering is a real off switch (`TreeMorphShader.clear` pins `morph_progress` to 1.0, and the shader's own fast path then skips the sapling texture entirely), and `TreeRenderer._build_tree_node` calls the same sapling-display path once, directly, right after a tree is bound -- closing the exact spawn-time window the original bug was seen in, where a freshly-spread seed's sprite started life holding the species/season-keyed shared texture cache (which has no per-tree growth to key on) until an unrelated season-sync tick happened to correct it. See [flora.md](flora.md#illustrated-trees)'s "Sapling phase" paragraphs for the full mechanism writeup.
 
+✅ **A sapling grows through its OWN species' art, in season** (2026-09-20; `assets/sprites/trees/composite_apple_sapling.png`, `IllustratedTree._SAPLING_SHEETS`/`_sapling_grid_for`/`sapling_column_for`/`SAPLING_SNOW_COVERAGE`, `SpriteSheetSlicer.detect_rows`, `ChoppableTree._species_id`/`_last_sapling_frame`). Asked for directly: "wire saplings... I added an apple sapling sprite sheet which should be used to render the stages between sapling and mature tree... the last stage should then be morphed / blended with the full tree so there will be a seamless transition." This lifts the entry above's own named v1 simplification for the first species that has art of its own. A species sheet is a stage × season **grid** whose columns are the mature canopy's OWN frame constants (`CANOPY_BARE`/`BLOSSOM`/`LEAF`/`TURNING`/`SNOW`) rather than a second invented season order, so a sapling and the crown it grows into address their picture through the same index and cannot drift apart; every species with no sheet keeps the shared ten-frame strip on both sides of the hand-off, so art is still never required. The grid is **found, not assumed**: the five apple stages measure 122, 173, 215, 250 and 302 pixels tall (the tree really does get bigger each stage) against an even fifth of 250.8, so an even split would cut through four of the five drawings — which needed a row detector `SpriteSheetSlicer` did not have, `detect_rows` being `detect_frames` turned ninety degrees with the same pale-divider rule, so detection runs on the RAW sheet before any keying. The column order is measured, not assumed either: the bottom row's five cells read (97, 75, 36) bare brown, (91, 104, 26) blossom, (54, 85, 13) leaf green, (161, 63, 12) turning orange and (132, 133, 153) snow-blue, and drawn content climbs monotonically down every column. All 25 cells are normalized together under one shared scale, so a stage-0 shoot really does come out smaller than a stage-4 sapling and all of them stand on the same ground line. **The seam is the point**: `TreeMorphShader` now dissolves out of THIS species' last stage in THIS tree's season and snow, not the strip's species-blind, season-blind last frame — an apple crossing `BRANCH_START_FRACTION` in autumn used to snap from an orange sapling to a generic green shoot and only THEN start dissolving. Pinned directly by `test_the_hand_off_from_sapling_to_morph_is_seamless`, which asserts the last drawing the sapling showed and the first the morph dissolves from are the same pixels. The sapling canvas was also moved onto the MATURE canopy's own canvas (`SAPLING_CANVAS_SIZE` = `ProceduralTreeSprite.SIZE` = 300 × 396, baseline on its very bottom row, up from an "only big enough to hold the art" 320 × 480): `TreeMorphShader` samples the sapling texture at the SAME UV as the mature one, so a differently shaped canvas squashed the sapling picture into the mature rect at the exact instant the mechanism exists to smooth, and `TreeRenderer`'s half-texture-height sprite offset hung every sapling's feet 10 px below the ground line. Measured after: the last apple stage draws 292 × 363 with its feet on row 395 against the mature autumn canopy's 286 × 366 on row 395 — within two percent on both axes, on the identical ground line, rendered and looked at as well as asserted. Snow is a deliberate simplification against the mature canopy's ten-band per-clump blend — a whole-column switch at a pinned `SAPLING_SNOW_COVERAGE` (0.5), because a sapling is shorter than the player by definition and the bands are not resolvable at that size, while blending would multiply the cache by every one of them. 16 new tests in `test_illustrated_tree.gd`, 6 in `test_choppable_tree.gd`, 4 in `test_sprite_sheet_slicer.gd`. Only apple has a sheet so far; the other five follow the moment their art does, at one line each.
+
+✅ **Keying a delivered checkerboard is a one-pass classification, not a per-pixel flood** (2026-09-20; `SpriteSheetSlicer.checkerboard_key_in_place`). The flood read and re-classified the same pixel every time a neighbour looked at it — four times over, through `Image.get_pixelv`, against a `Dictionary` of `Vector2i`. Fine for a fern clump, not fine for a whole sheet: the apple sapling grid is 1254 × 1254 with about a million checker pixels and measured **5257ms**, a five-second freeze the first time such a tree came on screen. Every pixel is now classified exactly once into a bitmask of the three tone rules and the flood walks nothing but bytes — a one-pixel border of "no tone at all" removes every bounds test and the index-to-column modulo from the millions of neighbour steps, the queue is allocated once at its own worst case, and the thresholds are rounded to whole bytes from the same constants rather than compared as floats a million times over. Same seeds, same rules, same bounded widening: the behaviour tests that pin all three are untouched, as are the fern patch's and the building yard's. **5257ms → 1050ms** on the real sheet, with the budget pinned by `test_keying_a_whole_sheet_fits_in_a_forgivable_hitch` rather than left to a comment.
+
+⚠️ **Pre-existing, not from the sapling work: apple's autumn foliage leaf reads green.** `test_the_autumn_foliage_leaf_is_orange_for_every_species_that_has_one` measures an orange share of **0.158** against a 0.2 threshold for apple. Confirmed by a worktree A/B at `f1087bd9`, the commit before the sapling work began: identical failure, identical value, and it is unaffected by whether the sheet loads through its imported resource or its raw bytes (the import changes only fully-transparent pixels' RGB — 0 differing opaque pixels measured). It dates from `c3b9eac6` "fix: replace apple tree spritesheet", which replaced the sheet after the test was written. An **art gap in `composite_apple.png`'s autumn foliage frame**, the same shape as pine's already-Pending bare-winter one, not a code bug — recorded here rather than silently worked around or marked pending.
+
 ✅ **A wood stops when it is full** (`TreeSpread.MAX_TREES_IN_WORLD`). Spread plants a few saplings per tick and the CALLER decides how often a tick happens, so the rate was frames-per-second rather than anything to do with the world clock. Nothing bounded the population: measured under `/ecotest`, about twenty-one saplings a second, two thousand loaded trees inside a minute, and the frame rate down to seven. Bounding the population rather than the rate is the fix that holds however the caller behaves. (The per-frame shed in `step_tree_spread` is deliberate and stays: under fast-forward it fires once per frame against ~960s of simulated time, so it plants far *slower* than the clock implies, not faster.)
 
 ✅ **Seasons arrive over time, branch by branch** (`SeasonTransition` + the canopy blend). The last third of each season is spent turning into the next, so by the moment spring starts the tree is already fully turned rather than swapping frames on one boundary. The turn spreads OUTWARD from where the canopy meets the trunk, so change runs along the branches to the twigs, with jitter so the edge breaks into individual twigs rather than sweeping as a clean arc.
@@ -12620,6 +12626,7 @@ New concept doc (2026-08-25), written for the one mechanism below:
 - **Gold has exactly one faucet** — ✅ Done (2026-09-20) — asked directly: "Gold should only be conjured by the travelling merchant". `traveling_merchants.md`'s own opening already claimed this ("a village's gold used to come from nowhere... a traveling merchant is the faucet that replaces it") and it was **not true** — two other places minted gold with nothing behind them. (1) `NpcEconomy._earn` split a coin conjured per food unit gathered, whether or not anyone ever bought it; gone, along with `record_harvest_wage` (which was purely that pay) and the sub-coin `_take_home_carry`. A producer's work now earns the village **goods**, and the merchant pays for those — and a producer is not left unpaid, because `_draw_subsistence_wage` was *already* ungated on occupation and its own doc already anticipated this case. (2) `_collect_estate_tax` credited the purse and **debited nobody**; it is a real transfer now, through the new pure `VillageWages.tax_debits` (one debit per household, in order, never more than a household holds, summing to no more than is owed), with the fractional remainder **carried** per settlement rather than rounded — a `Wallet` holds integer gold and a kossaet owes 0.25 a day, so rounding would either forgive a real debt or charge it four times over. A village collects what is there, not what it is due: shortfalls are **not** banked as arrears, since a debt a household can never pay only grows and would make the purse a fiction again. The invariant is guarded four ways, not asserted once: nothing but the merchant sale and the household-funded tax may call `deposit_to_purse`; every *other* writer of the purse (`_set_purse`) must move gold to or from a wallet in the same breath, closing the loophole that guarding one function name would leave; the old levy arithmetic (`levy_on`/`take_home_of`/`deposit`) is kept and still tested but must stay unwired; and the mint itself must be gone rather than merely unused. **Eight existing tests asserted the old model and were rewritten, not deleted** — including a shared fixture that funded a purse by working a hunter, which now completes the real loop (goods, then a merchant's sale) and is a truer fixture than the one it replaced. Tests: `test_gold_has_one_faucet.gd` 7/7 (new), `test_village_wages.gd` 29/29, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 96/96, `test_settlement_surplus.gd` 13/13, `test_merchant_visit.gd` 25/25, `test_village_market.gd` 25/25.
 - **A merchant buys the whole village, not one of its cupboards** — ✅ Done (2026-09-20) — reported with the town panel open: "The village produces way too much food and the NPCs don't have an income" (`Food feeds 387 of 16`, `Gold 1`, `Happiness 62% (worst: income)`). **One fault, not two.** A settlement keeps goods in more than one container — `VillageMarket.stock`, and every structure's own `StructureStock` — and `MerchantVisit`, the only thing that turns goods into gold, was only ever shown the first. `SettlementFood` was taught to count the shelves when the bread chain landed (`milling_and_baking.md`, "Food that counts"); the merchant never was. So a village hauls its whole harvest into the warehouse — which is precisely what the carter's round is *for* — and thereby puts it beyond the reach of its own income. `src/emergence/settlement_surplus.gd` is the one view: `combined()` adds the containers up for the merchant to price, `allocate()` says how much to take from each, in view order, never more than a container holds. Pure — it never touches what it is shown, so a sale that cannot be completed has changed nothing, the same division `MerchantVisit` itself keeps. The market is drawn from **first**, deliberately: it is the abstract ledger a village trades out of anyway, while a warehouse shelf is a real building the player can walk up to and open, so what the player can *see* is the last thing to go. **Does not merge the containers** — `milling_and_baking.md`'s "three food containers, one eater" is still open; this says only that the merchant reads all of them. Tests: `test_settlement_surplus.gd` 13/13, `test_merchant_buys_the_whole_village.gd` 4/4, `test_merchant_visit.gd` 25/25, `test_village_wages.gd` 20/20, `test_npc_economy.gd` 80/80, `test_village_market.gd` 25/25. **Measured against the rest of the requested loop, which already exists:** the merchant's cadence already tops out at one call a day (`VISITS_PER_DAY 0.4 × (1 + SURPLUS_DRAW 1.5)` = 1.0 at full surplus), so he was always willing to come daily and simply had nothing to buy — the binding constraint on clearing a 387-unit backlog is `CART_CAPACITY` (20 units a visit), not the frequency. Progressive taxation by estate is likewise already real and wired (`VillageEstates.BASE_TAX_PER_DAY` kossaet 0.25 → buerger 1.75, through `VillageWages.estate_tax_for`, called from `EarthChunkManager`). **Still open:** producers' own gold is still conjured per unit gathered (`NpcProduction.YIELD_TO_GOLD_RATE`) rather than paid out of the civic purse, so "NPCs get paid by the City Hall" is true for non-producers only; and nothing yet throttles production against demand, which is the other half of "produces way too much food".
 - **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
+- **Village economy balance: wages, labour-priced exports, and a larder that is kept** — ✅ Done (2026-09-20) — reported with the town panel open: "Farmers produce herbs, but all houses are at 0% herbs... the city makes not enough money to pay each worker's income, so the price for goods when selling to the travel merchant needs to be based on per capita work output. The city should generate double the income through export goods than it costs to pay all workers. Also the city should always keep a minimum stock; enough to keep feeding the population", and "distribution of food to houses is only at 60%, which should saturate at 100%". **Measured first** (`tools/probe_village_economy.gd`, a real village east of Berlin, 1200 s): the herbalist's crop sat on the farmhouse shelf (13–43 units) while the estate draw read only the two markets, so every cottage read Herb 0.00; the cart sold the food down to a larder of 25 units — `EstateConsumption.demand_for` over 2.5 days, a 3600-second-day basket handed a 60-second-day cover, i.e. two assessments of food for ten households — so food satisfaction sawed 0.33 → 1.00 → 0.42; and a visit paid 20 gold that ten subsistence wages drained the same tick, purse 0 → 20 → 1, wallets 0, ten of ten broke, "worst: income" permanent. Five mechanisms, specified in `concept/village_economy_balance.md` before the code: (1) a **living wage** — the measured draw at the market's own price, times two ("a day's keep and as much again"), paid every assessment out of the same purse the cart fills through the one new transfer `NpcEconomy.pay_wage_from_purse`, whole coins, remainder carried, poorest first, no arrears; (2) the **merchant pays labour value** — `MerchantVisit.price_index` is twice the wage bill since his last call over the surplus's base value, floored at the farm gate (per unit, `2 × wage ÷ per-capita output`, measured by the merchant at his own gate rather than by any production hook), the cart carries what that takes, and a hoard still cannot become a windfall; (3) the **minimum stock** is the granary's own draw over the cart's round in assessments (`SettlementSurplus.minimum_stock_for`, 60 units for ten) plus the fuel the estates burn over it and one whole unit of shelf granularity (`minimum_fuel_for`), and the cart never sells below either; (4) a **full larder** is a day's meals on the measured draw (`FOOD_STOCK_PER_HOUSEHOLD_TARGET` 4.0 → 2.4, pinned to the derivation — it had been left at one assessment of the *old* draw); (5) the **estate draw reads the larder shelves** as well as both markets, stall before ledger before shelf. **Measured after, same village:** roster 10 at every sample, herb 1.00 at every sample, fuel 1.00 at every sample, purse 384 → 1584, wallets 64 → 1066, 0 of 10 broke, income never the worst need, happiness up to 0.76 from 0.64. **Two regressions the measurement caught in the first cut and closed:** a cart carrying the whole surplus stripped the woodpile (fuel 0.00, roster 10 → 6 through the ladder's exodus) — hence the fuel half of the reserve; and a larder target the size of the whole reserve (6.0) read a village with a day or two of food below the subsistence floor while every belly was full — hence a day's meals. **One latent fault found on the way:** `_collect_estate_tax` looked households up with `household_for` (a by-member lookup) and had debited nobody since the tax became a transfer; its test passed only because the fixture drew a merchant. Fixed to `get_household`, pinned against the wallets. 🚧 **Stated rather than hidden:** once everyone can afford a meal the same village eats its shelves down to 0 over the second half of the run — a production deficit poverty used to mask, answered by `village_estates.md` mechanism 7's works-scaling rather than by anything here — and the estate layer still reads food off stock, not off the flow of meals, so a village growing exactly what it eats reads short. Meal gold is still a sink and the purse still dies on a chunk reload. Tests: `test_village_living_wage.gd` 14/14 (new), `test_earth_chunk_manager_village_wages.gd` 9/9 (new), `test_merchant_visit.gd` 48/48, `test_earth_chunk_manager_merchant_labour_value.gd` 4/4 (new), `test_settlement_surplus.gd` 24/24, `test_earth_chunk_manager_village_larder.gd` 5/5 (new), `test_household_wellbeing.gd` 31/31, `test_earth_chunk_manager_estate_larder_draw.gd` 6/6 (new), `test_earth_chunk_manager_village_estates.gd` 49/49, `test_merchant_buys_the_whole_village.gd` 12/12, `test_village_immigration.gd` 20/20, `test_gold_has_one_faucet.gd` 7/7, `test_npc_economy.gd` 84/84, `test_village_wages.gd` 29/29, `test_estate_consumption.gd` 22/22. Concept docs cross-aligned: `traveling_merchants.md`, `village_estates.md`, `village_growth.md`, `hud.md`, `economy.md`, `settlement_food_calibration.md`.
 - **A village square is laid around what stands in it** — ✅ Done (2026-09-20) — reported a further time: "There are still villages without plaza." Measured rather than guessed (`tools/probe_village_supply.gd`, new): of the two genuine villages in a 14-chunk sweep, chunk (682,132) had **8 of its 48 square cells paved — exactly the one street row crossing it**, with a `farm_fence_east` at (15,13) and a `warehouse` at (20,13) standing inside the square. Two separate faults, each fatal alone. (1) The paving pass walked the rect and **returned on the first cell it could not take**, so one rail cancelled the whole square; it steps over such a cell now, because a square laid *around* what stands in it is still a square. (2) It **skipped the pass entirely whenever the civic doorstep already carried a road tile** — and the street crossing the square paves exactly that cell — so a village that lost its square once could never gain it back on any later visit; that short-circuit is gone, and the walk being idempotent means every visit heals it. A floor remains, since scattered cells are stray paving rather than a square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned at both ends rather than by a number somebody liked. One existing test changed deliberately: it asserted that *not one* cell was paved when a house stood on any of them — broader than its own stated intent ("rather than paving through a building") and exactly the reported defect; it now pins both halves honestly. Tests: `test_village_layout.gd` 93/93, `test_village_renderer.gd` 136/136, `test_village_plaza_wiring.gd` 3/3.
 - **Planner build palette reads as a build menu** — ✅ Done (2026-09-20) — asked directly, with a screenshot of ten identical text buttons in a row: "Make the Planner / Building HUD more professional and more like Anno 1806. Add Icons not only text". Planner mode's palette is now `src/ui/blueprint_palette_view.gd`: a titled card with a row of category tabs (Roads / Homes / Production / Civic), the slots of whichever category is open, and a footer naming what is armed and what it will cost. Each slot carries the building's **own picture** and its name — icons alone would trade one unreadable menu for another, since a sawmill and a blacksmith are both a brown roof at 48 pixels — and a hover gives the whole reckoning: name, footprint in tiles, the real material list, the real hours. **The icon is cut from that building's own `BuildingCatalog.finished_sheet_chain`**, the very sheet `EarthChunkManager` draws the finished building from, so there is no second picture of any building free to drift from the first (`src/ui/blueprint_icon.gd` — trimmed to its own art, fitted into the box with its aspect intact rather than squashed square, centred on a transparent canvas; pavement draws the real road tile it will lay). The tabs **are** `BuildingCatalog`'s own id lists read at runtime (`src/ui/blueprint_palette_model.gd`), never a second grouping, so a building added to the game lands in the right tab for free; and the two numbers on a card arrive as the same calls the raising path makes (`_item_catalog.display_name_of`, `_chunk_manager.build_labor_hours_for`), so the menu cannot quote a price or a job size the site then disagrees with. Work that costs no hours reads as **"Laid by hand"** rather than "0 hours" — `PlanRaising.is_laid_by_hand`'s own rule, said in the menu instead of discovered at the site. **Two defects the rendered probe caught that the headless tests could not** (`tools/probe_build_palette.gd`, per this repo's probe-before-you-trust convention): the armed slot and open tab were drawn in the theme's ordinary `pressed` shade, ~5% of value from normal and invisible over the card's dark background (now `UiTheme.selected_button_stylebox`, see the theme row below); and three tabs read as open at once, because `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so a tab opened from code left the previous one looking open. Tests: `test_blueprint_palette_view.gd` 15/15 (the real widget, driven for real), `test_blueprint_palette_model.gd` 22/22, `test_blueprint_icon.gd` 12/12, `test_world_planner_mode_wiring.gd` 31/31. **Nothing about the card's size is written down** — a slot is as wide as the widest name in its own tab, measured at the font it is really drawn in; the card is as wide as its slots; the footer wraps rather than clips and cannot widen either. That came out of merging `main`, where a concurrent session had landed the UI-scale setting: sweeping the probe across every scale the player can pick showed **six of the ten names clipping at 1.75** ("Warehouse" wanting 137px of a slot offering 84) and only 7px of headroom at 1.00, so the defect predated the slider — `UiScale` scales font sizes and deliberately not card widths, which is its own documented limit. Zero clipped names at 0.75, 1.00 and 1.75 now, footer included. **Known gap:** `CHARTERED_BUILDING_IDS` (trade hall, mage guild) is still not offered — a charter is a settlement-tier gate (`concept/settlement_charter.md`), and whether a player may plan a blueprint they could never raise is a separate question from how the menu looks.
 - **Every HUD card is laid out by its column** — ✅ Done (2026-09-20) — reported with both open: "The Town Panel and Warehouse / Building panel overlap.. a panel should occupy space and make other panels render below it.. don't use fixed coords". The HUD column system already stated the rule in its own doc comment ("each builder simply adds to the column it belongs in and never positions itself against its neighbour's height"); the **building readout was the one card that never joined it** — `PRESET_CENTER_RIGHT`, a hand-picked 24px from the edge, 180px tall whatever it held — while `_hud_right_column` grew down from the minimap straight into it. The settlement card landing in that column is what made the collision visible; the panel had been placed against nothing all along. It is a card in the right column now, **last**, because the cards above are standing readouts and this one comes and goes with a click, so it opens beneath them rather than shoving them about; closed it costs nothing, since a hidden child of a `VBox` leaves no hole (the same property the message stack already relies on). Its builder also had to move in `_ready` — it ran *before* `_build_hud_columns`, so there was no column to join. Pinned three ways: the stacking driven for real against a real `HousePanel` in a real `VBoxContainer` (a taller card above pushes it further down; a hidden one leaves no hole), a source-contract check on the builder, and a **generalised** check over every builder that adds a card, so the next panel cannot reintroduce the defect by being written the old way. Rendered for a look with `tools/probe_hud_column_flow.gd`: no overlap, 4px apart, both hugging the right edge. Tests: `test_hud_panel_flow.gd` 6/6, `test_world_hud.gd` 24/24, `test_hud_readouts.gd` 40/40, `test_house_panel.gd` 42/42, `test_ui_scale.gd` 15/15.
@@ -27447,6 +27454,102 @@ than delete them, the placement invariants they were really pinning (a
 workspot is not a road or a wall; it touches the paving) were retargeted
 onto `NpcMarker.workspot_position`, which outlives the prop. 131/131.
 
+### ✅ Done (2026-09-20): ...and so do whole-building entities
+
+Reported unchanged after all of the above landed: **"NPCs still walk
+through houses and ignore the hitbox"**.
+
+The gates were right; the question was half of one. A village house is a
+whole-building **entity** now (docs/concept/building.md, "Buildings are
+entities; interiors are scenes"): its cells carry the building id and
+`BuildingCatalog.FOOTPRINT_TILE_ID`, and it has **no `BuildingPiece` walls
+at all** -- `BuildingCatalog.occupies` says so in as many words, "a legacy
+BuildingPiece or a single-tile placeable is its own thing and answers false
+here". So `piece_blocks_movement_at_global`, the one question all four
+gates asked, answers `false` on every cell of a cottage, while the player
+is stopped by a `StaticBody2D` over its whole footprint. **The player and
+the markers were being stopped by two different kinds of building.**
+
+`AgentPassability.blocked_predicate_for` had made it structural: an
+`elif`, so a world that knew about pieces never asked about buildings at
+all. That preference was deliberate and its worry was real -- routing on a
+whole footprint would shut a villager out of a piece-built structure's
+walkable DOOR and FLOOR -- but it defended the wrong thing.
+
+- ✅ **One shared question.** `AgentPassability.structure_blocks(world,
+  tile)` asks both, and is read by `TileRouter`'s predicate, `WalkGate`,
+  `NpcMarker._blocked_step` and
+  `CreatureMarker._building_blocks_arrival` -- six gates cannot answer it
+  six ways.
+- ✅ **What protects a door is disjointness, not preference.** A
+  `wood_wall` blocks the piece question and answers `false` to
+  `has_building_at_global`; `wood_door` and `wood_floor` stay walkable
+  through both. Measured on real stamped pieces, not asserted.
+- ✅ **A whole footprint is solid, and that costs nothing.** A building
+  entity's interior is a separate scene entered from its DOORSTEP, which
+  `BuildingCatalog.doorstep_of` puts "just south of the door, outside the
+  footprint". Nobody ever walked through the footprint to get in.
+
+**Measured on a real village, before and after**
+(`tools/probe_villagers_in_houses.gd` — 10 villagers, 17 buildings loaded,
+900 frames of 0.05 s each):
+
+| | before | after |
+| --- | --- | --- |
+| frames standing inside a building | **1818 / 9000 (20.2%)** | **0 / 9000** |
+| villagers ever inside one | **9 / 10** | **0 / 10** |
+| worst offender | carter, 621 frames | — |
+| ...of which the PIECE question would also have refused | **0** | — |
+| villagers that never moved at all | 0 / 10 | 0 / 10 |
+| still walking in the last 90 frames | 9 / 10 | 7 / 10 |
+| frames spent standing still | 5310 (59.0%) | 6498 (72.2%) |
+| mean distance walked | 375 px | 256 px |
+
+The fourth row is the diagnosis in one number: not one of the 1818 cells a
+villager stood on inside a house was a cell the old question would have
+refused, because a house entity has no `BuildingPiece` in it. Every marker
+had a world and a valid wall predicate the whole time — the gate was never
+missing, it was asking about the wrong kind of building.
+
+**The cost, stated rather than glossed:** villagers stand still more
+(72% of frames against 59%) and cover less ground in the same window,
+because a route around a house is not a line through one. Three ended the
+run stopped next to a house, against one before — so each was asked
+**directly** whether it had any way out, by offering it all eight
+directions through its own slide. All three had 4–5 open, none was wedged,
+and none was frozen for the whole run. The standing is villagers being
+villagers; the baseline already spent 59% of its frames that way.
+
+**Probe caveat:** it drives `villager._process` without stepping the world
+clock, so schedules do not advance as they would live. The numbers are
+sound as a *comparison* between the two runs, which is what they are for.
+
+**TDD:** new `test_marker_gates_block_buildings.gd` (10 tests) works on a
+REAL `house_medium` in a real Berlin chunk rather than a stub -- a stub can
+be made to answer anything, and what was wrong here was which question the
+*real* world was asked. Three confirmed red (route, walk gate, slide) with
+two diagnosis tests passing beside them (the body exists; the piece
+question is silent about it). It also pins the body's world rect against
+the cells the world calls a building, so player and markers cannot drift
+apart again. 10/10, plus 14/14 in `test_agent_passability.gd`.
+
+`test_the_piece_question_is_preferred_over_the_footprint_one` asserted the
+`elif` against a stub that answered `true` to **both** questions -- a world
+that does not exist -- and so pinned this bug in place. Retargeted onto the
+invariant that actually protects a door.
+
+**One of my own tests was wrong first**, the same class of mistake as ever:
+the "diagonal into the house" aimed at a cell one row BELOW the footprint,
+where there was nothing to be stopped by and nothing to slide along. Now
+stated in cells off the house's own corner.
+
+**Pre-existing failures, confirmed unchanged by stashing the change and
+re-running:** `test_npc_marker_farming` (3), `_timber` (1), `_fishing` (1),
+`_hunting` (1).
+
+**Still ungated:** the caravan and cart markers have no world reference to
+ask with; plumbing one through is a separate change and is the user's call.
+
 ### ✅ Walls and rails stop animals and villagers
 
 "Horses still aren't blocked by houses", "fences should have a hitbox
@@ -27514,6 +27617,70 @@ start, which is what makes it a regression guard. One of my own tests was
 wrong first: it asserted a "north" rail's collider touches its northern edge,
 when a rail on the field's north side closes its own SOUTHERN one -- the side
 the crop is on.
+
+### ✅ Done (2026-09-20): and it stops them at the foot of the rail
+
+Reported straight after: *"The horizontal fences should have the hitbox at
+the bottom of the rail ... so it should use fence height instead of
+thickness"*.
+
+Naming the edge is not the same as knowing where on that edge the fence
+stands. The two horizontal facings anchor their art to **opposite ends** of
+their cell (`IllustratedStructureSprite.footprint_offset`: `inner.y > 0`
+bottom-anchors, `inner.y < 0` top-anchors), so a collider pinned to the edge
+its normal names is right for one facing and wrong for the other. Measured
+before anything was changed, on a 16px tile:
+
+| rail | inner | wood, tile-local | collider was | correct |
+| --- | --- | --- | --- | --- |
+| north | `(0, 1)` | `y = 5.5 .. 16.0` | `12.0 .. 16.0` | yes |
+| south | `(0, -1)` | `y = 0.0 .. 10.9` | `0.0 .. 4.0` | no |
+
+A south rail's wood hangs DOWN from its top edge, so the body on that edge
+stopped the player at the rail's **head** -- seven pixels short of the line
+they could see. `fence_collider_rect` now takes the height of the wood as
+drawn and stands the strip at its **foot**, clamped into the cell so art
+that measures oddly can never put a body in the neighbour's tile. The strip
+is still `FENCE_COLLIDER_THICKNESS_PX` deep: the height decides *where* it
+sits, not how thick it is. A **vertical** rail is anchored left or right,
+has no foot on the `y` axis, and is untouched.
+
+Finding that foot means the band arithmetic `footprint_offset` already does,
+so `IllustratedStructureSprite.placed_art_rect` answers it once ("where does
+this subject's ink land inside its tile"), `footprint_offset` is refactored
+onto the same helper, and `EarthChunkManager` only forwards the number --
+the body cannot drift from the picture. That helper's result is cached per
+`subject|tile_size`, because `get_image()` is a readback and a chunk load
+asks once per rail cell.
+
+**TDD:** 5 new geometry pins in `test_village_farm.gd` (top-anchored blocks
+at its wood's foot, bottom-anchored does not move, both facings stated as
+one property, vertical unchanged, the foot clamped into the tile for any
+height) and 4 wiring pins in `test_earth_chunk_manager_rail_collision.gd`,
+plus 4 in `test_illustrated_structure_sprite.gd` holding `placed_art_rect`
+against the test file's own independent pixel measurement. All confirmed red
+first (`Too many arguments for "fence_collider_rect()"`, then
+`Nonexistent function 'placed_art_rect'`, then 9/9 against the unwired
+manager). 93/93, 9/9, 63/63.
+
+`test_the_collider_touches_the_edge_its_normal_names` asserted all four
+facings, and so **encoded this exact bug**. It is now vertical-only
+(`test_a_vertical_colliders_edge_is_the_one_its_normal_names`), with the
+horizontal rule stated as the foot it really is.
+
+**Known divergence, deliberate:** this is the one place the player and the
+markers stop at different *lines*. `rails_block_step` is a cell-grid rule
+and refuses the crossing at the cell boundary; the body refuses it a few
+pixels later, inside the cell. They still refuse the same crossings, and the
+rest of a rail's tile being ordinary ground is the design rule rather than
+an accident, so standing in it is allowed.
+
+**Also read as ambiguous and decided:** *"use fence height instead of
+thickness"* could have meant the strip's DEPTH becomes the fence height (a
+band covering the whole drawn rail) rather than its PLACEMENT. Read as
+placement, because *"have the hitbox at the bottom of the rail"* is where it
+sits; a band spanning the wood's full height would not be "at the bottom".
+Easy to change if the other reading was meant.
 
 ### 🚧 Honest note
 
@@ -30929,24 +31096,35 @@ spur running down the column an east rail needs (`6/14` rails standing
 where its neighbour had `9/14`). The fencing pass skips a cell already
 paved or already railed, so whichever is fenced second loses that side.
 
-✅ **The cause was that siting asked only whether the BEDS fit.** A fence is
-what makes beds a field, so its ground has to be asked for at the same
-moment — the lesson `_may_sow` already carried, applied to the half of the
-farmstead it had not reached. `VillageFarm.fence_has_room` is the pure
-half; `_may_rail` is its predicate (a street row is the gate; a cell the
-neighbour is nearer to is theirs; anything else must be clear).
+✅ **Half of it was already being fixed on `main` while this ran.** Another
+session took the same report from the other end — *"It should be possible
+to build two rails on a single tile"* — and gave two meeting fields a
+SHARED line of rails (`SHARED_FENCE_TILE_IDS`). That answers the contested
+cell completely, and the first cut of the rule below was wrong to refuse a
+neighbour's rail line: a shared line is a better village than two
+farmsteads shoved to opposite outskirts. `_may_rail` allows it now.
+
+✅ **What a shared line cannot answer is a ROAD down the fence line** — a
+rail and a road are not two halves of one tile. Measured with the shared
+line already in place: farmhouse (20,19) in chunk (679,141) still stood at
+**6 of 14** rails, its whole east side road. The cause is that siting asked
+only whether the BEDS fit; a fence is what makes beds a field, so its
+ground has to be asked for at the same moment — the lesson `_may_sow`
+already carried, applied to the half of the farmstead it had not reached.
+`VillageFarm.fence_has_room` is the pure half; `_may_rail` is its predicate
+(a street row is the gate; the neighbour's standing rail may be joined;
+anything else must be clear).
 
 ✅ **A/B on freshly founded villages**, both runs scrubbing each chunk
 first — chunks persist on unload, and the first attempt at this comparison
 came back **byte-identical** because it was measuring a reload of its own
 earlier founding:
 
-| | before | after |
+| | shared line only | + this rule |
 | --- | --- | --- |
-| villages with overlapping farm ground | 2 | **0** |
+| worst enclosure measured | 6 of 14 | **8 of 12** |
 | farmhouses with no field | 0 | 0 |
 | villages with a farmhouse (of which 2+) | 10 (7) | 10 (7) |
-| rails standing | 6–9 of 14 | 8–12 of 12 |
 
 ✅ **A latent bug fell out of it.** `_sited_plot` — the scan behind
 `outskirt_plot` and `industry_plot` — never returned a `facing`, and
@@ -30959,6 +31137,393 @@ farms.
 overlap and a full field; what its remaining gaps are has not been run
 down, so it is named rather than absorbed.
 
-Tests: 348/348 across `test_village_renderer.gd`, `test_village_farm.gd`
-and `test_village_layout.gd`, including the new
-`test_no_two_farmsteads_want_the_same_rail` (36 clashes before the fix).
+> **A test that proved nothing, replaced.** The first pin here asserted
+> that no two farmsteads want the same rail — 36 clashes before the fix,
+> zero after. Once `main`'s shared line landed, that assertion was pinning
+> the *wrong design*: a shared rail is now correct. It is replaced by
+> `test_every_farmstead_really_gets_its_enclosure` (every ring cell off the
+> street-row gate really carries a rail) and by
+> `test_a_farmstead_is_refused_a_fence_line_a_road_runs_down`, which is red
+> against `main` and green with this rule — the only test here that
+> actually distinguishes the two.
+
+
+## A crush lands on a crush, at the level everything else plays at (`concept/creature_and_footstep_audio.md`, 2026-09-20)
+
+Reported live: *"can you make the mushroom crush sound louder"*.
+
+### ✅ Measured first, and the measurement split the report in two
+
+`mushroom_crush.mp3` is 7.54s of styrofoam crushed about **twenty separate
+times**, not a continuous crinkle — which is what the concept doc assumed
+("any moment in it is a crunch"). `offset_for` read it as an ordinary
+walking bed and took a uniform roll anywhere in it, so most rolls played the
+**gap** between crushes. Across 101 evenly spaced rolls the 0.30s window
+that actually reaches the speaker ran from **−60.65 to −33.73 LUFS with a
+median of −45.34**, against a footstep target of −33.13: **58 of the 101
+landed more than 10 dB under it**, 13 more than 20 dB under.
+
+Separately, `play_mushroom_crush` was the **one sound played through these
+voices at a flat 0 dB** while every footstep pool is matched by K-weighted
+loudness to a shared target. Either fact alone makes it quiet; together they
+make a gain useless, because turning up 0.3s of room tone gives louder room
+tone.
+
+### ✅ The crushes are measured now
+
+`tools/prepare_footstep_oneshots.py` grew a one-shots pass that reuses the
+onset detector already in it — the one that cuts footfalls out of a walking
+recording finds crushes just as well. Each onset is windowed exactly as
+playback will give it (0.30s, the cap `InteractionSfxPlayer` applies, pinned
+across the two languages), with 20ms of pre-roll so the attack is not
+clipped off.
+
+11 of 22 events survive, kept because they sit within **8.34 dB** of the
+loudest — not a threshold anybody chose, but the widest within-pool spread a
+*shipped* footstep pool already runs (snow's), derived in the same run. A
+pool takes one gain, so an event 20 dB under its neighbours would stay
+inaudible.
+
+The surviving pool measures **−37.06 LUFS**, takes **+3.9 dB**, lands at
+**−33.16** against the target of −33.13. Peak after gain −8.6 dBFS, inside
+the −1.0 ceiling. Both numbers go into `steps/levels.json` beside the
+surfaces' own and are pinned against it.
+
+### ⚠️ The spec said "any moment in it is a crunch"
+
+That sentence is what made the uniform roll look right, and it is corrected
+in place in the concept doc rather than quietly rewritten — along with a
+second one calling `0.0` dB "full volume", which it is not: it is
+*unadjusted*, and being unadjusted was the bug once everything around it had
+been matched.
+
+### ✅ Red first, and both halves bite
+
+One existing test asserted the crush plays at exactly `0.0` dB. Rewritten,
+not deleted: what it guards did not move — the voice pool recycles, so a
+crush must set its own volume unconditionally rather than inherit the last
+footstep's — and the flat `0.0` it expected was itself the bug. Re-confirmed
+by mutation: putting the gain back to 0 dB, and removing the crush branch
+from `offset_for`, each fail the new tests.
+
+Tested: `test_footstep_sound.gd` (+7), `test_interaction_sfx_player.gd`
+(+2, one rewritten).
+## The forest floor: bracken that hides you, brambles that feed you (`concept/ferns.md`, `concept/brambles.md`, 2026-09-20)
+
+Reported live: *"The fern is not visible in forests ..."*, then mid-turn
+*"And I added blackberry.png"*.
+
+### The answer to the report itself
+
+Neither sheet was referenced **anywhere** in the code. Both had been
+delivered and never wired, so there was nothing to see — the same
+delivered-but-unwired gap the illustrated item art had two entries above.
+
+### 🤝 A concurrent session built the fern while this was being written
+
+Worth recording plainly, because it is the case CLAUDE.md's
+concurrent-sessions rule exists for. I wrote a `ForestFern` and its tests,
+and on pushing found another session had landed **the same module, further
+along**: a dedicated `ferns.md`, a `MAX_PATCHES` *derived* from the seed
+chance against a real 32×32 chunk and recomputed by its own test (against my
+eyeballed number), a growth-blocked mask so ferns never seed into rivers or
+through floors, an `IllustratedFernPatch` reaching into the grass's own bend
+so a wood and the meadow beside it sway in one wind, and a rendered probe
+measuring 12.4% cover with the checkerboard down to 0.00% of drawn pixels.
+
+**I dropped mine and kept theirs**, then built only what theirs did not
+have. Their work also moved the checkerboard key I had just written for the
+farmhouse yards into `SpriteSheetSlicer` and made `IllustratedStructureSprite`
+delegate, which is the better home for it.
+
+### ✅ Bracken is cover (added to their sim)
+
+Chosen explicitly between decoration, ground cover, and cover that matters:
+*"Ground cover + shelter for wildlife"*. `ForestFern.is_shelter(cell)` is the
+single question the creature code asks, so nothing in the ethogram needs to
+know what a fern is.
+
+Only a **mature** clump shelters — a frond that has not unrolled hides
+nothing, and tying cover to growth is what makes the understorey establish
+over time rather than be a flag set at worldgen. It reads straight off the
+growth map, so everything that already takes a fern away (`graze`,
+`block_cells`) takes its cover with it for free.
+
+### ✅ Brambles bear with the seasons, and you can pick them
+
+Chosen explicitly: *"Forageable, bearing with the seasons"*. The sheet draws
+green fruit, reddening fruit, black fruit and flowers — art that specific is
+a specification, so ripeness is a **number**, not a flag.
+
+`ripeness_at(year_fraction)` is a **pure function of the calendar** with no
+state at all: nothing on the cane through winter and spring while it flowers,
+swelling through summer, ripe across autumn, bare again at the turn into
+winter. That is `flora.md`'s own "BARE BY WINTER" rule, and it is pure for
+the reason that section records — a crop on its own unaligned clock is what
+once put apples under snow. Being pure, it is testable at any point of any
+year without stepping a simulation to reach it.
+
+Only ripe fruit can be picked. A patch picked this autumn gives nothing more
+until the next one, because foraging that refills as you walk away is the
+"permanent larder" `flora.md` already refuses — but the **cane survives**, so
+the same bramble bears again next year with no regrowth timer to tune. The
+calendar is the timer. `blackberry` is a real `ItemCatalog` food beside the
+other wild fruit.
+
+### ✅ And they are on screen
+
+Every loaded chunk gets a bramble sim beside its fern one with the identical
+growth-blocked mask, and one ordinary `Sprite2D` per thicket — deliberately
+**not** the fern's banded MultiMesh, which exists to bend a chunk's worth of
+blades as one mesh. Brambles are sparse (36 against a fern's 123) and woody;
+a thicket does not sway. Which of the twenty-five clumps it wears is
+hash-derived from its own global cell, so a wood is not one bramble stamped
+over and over.
+
+Pinned against the **real Harz chunk** the fern suite uses (573 forest cells,
+against Berlin's 29) rather than a fixture — a fixture with almost no wood in
+it would pass these by accident.
+
+### 🚧 Honest gaps
+
+- **A closed wood is all crown.** Measured by the other session in a real
+  render: the frame a player sees is almost entirely canopy, so the
+  understorey reads best at a wood's EDGE and in its clearings. That is a
+  fact about a top-down camera in a forest, not a fault in the plants — but
+  it means "not visible in forests" may still be partly true *under dense
+  canopy* even now that both plants are wired.
+- **Nothing forages a bramble but the player would.** `pick()` exists and is
+  tested; no bird, mammal or villager calls it yet.
+- **Nothing eats a fern.** `graze` exists and works; `_graze_by_herbivores`
+  is wired to the grass alone (the other session's own recorded gap).
+
+Tests: 151/151 across `test_forest_fern.gd`, `test_blackberry_bramble.gd`,
+`test_earth_chunk_manager_ferns.gd`, `test_earth_chunk_manager_brambles.gd`
+and `test_item_catalog.gd`.
+
+## Somebody is working on the construction site (`concept/building.md`, 2026-09-20)
+
+Asked for directly, watching a village raise a cottage: *"the construction
+site should show a builder working on it"*. A site was a picture of a
+building going up and nothing else — the stage sprite changed as labour
+accrued and the plot was otherwise empty ground.
+
+**The builder is a number made visible, not decoration.** A settlement
+spends real spare hands on its projects (`SettlementSpareCapacity` scaled
+by `settlement_productivity`, charged against the project's required hours
+by `ConstructionCatchup`), and that number is already the difference
+between a hall that rises and one that does not.
+`ConstructionWorkerMarker` stands on the plot while its settlement has
+hands on the work, and is freed the moment the project completes, is
+abandoned, or its chunk unloads — the site node's own life exactly, since
+a worker outliving the site he works is a ghost.
+
+- **Nobody, when nobody is working.** `builder_count` is zero for a
+  settlement with no spare capacity, and a site accruing no labour shows
+  no worker (`test_a_site_nobody_has_hands_for_shows_no_builder`).
+- **One figure, not a crew.** That count is settlement-WIDE and shared
+  across every project going, so one worker per unit at each site would
+  show the same hands twice over.
+- **He never leaves the footprint.** A small purpose-built walker like the
+  Farmer and the Lumberjack, not the `NpcMarker` schedule stack: he paces
+  his own plot, works a spell, moves on, seeded from the site's own seed
+  so one builder works one site the same way on every reload.
+
+**The art had to READ at the size it is really drawn**, and that is
+measured rather than eyeballed. On a real render at the game's own zoom
+(`tools/probe_construction_render.gd`, which now spawns a builder per
+stage through the real seam) a builder is about seven world units tall, a
+third the width of the cottage he is raising — a silhouette and nothing
+else. The first draft failed twice, both times for reasons a test can
+hold: an apron nearly the tone of skin, so the head vanished into the body
+(measured contrast 0.19 against the Lumberjack's own 0.35), and a mallet
+head 13% of the figure, drawn detached, which read as a grey slab floating
+beside a blob. Both are pinned now — the head must stand out from the
+apron about as well as the woodsman's does from his tunic, and the tool
+must be smaller than the man's own head, which is the honest standard for
+"a thing he is carrying" rather than "an axe, but bigger".
+
+Honest gap:
+
+🚧 **He does not carry material or place anything.** The labour he stands
+for is abstract — hours against a required total — so he is the face of
+work happening here, not a piece-by-piece builder.
+`BuilderMarker`/`civic_construction.md`'s piece-placing worker is a
+different, still-unbuilt thing for the legacy piece model.
+
+Tested: `test_procedural_builder_sprite.gd` (6, new),
+`test_construction_worker_marker.gd` (5, new),
+`test_earth_chunk_manager_city_hall_rising.gd` (+4).
+
+
+## Something eats the ferns, and the brambles get their last three seams (`concept/ferns.md`, `concept/brambles.md`, 2026-09-20)
+
+Reported together: *"make ferns grazeable by herbivores also blackberrys
+are still not wired and don't grow in forest biome"*.
+
+**Ferns.** `graze()` had existed since the sim landed with nothing calling
+it — named as an honest gap in the concept doc rather than left to be
+found. A grazer that takes no grass from the cell it stands on now crops
+the fern instead: the standing-on-it path `ecosystem_dynamics.md` already
+describes, deliberately not a new `GrazerForaging` food kind, because
+those are things an animal sees and walks to and nothing walks across a
+wood to reach a fern. It matches the real thing too — bracken is toxic to
+livestock and most grazers leave it standing while there is grass, while
+deer browse fronds mainly when the grazing is poor. A cropped fern's cards
+are rebuilt once per chunk at the end of the pass rather than once per
+mouthful.
+
+One test premise was impossible and is replaced by the truth it uncovered.
+It tried to stand mature grass on a fern's own cell to prove grass wins,
+and failed at its own precondition: grass is gated to grassland and ferns
+to forest, so **no cell can ever carry both**. The `elif` is a rail, not a
+contest, and both the test and the function's comment now say so.
+
+**Brambles.** The sim, the sheet, the drawing and the picking were all
+there. Three seams every other ground cover goes through were not, and
+each reads in play as "it isn't wired": a building's floor did not clear a
+thicket (absent from the block/unblock lists, so a house could stand with
+one through its floor); a cleared thicket kept drawing, since the shared
+sprite resync did not reach them; and nothing freed them on unload, so the
+sims and their `Sprite2D`s accumulated for every wood a player ever walked
+through and hung over ground no longer loaded.
+
+**The "don't grow in forest biome" half did not reproduce, and is
+measured rather than argued.** On a real Harz chunk: **6 brambles on 242
+forest cells** (2.5% against the 3.5% asked for), **all 6 drawn**, and a
+render centred on one shows it correctly at the wood's edge beside the
+ferns. What makes them hard to find is **sparsity** — about one per 170
+tiles — and **the canopy**: a closed wood seen from above is all crown,
+and this world has no canopy fade when a player walks under it, so nothing
+on a forest floor is visible there at all. Both are written down as open
+questions rather than tuned away on the way past: raising the density is
+one line and would not fix the second half, while a fading canopy would
+fix both, and for mushrooms and everything else down there too.
+
+Also found and recorded rather than fixed: a bramble has no `plant` and no
+spread, so a cell cleared by a building carries no thicket for the life of
+that chunk. Every other ground cover can re-colonise.
+
+Tested, red first at every step: `test_earth_chunk_manager_ferns.gd` 15/15
+(+3), `test_earth_chunk_manager_brambles.gd` 16/16 (+4).
+
+
+## Blackberries at ten percent, and the cap that had to move with them (`concept/brambles.md`, 2026-09-20)
+
+Asked for directly after a live hunt for them came up short: *"Bump
+blackberrys to 10%.. canopy is fine"*.
+
+Measured before: **6 thickets on 242 forest cells** on a real Harz chunk,
+about one per 170 tiles of world. After: **21 on the same 242** (8.7%
+against the 10% asked, sampling variance on that few cells), and a render
+that had one thicket in frame now has two.
+
+**`MAX_PATCHES` had to move with it, and nothing was checking that.**
+`blackberry_bramble.gd` has claimed since the day it landed that its cap
+is derived from its density against a real 32x32 chunk — the trap
+`TallGrass.MAX_PATCHES` records paying for once — and no test recomputed
+it. So the bump walked straight into that paragraph's own warning: at 10%
+the old cap of 36 is reached by **seeding alone**, truncating every fully
+wooded chunk to roughly a third of what was asked for. The cap is 103 now
+and a test recomputes it, which went red on exactly this change — the
+guard doing its job on the first change that needed it.
+
+**One existing test was passing for the wrong reason, and the denser wood
+exposed it.** `pick_blackberries_near` searches a one-tile radius and
+takes the first bearing cane in it, so picking twice in the same spot only
+proves the first cane is stripped when nothing else is within reach. That
+was true by accident at 3.5% and false often enough at 10%. It clears the
+3x3 first now and says why in its own comment.
+
+The comment calling brambles *"scattered through"* a bracken carpet no
+longer describes the numbers — 10 against bracken's 12 is nearly as
+common — so it says what is true instead: still rarer, deliberately, but
+as a choice about findability rather than a claim about woods. The
+ordering test is renamed to match what it asserts.
+
+**The canopy was raised and declined.** A closed wood from above is all
+crown and nothing fades when a player walks under it, so a forest floor is
+invisible there — ferns, mushrooms and thickets alike. Recorded in
+`concept/brambles.md` as a known property rather than an open task.
+
+Tested, red first: `test_blackberry_bramble.gd` (+3, including the missing
+cap guard) and `test_earth_chunk_manager_brambles.gd`, 34/34 together.
+
+## Two fields, one line of rails — and a corner without its post (2026-09-20)
+
+Reported with both enclosures in shot: *"It should be possible to build two
+rails on a single tile so both enclosures are fenced properly. also the
+corner post can be removed"*.
+
+Measured before touching anything (`tools/probe_neighbouring_fences.gd`,
+kept — it walks real chunks for a village whose fence rings actually
+*touch*, then prints what each field WANTS on every contested cell beside
+what really stands there). Four farmhouses at (678, 128):
+
+```
+  (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+  (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+  (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+  (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+```
+
+A rail is an ordinary chunk modification and a tile holds **one** id, so
+field 0's east rail won every contested cell and field 1 had no west rail
+at all — its enclosure open along the whole shared side. The two `road`
+cells are correct: that paving is the gate the farmer walks in through.
+
+### ✅ A shared line
+
+`VillageFarm.SHARED_FENCE_TILE_IDS` names the two opposite pairs, and that
+is the whole set — two fields meeting share a line, and a line has a field
+on each side. A shared id is **defined as the two ordinary rails standing
+there** (`fence_pieces_of`), which is what makes it cost nothing
+downstream: each piece keeps the art and the inner edge it already had,
+`_spawn_structure_art_for` raises one sprite per piece, and
+`rails_block_step` refuses the crop on both sides because there is one on
+each.
+
+Idempotent, which `_fence_the_fields`' own doc comment requires: only the
+*opposite* rail shares a line and never the same rail twice, so a reload
+re-derives the ring and builds nothing. Re-measured after:
+
+```
+  (23, 22)  wanted as ["0:east", "1:west"] -- stands: farm_fence_east_west
+  (23, 23)  ...                            -- stands: farm_fence_east_west
+```
+
+### ✅ A corner draws no post of its own
+
+Every cell of `fence.png` is a whole panel with a post at **each** end —
+`tools/probe_fence_posts.gd` measured them 12.5px apart inside a 16px tile
+— so the two runs meeting at a corner already carry one each and the
+corner's own was a third beside them.
+
+**The corner cell stays a rail**, and that distinction is load-bearing: it
+is what refuses the diagonal into the crop
+(`test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop`,
+still green), and an id that stopped reading as a fence would lose its
+collider *and* stop being overlay-only, painting a bare earth square on
+ground already walked past. Only its art entry is gone, so nothing spawns.
+
+That nuance was worth naming to the user rather than discovered later: the
+post is removed from the picture, not the fence from the ring.
+
+### 🚧 Tests that pinned the old picture, rewritten rather than deleted
+
+Six asked where a corner's wood lands or where its post stood. Four now ask
+it only of the **lengths of rail** (a `_run_subjects` helper states the rule
+once), and the two that pinned the post's position are replaced by the
+stronger statement that none exists. One more — `test_every_rail_an_older_
+village_may_still_have_standing_keeps_its_art` — was really guarding the
+*overlay*, which is what a rail with no art would lose, so it asks that
+directly now.
+
+`_structure_art_sprites` changed shape (one cell can carry more than one
+sprite), so its three readers and the test fixture moved with it.
+
+### ⬜ Not mine, checked
+
+`test_terrain_renderer.gd` runs 185/187, and a clean `origin/main`
+worktree runs the identical 185/187 with the same two village-square
+failures.

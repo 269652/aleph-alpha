@@ -469,6 +469,119 @@ def _gained(surface: str, measured: dict) -> dict:
     }
 
 
+# One-shot event sounds that are NOT footsteps but are played through the
+# same voices, at the same target, and were never measured into it.
+#
+# Reported live: "can you make the mushroom crush sound louder". The crush
+# is 7.54s of styrofoam crushed about twenty separate times, and it was
+# being played by picking a UNIFORM random offset anywhere in the file.
+# Most of a recording of repeated crushes is the gap between them, so most
+# rolls played the gap: across 101 evenly spaced rolls the 0.30s window that
+# actually reaches the speaker measured a median of -45.34 LUFS against a
+# footstep target of -33.13, with 58 of them more than 10 dB under it.
+#
+# Measuring it is the fix, in both directions at once: the onset detector
+# already here finds where the crushes actually are, and the same per-pool
+# gain rule the surfaces use then lands that pool on the same target.
+ONE_SHOTS = {
+    "mushroom_crush": "assets/audio/footsteps/mushroom_crush.mp3",
+}
+
+# How much of a one-shot actually reaches the speaker. Must match
+# InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS, which caps
+# playback -- measuring a second of a clip that is cut after 0.3 would
+# measure a level nobody hears. Pinned across the two by
+# test_the_measured_crush_window_is_the_one_playback_really_allows.
+ONE_SHOT_WINDOW_SECONDS = 0.30
+
+# A little of the recording BEFORE the onset, so the transient's own attack
+# is not clipped off by starting exactly on it. 20ms: shorter than the
+# ~30ms a human needs to localise an attack at all, so it cannot read as a
+# delay, and long enough to carry the rise itself.
+ONE_SHOT_PRE_ROLL_SECONDS = 0.02
+
+
+def one_shot_windows(samples: array.array, keep_within_db: float) -> list:
+    """Where the real events are in a recording of many, as playable windows.
+
+    Every onset the footstep detector finds, measured as the window playback
+    would actually give it, and then the quiet ones dropped -- a recording of
+    repeated crushes has soft ones and near-misses in it, and a pool takes
+    ONE gain, so a window 20 dB under its neighbours stays 20 dB under them
+    and is simply inaudible.
+
+    `keep_within_db` is not a number chosen here: main() passes the widest
+    spread any SHIPPED footstep pool already runs, so what survives is
+    exactly as varied as a pool this project already accepted.
+    """
+    window = int(ONE_SHOT_WINDOW_SECONDS * RATE)
+    pre_roll = int(ONE_SHOT_PRE_ROLL_SECONDS * RATE)
+    found = []
+    for index, _strength in footfalls(samples):
+        start = max(0, index - pre_roll)
+        cut = samples[start:start + window]
+        if len(cut) < window:
+            continue
+        found.append({
+            "offset_seconds": round(start / RATE, 3),
+            "lufs": round(lufs(cut), 2),
+            "peak_dbfs": round(peak_dbfs(cut), 2),
+        })
+    if not found:
+        return []
+    loudest = max(f["lufs"] for f in found)
+    return [f for f in found if f["lufs"] >= loudest - keep_within_db]
+
+
+def measure_one_shots(repo_root: str, keep_within_db: float) -> dict:
+    """Each one-shot's playable windows and the single gain its pool takes."""
+    out = {}
+    for name, relative in sorted(ONE_SHOTS.items()):
+        samples = pcm(os.path.join(repo_root, relative))
+        windows = one_shot_windows(samples, keep_within_db)
+        if not windows:
+            raise SystemExit("no events found in %s" % relative)
+        pool_loudness = pool_lufs([w["lufs"] for w in windows])
+        loudest_peak = max(w["peak_dbfs"] for w in windows)
+        gain = TARGET_LUFS - pool_loudness
+        headroom = PEAK_CEILING_DBFS - loudest_peak
+        capped = gain > headroom
+        gain = round(min(gain, headroom), 1)
+        if loudest_peak + gain > PEAK_CEILING_DBFS:
+            gain = math.floor(headroom * 10.0) / 10.0
+        print("  %-15s %2d events kept of %2d, %7.2f LUFS -> gain %+6.1f dB -> %7.2f LUFS%s" % (
+            name, len(windows), len(footfalls(samples)), pool_loudness, gain,
+            pool_loudness + gain,
+            "  (capped at the peak ceiling)" if capped else ""))
+        out[name] = {
+            "source": relative,
+            "window_seconds": ONE_SHOT_WINDOW_SECONDS,
+            "pre_roll_seconds": ONE_SHOT_PRE_ROLL_SECONDS,
+            "kept_within_db": round(keep_within_db, 2),
+            "offsets_seconds": [w["offset_seconds"] for w in windows],
+            "raw_lufs": round(pool_loudness, 2),
+            "gain_db": gain,
+            "achieved_lufs": round(pool_loudness + gain, 2),
+            "achieved_peak_dbfs": round(loudest_peak + gain, 2),
+            "peak_capped": capped,
+            "windows": windows,
+        }
+    return out
+
+
+def widest_pool_spread(surfaces: dict) -> float:
+    """The widest within-pool loudness spread any shipped surface runs.
+
+    The one-shot pools are held to the same variety a footstep pool already
+    has rather than to a threshold anybody picked: measured, the shipped
+    pools run 0.45 dB (grass) to 8.34 dB (snow) end to end.
+    """
+    return max(
+        max(c["lufs"] for c in s["clips"]) - min(c["lufs"] for c in s["clips"])
+        for s in surfaces.values()
+    )
+
+
 def build(cache_dir: str, repo_root: str) -> dict:
     out_dir = os.path.join(repo_root, OUT_DIR)
     os.makedirs(out_dir, exist_ok=True)
@@ -562,8 +675,14 @@ def main() -> None:
         surfaces = remeasure(repo_root)
     else:
         surfaces = build(os.path.join(repo_root, args.cache), repo_root)
+    print("measuring the one-shots that are played through the same voices:")
+    spread = widest_pool_spread(surfaces)
+    print("  keeping events within %.2f dB of the loudest"
+          " (the widest spread a shipped footstep pool runs)" % spread)
+    one_shots = measure_one_shots(repo_root, spread)
     manifest = {
         "generated_by": "tools/prepare_footstep_oneshots.py",
+        "one_shots": one_shots,
         "target_lufs": TARGET_LUFS,
         "target_rms_dbfs": TARGET_RMS_DBFS,
         "peak_ceiling_dbfs": PEAK_CEILING_DBFS,
@@ -593,6 +712,15 @@ def main() -> None:
           " (test_every_surfaces_volume_is_the_gain_the_pipeline_measured checks them):")
     for surface in sorted(surfaces):
         print('\t"%s": %.1f,' % (surface, surfaces[surface]["gain_db"]))
+    for name, measured in sorted(one_shots.items()):
+        print("\nand the one-shot %s into FootstepSound"
+              " (test_the_crush_volume_is_the_gain_the_pipeline_measured checks it):" % name)
+        print("\tconst MUSHROOM_CRUSH_VOLUME_DB := %.1f" % measured["gain_db"])
+        print("\tconst MUSHROOM_CRUSH_OFFSET_SECONDS: Array[float] = [")
+        for i in range(0, len(measured["offsets_seconds"]), 5):
+            print("\t\t" + " ".join(
+                "%.3f," % o for o in measured["offsets_seconds"][i:i + 5]))
+        print("\t]")
 
 
 if __name__ == "__main__":

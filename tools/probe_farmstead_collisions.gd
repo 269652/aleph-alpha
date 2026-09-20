@@ -91,7 +91,7 @@ func _process(_delta: float) -> bool:
 	print("chunks swept: %d   villages with a farmhouse: %d   with two or more: %d" % [
 		_seen.size(), _villages, _crowded
 	])
-	print("farmhouses with NO field: %d   villages with overlapping farm ground: %d" % [
+	print("farmhouses with NO field: %d   villages with shared/overlapping farm ground: %d" % [
 		_fieldless, _overlaps
 	])
 	return true
@@ -187,7 +187,7 @@ func _examine(chunk_coord: Vector2i) -> void:
 				if b.has(cell):
 					clashes.append("%s %s/%s" % [str(cell), a[cell], b[cell]])
 	if not clashes.is_empty():
-		_overlaps += 1
+		_overlaps += 1  # shared ground, not necessarily a fault -- see below
 	if origins.size() < 2 and empty_here == 0 and clashes.is_empty():
 		return  # a lone, well-fed farmstead is not what this probe is looking for
 	print("")
@@ -195,4 +195,10 @@ func _examine(chunk_coord: Vector2i) -> void:
 	for line in lines:
 		print(line)
 	if not clashes.is_empty():
-		print("   OVERLAPS: %s" % str(clashes))
+		# A rail/rail overlap is no longer a defect on its own: two fields
+		# meeting SHARE one line of rails (VillageFarm.SHARED_FENCE_TILE_IDS),
+		# so both enclosures are fenced on a contested cell. It is printed
+		# because a bed/rail or house/bed overlap still would be, and
+		# because the rails-standing count beside it says whether the
+		# sharing really worked.
+		print("   SHARED/OVERLAPPING GROUND: %s" % str(clashes))

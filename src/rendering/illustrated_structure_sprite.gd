@@ -154,42 +154,22 @@ const _SUBJECTS := {
 		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
 		"keys_black": true, "grid": "dividers",
 	},
-	# A corner caps two runs at once. The sheet has no corner cell of its
-	# own, so it is drawn with the same post art the side columns use --
-	# which is what a real corner post is, and is what stops a horizontal
-	# rail being drawn across the turn (reported: "corner pieces added so it
-	# doesn't look that broken"). One per side, drawn from that side's own
-	# column, because each is pushed out with the wall it caps.
-	"farm_fence_corner_nw": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_sw": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_ne": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_se": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_west": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_east": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
-		"keys_black": true, "grid": "dividers",
-	},
+	# A CORNER DRAWS NO POST OF ITS OWN.
+	#
+	# Asked for directly with two enclosures in shot: *"also the corner post
+	# can be removed"*. Every cell of fence.png is a WHOLE PANEL -- a post
+	# at EACH end with rails between -- and tools/probe_fence_posts.gd
+	# measured those two 12.5px apart inside a 16px tile. The two runs
+	# meeting at a corner therefore already carry a post each, and the
+	# corner cell drew a THIRD one beside them: the doubled-post look that
+	# probe was written about, at every turn of every ring.
+	#
+	# The corner cell is STILL A RAIL -- it is what refuses the diagonal
+	# into the crop (VillageFarm._rail_stops_step's own corner branch), and
+	# a cell that stopped reading as a fence would lose its collider and
+	# stop being overlay-only, painting a bare earth square on ground
+	# somebody has already walked past. It simply has no entry here, so
+	# footprint_texture answers null and no sprite is spawned for it.
 }
 
 static var _cache: Dictionary = {}  # subject -> ImageTexture
@@ -443,30 +423,79 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	var inner := VillageFarm.fence_inner_direction(subject)
 	if inner == Vector2i.ZERO:
 		return Vector2.ZERO
+	var unplaced := _unplaced_art_rect(subject, tile_size)
+	if unplaced.size == Vector2.ZERO:
+		return Vector2.ZERO
+	var offset := Vector2.ZERO
+	if inner.x > 0:
+		offset.x = float(tile_size) - unplaced.end.x
+	elif inner.x < 0:
+		offset.x = -unplaced.position.x
+	if inner.y > 0:
+		offset.y = float(tile_size) - unplaced.end.y
+	elif inner.y < 0:
+		offset.y = -unplaced.position.y
+	return offset
+
+
+## Where a subject's real INK finally lands inside its tile, in tile-local
+## pixels -- (0, 0) is the tile's own top-left corner, y measured down.
+## Rect2() (zero size) for a subject with no art at all.
+##
+## This is footprint_texture placed by footprint_offset, then narrowed to
+## the wood itself (_art_rect) rather than the transparent band around it.
+##
+## It exists because a fence's COLLIDER stands at the foot of its wood and
+## nowhere else -- reported as "The horizontal fences should have the hitbox
+## at the bottom of the rail". Finding that foot means redoing the band
+## arithmetic below, and a second copy of it in EarthChunkManager would be a
+## second copy to get wrong: the two horizontal facings land at OPPOSITE
+## ends of their cell, which is exactly the detail such a copy loses.
+func placed_art_rect(subject: String, tile_size: int) -> Rect2:
+	var unplaced := _unplaced_art_rect(subject, tile_size)
+	if unplaced.size == Vector2.ZERO:
+		return Rect2()
+	return Rect2(unplaced.position + footprint_offset(subject, tile_size), unplaced.size)
+
+
+## The same rect BEFORE footprint_offset moves it -- where the wood lands
+## with no offset at all.
+##
+## The band is centred on the tile and bottom-anchored (EarthChunkManager.
+## _spawn_structure_art_for), and is NOT one tile wide once a rail is scaled
+## by its own run, so where its edges fall has to be carried rather than
+## assumed away.
+## "subject|tile_size" -> Rect2. Shared across instances like _cache and
+## _art_rect_cache, and worth having because idle_texture().get_image() is a
+## readback, not a dictionary lookup: EarthChunkManager asks for a rail's
+## wood height once per rail CELL while a chunk streams in, and a fence ring
+## is a good twenty of them.
+static var _unplaced_art_rect_cache: Dictionary = {}
+
+
+func _unplaced_art_rect(subject: String, tile_size: int) -> Rect2:
+	var key := "%s|%d" % [subject, tile_size]
+	if _unplaced_art_rect_cache.has(key):
+		return _unplaced_art_rect_cache[key]
+	var rect := _measure_unplaced_art_rect(subject, tile_size)
+	_unplaced_art_rect_cache[key] = rect
+	return rect
+
+
+func _measure_unplaced_art_rect(subject: String, tile_size: int) -> Rect2:
 	var idle := idle_texture(subject)
 	if idle == null:
-		return Vector2.ZERO
+		return Rect2()
 	var image := idle.get_image()
 	var art := _art_rect(subject, image)
 	var scale := _footprint_scale(subject, image, tile_size)
-	# Where the wood lands with no offset at all: the band is centred on the
-	# tile and bottom-anchored (EarthChunkManager._spawn_structure_art_for),
-	# and is NOT one tile wide once a rail is scaled by its own run, so where
-	# its edges fall has to be carried rather than assumed away.
 	var band_left := (float(tile_size) - float(image.get_width()) * scale) * 0.5
 	var band_top := float(tile_size) - float(image.get_height()) * scale
-	var left := band_left + float(art.position.x) * scale
-	var top := band_top + float(art.position.y) * scale
-	var offset := Vector2.ZERO
-	if inner.x > 0:
-		offset.x = float(tile_size) - (left + float(art.size.x) * scale)
-	elif inner.x < 0:
-		offset.x = -left
-	if inner.y > 0:
-		offset.y = float(tile_size) - (top + float(art.size.y) * scale)
-	elif inner.y < 0:
-		offset.y = -top
-	return offset
+	return Rect2(
+		band_left + float(art.position.x) * scale,
+		band_top + float(art.position.y) * scale,
+		float(art.size.x) * scale, float(art.size.y) * scale
+	)
 
 
 ## How bright a pixel must be to count as this art rather than as the chroma

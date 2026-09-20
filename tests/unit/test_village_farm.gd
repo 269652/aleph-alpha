@@ -1034,9 +1034,16 @@ func test_ordinary_ground_gets_no_collider():
 
 # -- the shape of that edge --------------------------------------------------
 
+## A real measured wood height for a horizontal rail, in tile-local pixels on
+## a 16px tile -- see the table under "a horizontal rail is blocked at the
+## BOTTOM of its wood" below, which is where it comes from and what it means.
+const _FENCE_H := 10.9
+
+
 func _rail_rect(facing: String) -> Rect2:
 	return VillageFarm.fence_collider_rect(
-		VillageFarm.fence_tile_for(facing), 16.0, VillageFarm.FENCE_COLLIDER_THICKNESS_PX
+		VillageFarm.fence_tile_for(facing), 16.0,
+		VillageFarm.FENCE_COLLIDER_THICKNESS_PX, _FENCE_H
 	)
 
 
@@ -1063,15 +1070,18 @@ func test_neighbouring_rails_meet_with_no_gap_between_them():
 ## north side of the FIELD, so the edge it closes is its own SOUTH one, the
 ## side the crop is on. Asserting it the other way round is what the first
 ## draft of this test did.
-func test_the_collider_touches_the_edge_its_normal_names():
-	for facing in ["north", "south", "east", "west"]:
+##
+## A VERTICAL rail only. This used to assert all four facings, and that is
+## exactly the bug reported as "the horizontal fences should have the hitbox
+## at the bottom of the rail": a south rail's normal names the tile's TOP
+## edge, its wood hangs down from there, and pinning the collider to the
+## named edge therefore stopped the player at the rail's head. Where a
+## horizontal rail stands is its wood's foot, asserted below.
+func test_a_vertical_colliders_edge_is_the_one_its_normal_names():
+	for facing in ["east", "west"]:
 		var normal := VillageFarm.fence_collider_normal(VillageFarm.fence_tile_for(facing))
 		var rect := _rail_rect(facing)
-		if normal.y > 0:
-			assert_almost_eq(rect.end.y, 16.0, 0.0001, facing)
-		elif normal.y < 0:
-			assert_almost_eq(rect.position.y, 0.0, 0.0001, facing)
-		elif normal.x > 0:
+		if normal.x > 0:
 			assert_almost_eq(rect.end.x, 16.0, 0.0001, facing)
 		else:
 			assert_almost_eq(rect.position.x, 0.0, 0.0001, facing)
@@ -1092,7 +1102,9 @@ func test_a_rails_collider_faces_the_crop_not_the_street():
 
 func test_a_tile_with_no_rail_has_no_rect_at_all():
 	assert_eq(
-		VillageFarm.fence_collider_rect("", 16.0, VillageFarm.FENCE_COLLIDER_THICKNESS_PX).size,
+		VillageFarm.fence_collider_rect(
+			"", 16.0, VillageFarm.FENCE_COLLIDER_THICKNESS_PX, _FENCE_H
+		).size,
 		Vector2.ZERO
 	)
 
@@ -1222,3 +1234,220 @@ func test_a_farmstead_with_no_beds_has_no_ring_to_make_room_for():
 	assert_false(
 		VillageFarm.fence_has_room([], Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID, _all_clear)
 	)
+
+# -- a horizontal rail is blocked at the BOTTOM of its wood -----------------
+#
+# Reported live: "The horizontal fences should have the hitbox at the bottom
+# of the rail ... so it should use fence height instead of thickness".
+#
+# Measured before changing anything. A horizontal rail's wood is anchored to
+# the edge its inner direction names (IllustratedStructureSprite.
+# footprint_offset), which puts it at OPPOSITE ends of the tile for the two
+# facings:
+#
+#   north rail (inner 0,+1): wood y 5.5 .. 16.0   collider was 12..16  correct
+#   south rail (inner 0,-1): wood y 0.0 .. 10.9   collider was  0..4   WRONG
+#
+# The south case blocked the player seven pixels north of the visible fence
+# line, because the collider sat on the TILE edge while the wood hung down
+# from it. A rail stands ON the ground at its own base, so the base is where
+# it stops anything -- and finding that base needs the wood's HEIGHT, which
+# is why fence_collider_rect now takes one.
+
+
+func _rail_rect_with_height(facing: String) -> Rect2:
+	return VillageFarm.fence_collider_rect(
+		VillageFarm.fence_tile_for(facing), 16.0,
+		VillageFarm.FENCE_COLLIDER_THICKNESS_PX, _FENCE_H
+	)
+
+
+## The wood of a south-facing rail hangs DOWN from the tile's top edge, so
+## its base is at the wood's own height -- not at the tile edge.
+func test_a_top_anchored_rail_is_blocked_at_the_foot_of_its_wood():
+	var rect := _rail_rect_with_height("south")
+	assert_almost_eq(
+		rect.end.y, _FENCE_H, 0.0001,
+		"the strip's far edge is the foot of the wood, not the top of the tile"
+	)
+	assert_almost_eq(rect.position.y, _FENCE_H - VillageFarm.FENCE_COLLIDER_THICKNESS_PX, 0.0001)
+
+
+## The north-facing rail's wood already ends at the tile's bottom edge, so
+## its collider must NOT move -- this half was right and has to stay right.
+func test_a_bottom_anchored_rail_keeps_its_collider_on_the_tile_edge():
+	var rect := _rail_rect_with_height("north")
+	assert_almost_eq(rect.end.y, 16.0, 0.0001, "its wood really does end at the tile edge")
+
+
+## Both horizontal facings end up blocking at their own wood's foot, which is
+## the whole point -- stated as one property rather than two coordinates.
+func test_both_horizontal_rails_block_at_their_own_foot():
+	for facing in ["north", "south"]:
+		var id := VillageFarm.fence_tile_for(facing)
+		var inner := VillageFarm.fence_inner_direction(id)
+		var foot := 16.0 if inner.y > 0 else _FENCE_H
+		assert_almost_eq(_rail_rect_with_height(facing).end.y, foot, 0.0001, facing)
+
+
+## A VERTICAL rail is untouched by this: its wood is anchored left or right,
+## its foot is not a y coordinate at all, and the report was about horizontal
+## fences only.
+func test_a_vertical_rail_is_unchanged_by_the_wood_height():
+	for facing in ["east", "west"]:
+		var with_height := _rail_rect_with_height(facing)
+		var without := VillageFarm.fence_collider_rect(
+			VillageFarm.fence_tile_for(facing), 16.0,
+			VillageFarm.FENCE_COLLIDER_THICKNESS_PX, 16.0
+		)
+		assert_eq(with_height, without, facing)
+
+
+## The strip never leaves its own tile however odd the height it is handed --
+## art that measures taller than the cell, or shorter than the strip is deep.
+## Physics bodies are placed from this rect, so a foot outside the tile would
+## put a rail in its NEIGHBOUR'S cell and wall a run that should be open.
+func test_the_foot_is_clamped_into_the_tile_whatever_height_it_is_given():
+	for height in [-4.0, 0.0, 1.0, 16.0, 40.0]:
+		var rect := VillageFarm.fence_collider_rect(
+			VillageFarm.fence_tile_for("south"), 16.0,
+			VillageFarm.FENCE_COLLIDER_THICKNESS_PX, height
+		)
+		assert_gte(rect.position.y, 0.0, "height %s" % height)
+		assert_lte(rect.end.y, 16.0, "height %s" % height)
+		assert_almost_eq(
+			rect.size.y, VillageFarm.FENCE_COLLIDER_THICKNESS_PX, 0.0001,
+			"and stays a full rail thick rather than being squeezed, height %s" % height
+		)
+
+
+# -- two fields, one line between them ------------------------------------
+#
+# Reported with both enclosures in shot: *"It should be possible to build
+# two rails on a single tile so both enclosures are fenced properly."*
+#
+# A rail is an ordinary chunk modification and a tile holds ONE id, so
+# where two fields meet, the second one's rail finds the cell already
+# occupied and is skipped. Measured on a real village
+# (tools/probe_neighbouring_fences.gd):
+#
+#     (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+#     (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+#     (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+#     (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+#
+# Field 0's east rail wins every contested cell; field 1 has no west rail
+# along the whole shared line, so its enclosure is open.
+#
+# The facing is carried in the id because nothing about a rail is persisted
+# (see FENCE_TILE_IDS), so a line carrying two rails is an id that names
+# both -- and everything downstream keeps working on the SINGLE rails it
+# already knows, because a shared id is defined as the two of them.
+
+func test_a_shared_line_carries_both_fields_rails():
+	assert_eq(
+		VillageFarm.fence_pieces_of("farm_fence_east_west"),
+		[VillageFarm.fence_tile_for("east"), VillageFarm.fence_tile_for("west")],
+		"a line between two fields is both their rails, named once"
+	)
+
+
+func test_an_ordinary_rail_carries_only_itself():
+	var east: String = VillageFarm.fence_tile_for("east")
+	assert_eq(VillageFarm.fence_pieces_of(east), [east])
+
+
+func test_ground_that_is_not_a_rail_carries_no_rails():
+	assert_eq(VillageFarm.fence_pieces_of(""), [])
+	assert_eq(VillageFarm.fence_pieces_of("road"), [])
+
+
+## The upgrade itself: a cell already carrying one field's rail, asked for
+## the OPPOSITE one, becomes the shared line.
+func test_the_opposite_rail_makes_a_shared_line():
+	assert_eq(
+		VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("east"), "west"),
+		"farm_fence_east_west"
+	)
+	assert_eq(
+		VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("west"), "east"),
+		"farm_fence_east_west",
+		"which field was stamped first cannot change what stands there"
+	)
+	assert_eq(
+		VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("north"), "south"),
+		"farm_fence_north_south"
+	)
+
+
+## IDEMPOTENT, which _fence_the_fields' own doc comment requires: a reload
+## re-derives the same ring and must build nothing twice. The same rail
+## asked for again is not a second field.
+func test_a_rail_asked_for_twice_is_not_a_shared_line():
+	assert_eq(VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("east"), "east"), "")
+
+
+## Only OPPOSITE rails share a line. Two fields cannot want the same cell
+## closed on the same side, and a rail that meets one at right angles is a
+## corner of one ring, not a line between two.
+func test_rails_that_are_not_opposite_share_nothing():
+	assert_eq(VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("east"), "north"), "")
+	assert_eq(VillageFarm.shared_fence_tile_for("road", "east"), "")
+	assert_eq(VillageFarm.shared_fence_tile_for("", "east"), "")
+
+
+func test_a_shared_line_is_still_a_fence():
+	assert_true(
+		VillageFarm.is_fence_tile("farm_fence_east_west"),
+		"a shared line that did not read as a fence would lose its art and its collider"
+	)
+	assert_true(VillageFarm.is_fence_tile("farm_fence_north_south"))
+
+
+## And it closes BOTH its sides: there is a crop on each of them.
+func test_a_shared_line_refuses_the_crop_on_either_side():
+	var shared := "farm_fence_east_west"
+	assert_true(
+		VillageFarm.rails_block_step(shared, "", Vector2i(-1, 0)),
+		"the field to the west is still fenced"
+	)
+	assert_true(
+		VillageFarm.rails_block_step(shared, "", Vector2i(1, 0)),
+		"and so is the field to the east"
+	)
+	assert_false(
+		VillageFarm.rails_block_step(shared, "", Vector2i(0, 1)),
+		"the lane along the line is ordinary walkable ground, as for any rail"
+	)
+
+
+## And the wiring, at the three seams a shared line has to pass through --
+## the source-contract boundary this repo already draws for renderer and
+## chunk-manager plumbing.
+func _source(path: String) -> String:
+	return FileAccess.get_file_as_string(path)
+
+
+func test_a_second_field_upgrades_the_line_rather_than_skipping_it():
+	var source := _source("res://src/rendering/village_renderer.gd")
+	assert_true(
+		source.contains("shared_fence_tile_for("),
+		"the second field still skips an occupied cell and leaves its side open"
+	)
+
+
+func test_a_shared_line_draws_both_its_rails():
+	var source := _source("res://src/world/earth_chunk_manager.gd")
+	assert_true(
+		source.contains("fence_pieces_of("),
+		"one sprite per cell draws one rail, so a shared line would show only one"
+	)
+
+
+func test_a_shared_line_leaves_the_ground_showing_through():
+	var TerrainRenderer = load("res://src/rendering/terrain_renderer.gd")
+	for shared_id in VillageFarm.SHARED_FENCE_TILE_IDS:
+		assert_true(
+			TerrainRenderer.is_overlay_only_modification(String(shared_id)),
+			"%s would paint a bare earth square over ground somebody walks" % shared_id
+		)

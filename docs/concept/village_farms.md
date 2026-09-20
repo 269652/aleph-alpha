@@ -829,6 +829,65 @@ already-accepted "plot state does not survive a chunk unload" gap
 Farm. A reloaded village re-derives the same field and starts tilling it
 again.
 
+### Two fields, one line of rails (2026-09-20)
+
+Reported with both enclosures in shot: *"It should be possible to build two
+rails on a single tile so both enclosures are fenced properly. also the
+corner post can be removed"*.
+
+A rail is an ordinary chunk modification and **a tile holds one id**, so
+where two farmsteads sit side by side their rings meet on one column of
+cells and only the first field's rail can stand there. Measured
+(`tools/probe_neighbouring_fences.gd`) on a real village with four
+farmhouses, printing what each field *wants* on every contested cell beside
+what really stands:
+
+```
+  (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+  (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+  (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+  (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+```
+
+Field 0's east rail won every contested cell; field 1 had no west rail at
+all, so its enclosure was open along the whole shared side. (The two `road`
+cells are correct — that paving is the gate the farmer walks in through.)
+
+**A shared line is one tile carrying both fields' rails.**
+`VillageFarm.SHARED_FENCE_TILE_IDS` names the two opposite pairs, and that
+is the whole set: two fields meeting share a line, and a line has a field
+on each side of it. Rails meeting at right angles belong to one ring's
+corner, not to two rings.
+
+The id carries the facings for the same reason every rail id does — nothing
+about a rail is persisted — and a shared id is **defined as the two
+ordinary rails standing there** (`fence_pieces_of`). That is what makes it
+cost nothing downstream: each piece keeps the art and the inner edge it
+already had, `_spawn_structure_art_for` raises one sprite per piece, and
+`rails_block_step` refuses the crop on both sides because there is one on
+each. Only the *opposite* rail shares a line, and never the same rail
+twice, so a reload still re-derives the ring and builds nothing — which
+`_fence_the_fields`' own idempotence rule requires.
+
+### A corner draws no post of its own (2026-09-20)
+
+Asked for in the same breath: *"also the corner post can be removed"*.
+
+Every cell of `fence.png` is a **whole panel** — a post at each end with
+rails between — and `tools/probe_fence_posts.gd` measured those two posts
+12.5px apart inside a 16px tile. So the two runs meeting at a corner
+already carry a post each, and the corner cell drew a **third** one beside
+them: the same doubled-post look that probe was written about, at every
+turn of every ring.
+
+**The corner cell is still a rail.** It is what refuses the diagonal into
+the crop (see "The rail's own hitbox" below, and
+`_rail_stops_step`'s own corner branch), and an id that stopped reading as
+a fence would lose its collider *and* stop being overlay-only, painting a
+bare earth square on ground somebody has already walked past. What changed
+is only that it has no entry in the art registry, so nothing is spawned for
+it.
+
 ## Interaction with other docs
 
 - **[npc_farm_production.md](npc_farm_production.md)** — the placeable
@@ -861,7 +920,8 @@ The fix is an **edge** body, never a tile-sized one, because a rail stands on
 the inner edge of its cell and the rest of that cell is street.
 `fence_collider_normal` and `fence_collider_rect` own it, reading the same
 inner edge `rails_block_step` shuts -- so what stops the player and what
-stops everybody else cannot drift apart.
+stops everybody else cannot drift apart about *which* crossing a rail
+refuses.
 
 A **corner post gets none.** Its inner direction is diagonal, so an edge
 collider would lie along one of the two runs it caps, and walling either
@@ -881,51 +941,53 @@ gets an enclosure"*. Measured on real villages
 farmhouse, 7 of them with two or more):
 
 ```
-VILLAGE (714, 141)   OVERLAPS: (23,21)(23,22)(23,23)(23,24) rail/rail
-  farmhouse (20,19) field x20..22     farmhouse (24,19) field x24..26
-
 VILLAGE (679, 141)
   farmhouse (13,19)  rails standing  9/14
   farmhouse (20,19)  rails standing  6/14
     gaps: (23,22) mod='road'  (23,23) mod='road'  (23,24) mod='road'
 ```
 
-Two shapes of one fault. Two farmsteads sited one column apart both want
-that column for a fence, or a road spur runs down it — and the fencing pass
-skips a cell that is already paved or already railed, so whichever is
-fenced second loses that whole side.
+Two farmsteads can fail to be fenced for two different reasons, and only
+one of them is answered by the shared line above.
 
-The five gaps every farmstead shows at its **street row** are not this: the
-village's paving there is the field's gate, by design (see "The fence
-around the beds").
+**A contested cell is not the problem any more.** Two fields meeting share
+one line of rails (`SHARED_FENCE_TILE_IDS`, "Two fields share one line of
+rails"), so a cell both want carries both. That is a better village than
+two farmsteads shoved to opposite outskirts, and the first cut of the rule
+below got it wrong by refusing a neighbour's rail line outright.
 
-**The cause is that siting asked only whether the BEDS fit.** A fence is not
-decoration round a field; it is what makes the beds a field, so the ground
-it needs has to be asked for at the same moment. That is the same lesson
-`_may_sow` already carries one function up — *a rule that decides where to
-build has to be the rule that decides what gets built* — applied to the
-half of the farmstead it had not yet reached.
+**A road down the fence line still is.** A rail and a road are not two
+halves of one tile, so a spur running along the column a farmstead's east
+rail needs simply costs it that side — measured at three of fourteen rails
+on the village above, with the shared line already in place.
+
+The cause is that siting asked only whether the **beds** fit. A fence is
+not decoration round a field; it is what makes the beds a field, so the
+ground it needs has to be asked for at the same moment. That is the same
+lesson `_may_sow` already carries one function up — *a rule that decides
+where to build has to be the rule that decides what gets built* — applied
+to the half of the farmstead it had not yet reached.
 
 `VillageFarm.fence_has_room` is the pure half: every cell of the ring
 allowed by a caller-supplied `may_rail`, and empty beds answer **false**
 rather than vacuously true. `VillageRenderer._may_rail` is that predicate:
-a street row is fine (the gate), a cell the neighbouring farmstead is
-nearer to is its rail line and not this one's, and anything else must be
+a street row is fine (the gate), a cell already carrying the neighbour's
+rail is fine (the shared line will join it), and anything else must be
 clear of water, buildings and paving.
 
 Measured after, on freshly founded villages — the probe scrubs each chunk
 first, because chunks persist on unload and an A/B against a reload of
 one's own earlier founding comes back byte-identical and means nothing:
 
-| | before | after |
+| | shared line only | + this rule |
 | --- | --- | --- |
-| villages with overlapping farm ground | 2 | **0** |
+| worst enclosure measured | 6 of 14 | 8 of 12 |
 | farmhouses with no field | 0 | 0 |
 | villages with a farmhouse (of which 2+) | 10 (7) | 10 (7) |
-| rails standing | 6–9 of 14 | 8–12 of 12 |
 
-No village lost a farm to the stricter rule; the farmsteads simply move off
-the crowded street row to the outskirts, where a whole enclosure fits.
+No village lost a farm to the stricter rule; a farmstead whose fence line
+is a road simply moves off the crowded street row to ground where a whole
+enclosure fits.
 
 > Exposed one latent bug on the way: `_sited_plot` — the scan behind
 > `outskirt_plot` and `industry_plot` — never returned a `facing`, and
@@ -933,6 +995,51 @@ the crowded street row to the outskirts, where a whole enclosure fits.
 > `place_building_over_roads`. It had simply never been reached before,
 > because the street-frontage search almost always answered first. Pinned
 > by `test_every_plot_says_which_way_its_building_faces`.
+
+#### A horizontal rail stands at the foot of its wood
+
+Reported once the bodies were in: *"The horizontal fences should have the
+hitbox at the bottom of the rail ... so it should use fence height instead
+of thickness"*.
+
+Naming the edge is not the same as knowing where on that edge the fence
+actually *stands*. The two horizontal facings anchor their art to **opposite
+ends** of their cell (`IllustratedStructureSprite.footprint_offset`:
+`inner.y > 0` bottom-anchors, `inner.y < 0` top-anchors), so pinning both
+colliders to the edge their normal names is right for one and wrong for the
+other:
+
+| rail | inner | wood, tile-local | collider was | correct |
+| --- | --- | --- | --- | --- |
+| north | `(0, 1)` | `y = 5.5 .. 16.0` | `12.0 .. 16.0` | yes |
+| south | `(0, -1)` | `y = 0.0 .. 10.9` | `0.0 .. 4.0` | no |
+
+A south rail's wood hangs *down* from the tile's top edge, so a collider on
+that edge stopped the player at the rail's **head**, seven pixels short of
+the line they could see. A fence stops things where its posts meet the
+ground and nowhere else, so `fence_collider_rect` takes the height of the
+wood as drawn and puts the strip at its **foot** — `tile_size` when the art
+is bottom-anchored, the wood's own height when it is top-anchored, clamped
+into the cell so art that measures oddly can never stand a body in the
+neighbour's tile. The strip stays `FENCE_COLLIDER_THICKNESS_PX` deep; it is
+*where* it sits that the height decides, not how thick it is.
+
+A **vertical** rail is anchored left or right, has no foot on the `y` axis
+at all, and is untouched.
+
+Finding that foot means redoing the band arithmetic `footprint_offset`
+already does, and a second copy of it in `EarthChunkManager` is a second
+copy to get wrong — losing exactly the detail that the two facings land at
+opposite ends. So `IllustratedStructureSprite.placed_art_rect` answers
+"where does this subject's ink actually land inside its tile", both
+`footprint_offset` and the collider read it, and `EarthChunkManager` only
+forwards the number.
+
+This is the one place the player and the markers stop at different *lines*:
+`rails_block_step` is a cell-grid rule and refuses the crossing at the cell
+boundary, while the body refuses it a few pixels later, inside the cell.
+They still refuse the same crossings — and the rest of a rail's tile being
+ordinary ground is the rule, not an accident, so standing in it is allowed.
 
 ## Status
 
@@ -1114,6 +1221,17 @@ the crowded street row to the outskirts, where a whole enclosure fits.
   `EarthChunkManager.fence_blocks_step_global`) instead of whether a tile
   carries one, so an animal may stand on the ring and walk along it and only
   the crop is shut. See "The rail stands on the inner edge" above.
+
+- ✅ **A rail is solid to the player, at the foot of its wood** (2026-09-20)
+  — `VillageFarm.fence_collider_normal`/`fence_collider_rect` and
+  `EarthChunkManager._sync_piece_collision`/`_spawn_rail_collision`. Two
+  reports, one after the other: *"fix the fence collision"* (markers
+  respected the rails and the `CharacterBody2D` player had nothing to hit,
+  because a rail is not a `BuildingPiece`), then *"The horizontal fences
+  should have the hitbox at the bottom of the rail ... so it should use
+  fence height instead of thickness"* (a south rail's art hangs down from
+  its top edge, so a collider on that edge stopped the player at the rail's
+  head). Corner posts get no body at all. See "The rail's own hitbox" above.
 
 - ✅ **A herb bed is visible.** Reported in play with the field in shot:
   *"it plows the soil but then the soil mound sprites don't appear and

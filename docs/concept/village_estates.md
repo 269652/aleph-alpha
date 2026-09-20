@@ -175,6 +175,15 @@ the larder the granary leaves behind. `EstateConsumption` itself is
 general and draws whatever it is handed; the exclusion is the caller's, and
 it is stated again under Status as the known gap it is.
 
+**The draw reads the whole larder** (2026-09-20,
+[village_economy_balance.md](village_economy_balance.md) mechanism 5).
+`EarthChunkManager._draw_estate_basket` reads the live stall, the persisted
+ledger *and* the larder shelves — `_settlement_larder_stocks`, the same
+`STRUCTURE_MEAL_SOURCE_IDS` set a villager may eat off — as one stock, and
+takes the draw back out in that order, shelves last. Before this it read
+the two markets only, and a real village measured with 13–43 herbs on its
+farmhouse shelf and none on the stall read every cottage at "Herb 0%".
+
 Satisfaction is then collapsed per estate into
 `subsistence_satisfaction` and `station_satisfaction` — each the *minimum*
 over its own goods, not the mean. A household with all the bread in the
@@ -367,6 +376,17 @@ loop closes on machinery that is already there:
 > supply the baskets → households rise → a risen household pays more tax →
 > the purse funds wages and the next building → the building supplies the
 > baskets.
+
+Two corrections to that loop, both 2026-09-20. **The wage it funds is a
+living wage now**, paid every assessment to every household out of this
+same purse, not only the meal a starving villager draws
+([village_economy_balance.md](village_economy_balance.md) mechanism 1).
+And **the collector looked every household up by the wrong id** —
+`HouseholdStore.household_for` resolves a *member's* entity id, and was
+handed household ids — so from the day the tax became a transfer it had
+debited nobody and credited nothing; its own test stayed green because the
+fixture's stock drew a merchant who funded the purse instead. It is
+`get_household` now, and the transfer is pinned against the wallets.
 
 ## Novel mechanics — the three this world can have and Anno cannot
 
@@ -719,7 +739,13 @@ which is exactly how these hid.
   above); `food` and `community` are not. The estate layer's per-good
   satisfaction is a strictly better input for both, but wiring them means
   moving numbers a live construction loop is calibrated against, so it is
-  deliberately a separate pass.
+  deliberately a separate pass. What the food need reads its stock
+  *against* is no longer arbitrary, though: `FOOD_STOCK_PER_HOUSEHOLD_
+  TARGET` is a day's meals per household on the measured draw
+  ([village_economy_balance.md](village_economy_balance.md) mechanism 4),
+  so a village that feeds all its households with a day in hand reads
+  100% — and, measured, a stock target any higher than that turns this
+  gap into an exodus, because the subsistence floor is read off it.
 - ⬜ **Patronage across estates.** Specified above; waits on
   [npc_social_life.md](npc_social_life.md)'s own trust dimension.
 - ⬜ **Interiors and art per estate.** A household that rises moves up a

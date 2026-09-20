@@ -4087,21 +4087,34 @@ func test_a_world_that_cannot_say_leaves_the_village_alone():
 	assert_eq(_villagers_among(after), 10)
 
 
-# -- two farmsteads must not want the same rail -----------------------------
+# -- every farmstead really gets its enclosure -------------------------------
 #
 # Reported with the hamlet in shot: *"The two farmhouses collide and only one
 # gets an enclosure"*. Measured on real villages
 # (tools/probe_farmstead_collisions.gd, 465 chunks, 7 villages with two or
 # more farmhouses):
 #
-#     VILLAGE (714, 141)   OVERLAPS: (23,21)(23,22)(23,23)(23,24) rail/rail
-#       farmhouse (20, 19)  field x20..22     farmhouse (24, 19)  field x24..26
+#     VILLAGE (679, 141)
+#       farmhouse (13, 19)  rails standing  9/14
+#       farmhouse (20, 19)  rails standing  6/14
+#         gaps: (23,22) mod='road'  (23,23) mod='road'  (23,24) mod='road'
 #
-# Two farmsteads sited one column apart both want that column for a fence,
-# and _fence_the_fields skips a cell that is already railed -- so whichever
-# is fenced second loses that whole side. Siting asked only whether the BEDS
-# fit; a fence is what makes beds a field, so its ground has to be asked for
-# at the same time (VillageFarm.fence_has_room).
+# Two shapes of one fault. A road spur runs down the column a farmstead's
+# east rail needs, or two farmsteads want the same column -- and
+# _fence_the_fields skips a cell already paved or already railed, so the
+# side never goes up.
+#
+# The SHARED side is answered where it belongs, in the fence itself: two
+# fields meeting share a line, and a shared id carries both rails
+# (VillageFarm.SHARED_FENCE_TILE_IDS). What a shared line cannot do is share
+# with a ROAD -- a rail and a road are not two halves of one tile -- so
+# siting has to keep a farmstead off a fence line that a spur already runs
+# down. A fence is what makes beds a field, so its ground is asked for when
+# the farmstead is sited (VillageFarm.fence_has_room), not discovered when
+# the rails go up.
+#
+# The five gaps every farmstead shows at its own STREET ROW are not this:
+# the village's paving there is the field's gate, by design.
 
 
 ## Every farmstead's own ring in this chunk, as origin -> {cell: true},
@@ -4134,8 +4147,8 @@ func _farmstead_rings(coord: Vector2i, world) -> Dictionary:
 	return rings
 
 
-func test_no_two_farmsteads_want_the_same_rail():
-	var clashes: Array = []
+func test_every_farmstead_really_gets_its_enclosure():
+	var open_sides: Array = []
 	var checked := 0
 	for coord in _settlement_chunks_with_farmers(3, 14):
 		var world := StubWorld.new()
@@ -4143,19 +4156,73 @@ func test_no_two_farmsteads_want_the_same_rail():
 			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
 		)
 		var rings := _farmstead_rings(coord, world)
-		if rings.size() < 2:
-			continue
-		checked += 1
-		var origins: Array = rings.keys()
-		for i in range(origins.size()):
-			for j in range(i + 1, origins.size()):
-				for cell in rings[origins[i]]:
-					if rings[origins[j]].has(cell):
-						clashes.append("%s: %s and %s both want a rail at %s" % [
-							str(coord), str(origins[i]), str(origins[j]), str(cell)
-						])
-	assert_gt(checked, 0, "precondition: villages with two or more farmsteads")
+		for origin in rings:
+			checked += 1
+			for cell in rings[origin]:
+				var c: Vector2i = cell
+				if c.x < 0 or c.y < 0 or c.x >= CHUNK_SIZE or c.y >= CHUNK_SIZE:
+					continue
+				if renderer._is_street_row(coord, CHUNK_SIZE, world, c.y):
+					continue  # the gate, by design
+				var g: Vector2i = coord * CHUNK_SIZE + c
+				var tile: String = world.modification_at_global(g.x, g.y)
+				if VillageFarm.is_fence_tile(tile):
+					continue
+				open_sides.append("%s: farmstead %s has no rail at %s (tile '%s')" % [
+					str(coord), str(origin), str(c), tile
+				])
+	assert_gt(checked, 0, "precondition: farmsteads were raised")
 	assert_eq(
-		clashes.size(), 0,
-		"a rail one farmstead lays is a side the other never gets: %s" % str(clashes.slice(0, 4))
+		open_sides.size(), 0,
+		"a field open along a side is not an enclosure: %s" % str(open_sides.slice(0, 5))
+	)
+
+
+## The half a shared line cannot answer: a rail and a road are not two
+## halves of one tile, so a farmstead must not be sited on a fence line a
+## spur already runs down. Measured on a real village
+## (tools/probe_farmstead_collisions.gd): with the shared line in place and
+## this rule absent, farmhouse (20,19) in chunk (679,141) still stood at
+## 6 of 14 rails, its whole east side road.
+func test_a_farmstead_is_refused_a_fence_line_a_road_runs_down():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var farms := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(farms.size(), 0, "precondition: this village really raised a farmhouse")
+	var origin: Vector2i = farms[0]["origin_local"]
+	var rings := _farmstead_rings(coord, world)
+	var ring: Dictionary = rings.get(origin, {})
+	assert_false(ring.is_empty(), "precondition: that farmstead really has a ring")
+
+	renderer._buildable_memo.clear()
+	renderer._dry_memo.clear()
+	renderer._skeleton_memo.clear()
+	var is_buildable: Callable = renderer._is_buildable_local(coord, CHUNK_SIZE, world)
+	var is_occupied: Callable = renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+	assert_true(
+		renderer._field_fits_at(
+			origin, [origin], {}, coord, CHUNK_SIZE, world, is_buildable, is_occupied
+		),
+		"precondition: this is a site the rule accepts before the spur is laid"
+	)
+
+	# Now run a road down one of its rail cells, clear of the street row
+	# that is the field's own gate.
+	var spur_cell := Vector2i(-1, -1)
+	for cell in ring:
+		if not renderer._is_street_row(coord, CHUNK_SIZE, world, (cell as Vector2i).y):
+			spur_cell = cell
+			break
+	assert_ne(spur_cell, Vector2i(-1, -1), "precondition: a rail cell off the street row")
+	var g: Vector2i = coord * CHUNK_SIZE + spur_cell
+	world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+	assert_false(
+		renderer._field_fits_at(
+			origin, [origin], {}, coord, CHUNK_SIZE, world, is_buildable, is_occupied
+		),
+		"a fence line with a road down it at %s is not a fence line" % str(spur_cell)
 	)

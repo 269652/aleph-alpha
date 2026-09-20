@@ -16,13 +16,16 @@ extends RefCounted
 ## stop the PLAYER were walked straight through by everybody else.
 ##
 ## Three refusals, and they are different KINDS of fact on purpose:
-##   - a slope you cannot climb, and a wall: tiles you may not be IN;
+##   - a slope you cannot climb, and a building: tiles you may not be IN
+##     (both kinds -- a legacy BuildingPiece wall and a whole-building
+##     entity; see AgentPassability.structure_blocks);
 ##   - a field's rail: an EDGE you may not CROSS, so the ring around a field
 ##     stays ordinary ground a villager may walk along.
 ##
 ## Pinned by tests/unit/test_walk_gate.gd.
 
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
 
 
 ## Where the walker may actually end up, given it wanted to reach `to`.
@@ -75,10 +78,11 @@ static func blocks(
 		world.slope_at_global(tile.x, tile.y)
 	):
 		return true
-	if (
-		world.has_method("piece_blocks_movement_at_global")
-		and world.piece_blocks_movement_at_global(tile.x, tile.y)
-	):
+	# BOTH kinds of building, via the one shared question -- a legacy
+	# BuildingPiece wall AND a whole-building entity. See
+	# AgentPassability.structure_blocks: asking only the piece question is
+	# what "NPCs still walk through houses and ignore the hitbox" was.
+	if AgentPassability.structure_blocks(world, tile):
 		return true
 	if not world.has_method("fence_blocks_step_global"):
 		return false

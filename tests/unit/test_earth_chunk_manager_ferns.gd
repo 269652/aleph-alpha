@@ -189,3 +189,104 @@ func test_unloading_a_chunk_takes_its_ferns_with_it():
 	manager._unload_chunk(_chunk_coord)
 	assert_false(manager._fern_sims.has(_chunk_coord))
 	assert_false(manager._fern_sprites.has(_chunk_coord))
+
+
+# -- something eats them ----------------------------------------------------
+#
+# Asked for directly: *"make ferns grazeable by herbivores"*. The sim has
+# had `graze` since it landed and nothing called it — recorded as an
+# honest gap in docs/concept/ferns.md rather than left to be discovered.
+#
+# GRASS FIRST, and that is the whole rule. A fern is what a grazer takes
+# when there is nothing better under it: bracken is toxic to livestock and
+# most grazers leave it standing while there is grass to be had, and deer
+# browse fronds mainly when the grazing is poor. That also fits the model
+# ecosystem_dynamics.md already states — *"an animal that can see no bite
+# but stands on living ground crops what is under it"* — so this is the
+# standing-on-it path, not a new thing to walk to. Nothing seeks a fern
+# out.
+
+
+## A real loaded herbivore, or null when this chunk spawned none.
+func _a_herbivore():
+	for creature in manager._loaded_creatures.get(_chunk_coord, []):
+		if creature.info != null and not creature.info.is_predator:
+			return creature
+	return null
+
+
+## A mature fern with no grass standing on the same cell.
+func _a_fern_cell_with_no_grass() -> Vector2i:
+	var ferns = _ferns()
+	var grass = manager._grass_sims.get(_chunk_coord)
+	for cell in ferns.get_patch_cells():
+		var local: Vector2i = cell
+		if ferns.get_growth(local) < 1.0:
+			continue
+		if grass != null and grass.has_grass(local):
+			continue
+		return local
+	fail_test("no mature fern clear of grass in this chunk")
+	return Vector2i.ZERO
+
+
+func _stand_on(creature, local: Vector2i) -> void:
+	var g := _global(local)
+	creature.position = Vector2(
+		(g.x + 0.5) * 16.0, (g.y + 0.5) * 16.0
+	)
+
+
+func test_a_herbivore_standing_on_a_fern_crops_it():
+	var creature = _a_herbivore()
+	assert_not_null(creature, "precondition: this wood spawned a herbivore")
+	if creature == null:
+		return
+	var cell := _a_fern_cell_with_no_grass()
+	_stand_on(creature, cell)
+
+	manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+
+	assert_false(_ferns().has_fern(cell), "the fern at %s was left standing" % str(cell))
+
+
+## Grass outranks a fern in the code, and that ordering can never actually
+## be observed — which is worth pinning, because a reader meeting the
+## `elif` will otherwise assume it settles a real contest.
+##
+## The first version of this test tried to stand mature grass on a fern's
+## own cell and failed at its own precondition: `TallGrass.plant` refuses
+## anything that is not grassland, and `ForestFern.plant` refuses anything
+## that is not forest. The two sims are gated to mutually exclusive biomes,
+## so no cell can ever carry both. The ordering is a safety rail, not a
+## preference a grazer expresses.
+func test_a_cell_is_either_meadow_or_wood_so_the_two_never_compete():
+	var ferns = _ferns()
+	var grass = manager._grass_sims.get(_chunk_coord)
+	assert_not_null(grass, "precondition: the chunk has a grass sim")
+	for cell in ferns.get_patch_cells():
+		assert_false(
+			grass.has_grass(cell as Vector2i),
+			"%s carries both a fern and grass, which no biome allows" % str(cell)
+		)
+	var wood := _a_bare_forest_cell()
+	assert_false(grass.plant(wood), "grass does not root in a wood")
+	for cell in grass.get_patch_cells():
+		assert_false(ferns.plant(cell as Vector2i), "a fern does not root in a meadow")
+		break
+
+
+## A young fern is not a meal, the same rule grass already has: what is
+## croppable is what is grown.
+func test_a_young_fern_is_not_cropped():
+	var creature = _a_herbivore()
+	if creature == null:
+		return
+	var ferns = _ferns()
+	var cell := _a_bare_forest_cell()
+	assert_true(ferns.plant(cell), "precondition: a young clump to stand on")
+	_stand_on(creature, cell)
+
+	manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+
+	assert_true(ferns.has_fern(cell), "a shoot is not a mouthful")

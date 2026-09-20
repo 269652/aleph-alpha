@@ -215,6 +215,89 @@ func detect_frames(
 	return frames
 
 
+## The bands of rows that hold a drawing at all, between `left_x` and
+## `right_x`.
+##
+## detect_frames' own axis, turned ninety degrees: a row with nothing but
+## background in it is a gutter, and the runs of rows between gutters are the
+## bands. A sheet laid out as a real GRID needs this first -- run it over the
+## whole sheet to find the rows, then detect_frames within each one to find
+## that row's frames.
+##
+## Rows found rather than assumed, for the same reason detect_frames finds
+## columns: the apple sapling sheet's five growth stages measure 122, 173,
+## 215, 250 and 302 pixels tall, because the tree really does get bigger
+## every stage (see docs/concept/flora.md's "Sapling phase"). An even split
+## would cut through four of the five drawings.
+func detect_rows(
+	image: Image,
+	left_x: int,
+	right_x: int,
+	min_band_height: int = DEFAULT_MIN_FRAME_WIDTH,
+	min_gutter_height: int = DEFAULT_MIN_DIVIDER_WIDTH,
+	alpha_threshold: float = DEFAULT_ALPHA_THRESHOLD,
+	divider_gray_min: float = DEFAULT_DIVIDER_GRAY_MIN
+) -> Array[Rect2i]:
+	var bands: Array[Rect2i] = []
+	if image == null:
+		return bands
+	var left: int = clampi(left_x, 0, image.get_width())
+	var right: int = clampi(right_x, left, image.get_width())
+	if right <= left:
+		return bands
+
+	# Byte-array pass with the check inlined, exactly as detect_frames does
+	# it -- see that function, and chroma_keyed's own performance comment,
+	# for why.
+	var img: Image = image
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var width := img.get_width()
+	var height := img.get_height()
+	var data := img.get_data()
+	var alpha_threshold_byte := alpha_threshold * 255.0
+	var divider_gray_min_byte := divider_gray_min * 255.0
+
+	var start := -1
+	var empty_run := 0
+	for y in height:
+		var row_is_empty := true
+		for x in range(left, right):
+			var idx := (y * width + x) * 4
+			if float(data[idx + 3]) < alpha_threshold_byte:
+				continue  # transparent -- still empty, keep scanning the row
+			var r := data[idx]
+			var g := data[idx + 1]
+			var b := data[idx + 2]
+			if r < divider_gray_min_byte or g < divider_gray_min_byte or b < divider_gray_min_byte:
+				row_is_empty = false
+				break
+			var mx := maxi(maxi(r, g), b)
+			if mx == 0:
+				continue  # opaque black -- matches is_empty()'s own zero-max case
+			var mn := mini(mini(r, g), b)
+			if float(mx - mn) / float(mx) > DIVIDER_MAX_SATURATION:
+				row_is_empty = false
+				break
+		if row_is_empty:
+			empty_run += 1
+			continue
+		if start >= 0 and empty_run >= min_gutter_height:
+			var band_height := y - empty_run - start
+			if band_height >= min_band_height:
+				bands.append(Rect2i(left, start, right - left, band_height))
+			start = -1
+		empty_run = 0
+		if start < 0:
+			start = y
+	if start >= 0:
+		var last_height := height - empty_run - start
+		if last_height >= min_band_height:
+			bands.append(Rect2i(left, start, right - left, last_height))
+	return bands
+
+
 ## Each frame cropped to its drawing, scaled to fit `canvas_size`, and stood
 ## with its feet on `baseline_y`.
 ##
@@ -470,59 +553,188 @@ static func checkerboard_key_in_place(image: Image) -> void:
 	var height := image.get_height()
 	if width <= 0 or height <= 0:
 		return
-	var cleared := {}
-	var queue: Array[Vector2i] = []
-	for x in range(width):
-		for y in [0, height - 1]:
-			var edge := Vector2i(x, y)
-			if not cleared.has(edge) and _is_checker(image.get_pixelv(edge)):
-				cleared[edge] = true
-				queue.append(edge)
-	for y in range(height):
-		for x in [0, width - 1]:
-			var edge := Vector2i(x, y)
-			if not cleared.has(edge) and _is_checker(image.get_pixelv(edge)):
-				cleared[edge] = true
-				queue.append(edge)
-	# ...and from the darker square anywhere in the cell, which no part of
-	# the art shares, so checker showing through a gap in the foliage is
-	# cleared even though it cannot be reached from the edge.
-	for y in range(height):
-		for x in range(width):
-			var inside := Vector2i(x, y)
-			if not cleared.has(inside) and _is_dark_checker(image.get_pixelv(inside)):
-				cleared[inside] = true
-				queue.append(inside)
+	# Alpha is the whole point of the operation, so a sheet delivered without
+	# a channel to punch holes in gets one -- writing a zero alpha into an
+	# RGB8 image otherwise silently paints it BLACK instead.
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+
+	# ## One classification pass, then a flood that does no colour maths
+	#
+	# This runs over whole delivered sheets -- the apple sapling grid is
+	# 1254 x 1254, about a million of whose pixels are checker -- and a
+	# flood written as get_pixelv + a Dictionary of Vector2i measured 5.3
+	# seconds on that sheet: a visible freeze the first time a sapling of
+	# that species came on screen. Pinned now by
+	# test_keying_a_whole_sheet_fits_in_a_forgivable_hitch.
+	#
+	# What cost that is re-reading and re-classifying the same pixel every
+	# time a neighbour looked at it -- four times over, per pixel, through
+	# Image's own per-pixel accessor. So every pixel is classified exactly
+	# ONCE here, into a bitmask, and the flood below then walks nothing but
+	# bytes. Same three rules, same seeds, same bounded widening; only the
+	# number of times each pixel is looked at changes. The byte-array pass
+	# itself mirrors detect_frames' own (see its comment on why data/width
+	# are fetched once, outside the loop).
+	#
+	# The classification grid carries a one-pixel BORDER of zero, which is
+	# no tone at all. That is not padding for its own sake: it makes every
+	# one of the flood's millions of neighbour steps a bare +/-1 or
+	# +/-stride with no bounds test and no `index % width` to recover a
+	# column, because a step off the real image can only ever land on a
+	# border cell that matches nothing.
+	#
+	# The thresholds are turned into whole BYTES once, up here, rather than
+	# compared as floats a million times over: a channel read out of the
+	# data array is already an integer 0-255, and `byte / 255.0 >= 0.78` is
+	# exactly `byte >= ceil(0.78 * 255)` for every byte there is. Rounded
+	# from the same constants rather than written out by hand, so the two
+	# cannot drift.
+	var data := image.get_data()
+	var stride := width + 2
+	var checker_min := int(ceil(_CHECKER_MIN_CHANNEL * 255.0))
+	var checker_spread := int(floor(_CHECKER_MAX_CHANNEL_SPREAD * 255.0))
+	var dark_min := int(ceil(_CHECKER_DARK_MIN_CHANNEL * 255.0))
+	var dark_max := int(floor(_CHECKER_DARK_MAX_CHANNEL * 255.0))
+	var fringe_min := int(ceil(_CHECKER_FRINGE_MIN_CHANNEL * 255.0))
+	var fringe_spread := int(floor(_CHECKER_FRINGE_MAX_CHANNEL_SPREAD * 255.0))
+	var flags := PackedByteArray()
+	flags.resize(stride * (height + 2))
+	var cleared := PackedByteArray()
+	cleared.resize(flags.size())
+
+	# The seed queue is allocated once at its own worst case (every pixel)
+	# rather than grown an entry at a time, and `tail` is where the next one
+	# goes -- a million appends into a growing PackedInt32Array is its own
+	# measurable cost.
+	var queue := PackedInt32Array()
+	queue.resize(width * height)
+	var tail := 0
+
+	for y in height:
+		var row := (y + 1) * stride + 1
+		var source := y * width * 4
+		var on_top_or_bottom := y == 0 or y == height - 1
+		for x in width:
+			var at := source + x * 4
+			var lowest := data[at]
+			var highest := lowest
+			var g := data[at + 1]
+			if g < lowest:
+				lowest = g
+			elif g > highest:
+				highest = g
+			var b := data[at + 2]
+			if b < lowest:
+				lowest = b
+			elif b > highest:
+				highest = b
+			# Nothing dark enough to miss the LOOSEST of the three rules can
+			# be any of them, and on a real sheet a third of the pixels are
+			# art -- so they cost one comparison each and nothing more.
+			if lowest < fringe_min:
+				continue
+			var spread := highest - lowest
+			var mask := 0
+			if spread <= fringe_spread:
+				mask = CHECKER_FRINGE_TONE
+			var is_checker := lowest >= checker_min and spread <= checker_spread
+			if is_checker:
+				mask |= CHECKER_TONE
+			var is_dark := lowest >= dark_min and highest <= dark_max
+			if is_dark:
+				mask |= CHECKER_DARK_TONE
+			var cell := row + x
+			flags[cell] = mask
+			# Seeded from the image's own edges, where the checker always
+			# reaches...  and from the darker square anywhere in the sheet,
+			# which no part of the art shares, so checker showing through a
+			# gap in the foliage is cleared even though no edge flood can
+			# reach it.
+			if is_dark or (is_checker and (on_top_or_bottom or x == 0 or x == width - 1)):
+				cleared[cell] = 1
+				queue[tail] = cell
+				tail += 1
+
 	var head := 0
-	while head < queue.size():
-		var at: Vector2i = queue[head]
+	while head < tail:
+		var at: int = queue[head]
 		head += 1
-		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-			var next: Vector2i = at + step
-			if next.x < 0 or next.y < 0 or next.x >= width or next.y >= height:
-				continue
-			if cleared.has(next) or not _is_checker(image.get_pixelv(next)):
-				continue
-			cleared[next] = true
-			queue.append(next)
+		var left := at - 1
+		if cleared[left] == 0 and (flags[left] & CHECKER_TONE) != 0:
+			cleared[left] = 1
+			queue[tail] = left
+			tail += 1
+		var right := at + 1
+		if cleared[right] == 0 and (flags[right] & CHECKER_TONE) != 0:
+			cleared[right] = 1
+			queue[tail] = right
+			tail += 1
+		var up := at - stride
+		if cleared[up] == 0 and (flags[up] & CHECKER_TONE) != 0:
+			cleared[up] = 1
+			queue[tail] = up
+			tail += 1
+		var down := at + stride
+		if cleared[down] == 0 and (flags[down] & CHECKER_TONE) != 0:
+			cleared[down] = 1
+			queue[tail] = down
+			tail += 1
+
 	# ...then widen by a bounded depth, so the checker's anti-aliased edges
 	# go with it without the seed rule having to be loose enough to eat art.
-	var frontier: Array[Vector2i] = queue
+	# The frontier starts as everything cleared so far and shrinks fast, so
+	# it walks the queue in place rather than copying it.
+	var frontier_start := 0
+	var frontier_end := tail
 	for _depth in range(_CHECKER_FRINGE_DEPTH):
-		var next_frontier: Array[Vector2i] = []
-		for at in frontier:
-			for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-				var near: Vector2i = at + step
-				if near.x < 0 or near.y < 0 or near.x >= width or near.y >= height:
-					continue
-				if cleared.has(near) or not _is_checker_fringe(image.get_pixelv(near)):
-					continue
-				cleared[near] = true
-				next_frontier.append(near)
-		frontier = next_frontier
+		for index in range(frontier_start, frontier_end):
+			var at: int = queue[index]
+			var left := at - 1
+			if cleared[left] == 0 and (flags[left] & CHECKER_FRINGE_TONE) != 0:
+				cleared[left] = 1
+				queue[tail] = left
+				tail += 1
+			var right := at + 1
+			if cleared[right] == 0 and (flags[right] & CHECKER_FRINGE_TONE) != 0:
+				cleared[right] = 1
+				queue[tail] = right
+				tail += 1
+			var up := at - stride
+			if cleared[up] == 0 and (flags[up] & CHECKER_FRINGE_TONE) != 0:
+				cleared[up] = 1
+				queue[tail] = up
+				tail += 1
+			var down := at + stride
+			if cleared[down] == 0 and (flags[down] & CHECKER_FRINGE_TONE) != 0:
+				cleared[down] = 1
+				queue[tail] = down
+				tail += 1
+		frontier_start = frontier_end
+		frontier_end = tail
 
-	for cell in cleared:
-		image.set_pixelv(cell, Color(0, 0, 0, 0))
+	# Row by row rather than by walking the queue again: the alpha byte of
+	# the next pixel across is three bytes further on, where a queue entry
+	# would have to be divided back into an x and a y first.
+	for y in height:
+		var row := (y + 1) * stride + 1
+		var alpha := y * width * 4 + 3
+		for x in width:
+			if cleared[row + x] != 0:
+				data[alpha + x * 4] = 0
+	image.set_data(width, height, false, Image.FORMAT_RGBA8, data)
+
+
+## The three tones a pixel can be, as bits of one classification byte (see
+## checkerboard_key_in_place, which is the only thing that sets or reads
+## them). They are not exclusive: the checker's darker square is both a
+## CHECKER_TONE the flood may step through and a CHECKER_DARK_TONE it may
+## seed from, and every checker tone is also grey enough to be
+## CHECKER_FRINGE_TONE. Each bit's own rule and the measurements behind its
+## thresholds are on the constants above.
+const CHECKER_TONE := 1
+const CHECKER_DARK_TONE := 2
+const CHECKER_FRINGE_TONE := 4
 
 
 ## The looser rule the bounded widening uses -- grey, and bright enough to

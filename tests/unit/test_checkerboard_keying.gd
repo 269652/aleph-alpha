@@ -88,3 +88,34 @@ func test_an_opaque_rgb_sheet_comes_back_with_a_real_alpha_channel():
 	var keyed := SpriteSheetSlicer.checkerboard_keyed(rgb)
 	assert_eq(keyed.get_format(), Image.FORMAT_RGBA8)
 	assert_eq(keyed.get_pixel(0, 0).a, 0.0)
+
+
+# -- it has to be fast enough to key a whole delivered sheet -----------------
+#
+# The sheets this runs on are not the 16 x 16 fixtures above: the apple
+# sapling grid is 1254 x 1254, about 1.6 million pixels, and roughly 1.0
+# million of them are checker the flood has to walk. Slicing that sheet is
+# what a tree does the first time a sapling of that species comes on screen,
+# so the whole pass has to fit inside a frame hitch a player would forgive
+# rather than a visible stall.
+#
+# Measured on a per-pixel Image.get_pixelv/Dictionary implementation: 5257ms
+# for the real apple sapling sheet -- a five-second freeze. The budget below
+# is set against the same worst case a real sheet poses (an all-checker
+# image of the same size, where every pixel is walked) with room to spare on
+# slower hardware, so it fails a per-pixel implementation by a wide margin
+# rather than by a hair.
+const SHEET_SIZE := 1254
+const SHEET_KEY_BUDGET_MSEC := 1500
+
+
+func test_keying_a_whole_sheet_fits_in_a_forgivable_hitch():
+	var sheet := _checkerboard(SHEET_SIZE, 7)
+	var started := Time.get_ticks_msec()
+	SpriteSheetSlicer.checkerboard_keyed(sheet)
+	var elapsed := Time.get_ticks_msec() - started
+	assert_lt(
+		elapsed,
+		SHEET_KEY_BUDGET_MSEC,
+		"keying a %d x %d sheet took %dms" % [SHEET_SIZE, SHEET_SIZE, elapsed]
+	)

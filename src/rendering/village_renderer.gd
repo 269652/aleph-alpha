@@ -1685,8 +1685,37 @@ func _fence_the_fields(
 				continue
 			if beds.has(cell):
 				continue  # the neighbouring farm's crop, not this farm's fence line
-			if not is_buildable.call(cell) or is_occupied.call(cell):
-				continue  # water, a building, or paving -- the paving being the gate
+			if not is_buildable.call(cell):
+				continue  # water
+			var g_probe: Vector2i = chunk_coord * chunk_size + cell
+			var standing: String = (
+				world.modification_at_global(g_probe.x, g_probe.y)
+				if world.has_method("modification_at_global") else ""
+			)
+			# TWO RAILS ON ONE TILE, where two fields meet.
+			#
+			# Reported with both enclosures in shot: *"It should be possible
+			# to build two rails on a single tile so both enclosures are
+			# fenced properly."* A rail is an ordinary chunk modification and
+			# a tile holds ONE id, so the second field found the cell
+			# occupied and was skipped -- measured on a real village
+			# (tools/probe_neighbouring_fences.gd), every contested cell
+			# along the line carried field 0's `east` and field 1 had no
+			# `west` rail at all, leaving its whole shared side open.
+			#
+			# Asked BEFORE the occupancy guard, because the cell being
+			# occupied by the other field's rail is precisely the case. Only
+			# the opposite rail shares a line, and the same rail asked for
+			# again returns "" -- so a reload still re-derives the ring and
+			# builds nothing twice, which this function's own doc requires.
+			var shared: String = VillageFarm.shared_fence_tile_for(
+				standing, VillageFarm.fence_facing(cell, local_beds)
+			)
+			if shared != "":
+				world.build_at_global(g_probe.x, g_probe.y, shared)
+				continue
+			if is_occupied.call(cell):
+				continue  # a building, or paving -- the paving being the gate
 			# Deliberately NOT skipped for standing on a street ROW, the way
 			# a BED is (_workable_field_of). Reported with the bed circled:
 			# "it's still not fully enclosing the bed" -- a field sits below
@@ -1912,11 +1941,17 @@ func _field_fits_at(
 ##   there is the field's GATE, not a hole in it (see _fence_the_fields,
 ##   which leaves paving open on purpose). Every farmstead measured shows
 ##   five such cells, and they are the gate rather than the defect;
-## - anything else must be this farmstead's OWN ground (VillageFarm.
-##   owner_of -- a cell the neighbour is nearer to is the neighbour's rail
-##   line, not this one's) and really clear: no water, no building, and no
-##   paving, since a spur running down a fence line is what cost one
-##   measured farmstead three of its fourteen rails.
+## - anything else must be really clear: no water, no building, and above
+##   all no PAVING, since a road spur running down a fence line is what
+##   cost one measured farmstead three of its fourteen rails.
+##
+## A cell the NEIGHBOURING farmstead also wants is deliberately NOT refused.
+## It was, in the first cut of this rule, and that was the wrong answer
+## twice over: it pushed farmsteads apart to avoid a clash that two fields
+## meeting no longer have (VillageFarm.SHARED_FENCE_TILE_IDS -- a shared
+## line carries both rails), and a shared line is a better village than two
+## farmsteads shoved to opposite outskirts. A fence line with a ROAD down it
+## still cannot be shared: a rail and a road are not two halves of one tile.
 func _may_rail(
 	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
 	is_buildable: Callable, is_occupied: Callable, world
@@ -1927,9 +1962,18 @@ func _may_rail(
 			return false
 		if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
 			return true  # the village's own paving is this field's gate
-		if VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID) != origin:
-			return false  # the neighbouring farmstead's rail line, not this one's
+		if VillageFarm.is_fence_tile(renderer._tile_at(chunk_coord, chunk_size, world, cell)):
+			return true  # the neighbour's rail line, which a shared line may join
 		return is_buildable.call(cell) and not is_occupied.call(cell)
+
+
+## The tile id really standing on a LOCAL cell of this chunk, or "" for a
+## world that cannot say.
+func _tile_at(chunk_coord: Vector2i, chunk_size: int, world, cell: Vector2i) -> String:
+	if world == null or not world.has_method("modification_at_global"):
+		return ""
+	var g: Vector2i = chunk_coord * chunk_size + cell
+	return world.modification_at_global(g.x, g.y)
 
 
 ## The ONE rule for "may this farmhouse sow this cell", shared by the siting

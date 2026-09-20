@@ -358,3 +358,74 @@ func test_a_loaded_village_builds_on_the_games_own_day():
 		on_the_games_day * float(maxi(manager._households_in_settlement(_settlement_id).size(), 1)) + 0.001,
 		"and no faster than its own real crew on that day"
 	)
+
+
+# -- somebody is working on it (docs/concept/building.md) -------------------
+#
+# Asked for directly, watching a village raise a cottage: *"the
+# construction site should show a builder working on it"*. The labour is
+# real -- a settlement spends its own spare hands against the project's
+# required hours -- so the builder is that number made visible, present
+# exactly while the work is.
+
+const ConstructionWorkerMarker = preload("res://src/rendering/construction_worker_marker.gd")
+
+
+func _builder_at(origin_local: Vector2i):
+	return manager._construction_site_workers.get(_chunk_coord, {}).get(origin_local)
+
+
+func test_a_site_being_worked_shows_a_builder_on_it():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+
+	var builder = _builder_at(_civic_origin)
+	assert_not_null(builder, "a hall going up has somebody building it")
+	if builder == null:
+		return
+	assert_true(builder is ConstructionWorkerMarker)
+	assert_true(builder.is_inside_tree(), "and he is really in the world")
+	var footprint := BuildingCatalog.footprint_of("city_hall")
+	var plot := Rect2(
+		Vector2(_global(_civic_origin)) * TerrainRenderer.TILE_SIZE,
+		Vector2(footprint) * TerrainRenderer.TILE_SIZE
+	)
+	assert_true(plot.has_point(builder.position), "he stands on the site itself, not beside it")
+	assert_eq(builder.plot, plot, "and the plot he works is the footprint")
+
+
+## The other half: a site nobody has hands for shows nobody. A figure
+## standing over a project that has not moved in a week is a lie.
+func test_a_site_nobody_has_hands_for_shows_no_builder():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+	assert_not_null(_builder_at(_civic_origin), "precondition: somebody was working")
+
+	manager._sync_construction_worker(_chunk_coord, _hall_project(), 0.0)
+
+	assert_null(_builder_at(_civic_origin), "no spare hands, no builder")
+
+
+func test_the_builder_goes_when_the_hall_is_finished():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+	assert_not_null(_builder_at(_civic_origin), "precondition: somebody was working")
+
+	manager._advance_construction_labor(_chunk_coord, 1.0e6)
+
+	assert_null(_builder_at(_civic_origin), "a finished hall has no site and no builder")
+
+
+func test_unloading_the_chunk_takes_the_builder_with_it():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+	assert_not_null(_builder_at(_civic_origin), "precondition: somebody was working")
+
+	manager._unload_chunk(_chunk_coord)
+
+	assert_null(_builder_at(_civic_origin), "a worker cannot outlive the chunk he works in")

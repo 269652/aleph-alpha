@@ -219,3 +219,62 @@ func test_a_sim_given_no_mask_grows_the_way_it_always_did():
 	var with_none := ForestFern.new(3, WIDTH, HEIGHT, _biome_all("forest"))
 	var with_empty := ForestFern.new(3, WIDTH, HEIGHT, _biome_all("forest"), PackedByteArray())
 	assert_eq(with_none.get_patch_cells(), with_empty.get_patch_cells())
+
+
+# -- bracken is COVER, not only ground cover --------------------------------
+#
+# Asked for directly, choosing between a fern that is only decoration, a
+# fern that is ground cover, and a fern that also shelters: *"Ground cover +
+# shelter for wildlife"*.
+#
+# This is the half that makes bracken worth simulating rather than drawing.
+# A prey animal crossing open forest floor is exposed; the same animal in a
+# full stand of bracken is not. `is_shelter(cell)` is the single question
+# the creature code asks, so nothing in the ethogram needs to know what a
+# fern is -- only that a cell shelters or does not.
+
+
+func test_a_full_stand_of_bracken_is_shelter():
+	var fern := ForestFern.new(5, WIDTH, HEIGHT, _biome_all("forest"))
+	var cell: Vector2i = fern.get_patch_cells()[0]
+	fern.advance(100000.0, 1.0)
+	assert_true(fern.is_shelter(cell), "a full stand hides a small creature")
+
+
+## Deliberately only a MATURE patch. A frond that has not unrolled hides
+## nothing, and tying cover to growth is what makes the understorey a layer
+## that establishes over time rather than a flag set at worldgen -- the same
+## reason spread starts a new clump at 0.0 rather than at 1.0.
+func test_a_frond_that_has_not_unrolled_is_not_shelter_yet():
+	var fern := ForestFern.new(5, WIDTH, HEIGHT, _biome_all("forest"))
+	var cell: Vector2i = fern.get_patch_cells()[0]
+	fern._patches[cell] = ForestFern.SHELTER_GROWTH - 0.1
+	assert_false(fern.is_shelter(cell), "half a frond hides nothing")
+
+
+func test_open_forest_floor_is_not_shelter():
+	var fern := ForestFern.new(5, WIDTH, HEIGHT, _biome_all("forest"))
+	var bare := Vector2i(WIDTH - 1, HEIGHT - 1)
+	fern.graze(bare)
+	assert_false(fern.is_shelter(bare), "bare ground is exposure, not cover")
+
+
+## Cropping a stand takes the cover with it: that is what makes grazing and
+## clearing MEAN something to the animals living in it, rather than only
+## changing what is drawn.
+func test_cropping_a_stand_takes_its_cover_away():
+	var fern := ForestFern.new(5, WIDTH, HEIGHT, _biome_all("forest"))
+	var cell: Vector2i = fern.get_patch_cells()[0]
+	fern.advance(100000.0, 1.0)
+	assert_true(fern.is_shelter(cell), "precondition: it was cover")
+	fern.graze(cell)
+	assert_false(fern.is_shelter(cell), "cropped bracken shelters nobody")
+
+
+## ...and so does building on it, through the same seam.
+func test_building_on_a_stand_takes_its_cover_away():
+	var fern := ForestFern.new(5, WIDTH, HEIGHT, _biome_all("forest"))
+	var cell: Vector2i = fern.get_patch_cells()[0]
+	fern.advance(100000.0, 1.0)
+	fern.block_cells([cell])
+	assert_false(fern.is_shelter(cell), "a floor is not an understorey")
