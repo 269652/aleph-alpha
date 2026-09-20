@@ -1080,6 +1080,23 @@ func _blocked_step(from: Vector2, point: Vector2) -> bool:
 		return true
 	if not _world.has_method("fence_blocks_step_global"):
 		return false
+	# A field's rails stand on its INNER edge (see "The rail stands on the
+	# inner edge"), so the one villager they shut out is the farmer whose
+	# beds they enclose. Reported live: "The farmer doesn't farm anymore" --
+	# measured on a real village, two of three villagers with a field worked
+	# no bed at all, frozen in APPROACHING nine pixels from their own soil,
+	# refused the last step into it.
+	#
+	# A gate exists for this (docs/concept/village_farms.md, "The gate"),
+	# but reaching one needs pathfinding a Sprite2D walking a single
+	# move_toward per frame does not have -- the commit that gave rails
+	# their hitbox said so itself: "boxed in on both, they stay put".
+	#
+	# So the worker may cross into ground they themselves work, and nothing
+	# else changes: every other rail still stops them, a neighbour's
+	# included, and no other villager is exempt from any rail.
+	if field_cells.has(tile):
+		return false
 	var here := Vector2i(floori(from.x / _tile_size), floori(from.y / _tile_size))
 	return _world.fence_blocks_step_global(here.x, here.y, tile.x, tile.y)
 
