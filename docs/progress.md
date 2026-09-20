@@ -31275,3 +31275,82 @@ that chunk. Every other ground cover can re-colonise.
 
 Tested, red first at every step: `test_earth_chunk_manager_ferns.gd` 15/15
 (+3), `test_earth_chunk_manager_brambles.gd` 16/16 (+4).
+
+## Two fields, one line of rails — and a corner without its post (2026-09-20)
+
+Reported with both enclosures in shot: *"It should be possible to build two
+rails on a single tile so both enclosures are fenced properly. also the
+corner post can be removed"*.
+
+Measured before touching anything (`tools/probe_neighbouring_fences.gd`,
+kept — it walks real chunks for a village whose fence rings actually
+*touch*, then prints what each field WANTS on every contested cell beside
+what really stands there). Four farmhouses at (678, 128):
+
+```
+  (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+  (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+  (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+  (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+```
+
+A rail is an ordinary chunk modification and a tile holds **one** id, so
+field 0's east rail won every contested cell and field 1 had no west rail
+at all — its enclosure open along the whole shared side. The two `road`
+cells are correct: that paving is the gate the farmer walks in through.
+
+### ✅ A shared line
+
+`VillageFarm.SHARED_FENCE_TILE_IDS` names the two opposite pairs, and that
+is the whole set — two fields meeting share a line, and a line has a field
+on each side. A shared id is **defined as the two ordinary rails standing
+there** (`fence_pieces_of`), which is what makes it cost nothing
+downstream: each piece keeps the art and the inner edge it already had,
+`_spawn_structure_art_for` raises one sprite per piece, and
+`rails_block_step` refuses the crop on both sides because there is one on
+each.
+
+Idempotent, which `_fence_the_fields`' own doc comment requires: only the
+*opposite* rail shares a line and never the same rail twice, so a reload
+re-derives the ring and builds nothing. Re-measured after:
+
+```
+  (23, 22)  wanted as ["0:east", "1:west"] -- stands: farm_fence_east_west
+  (23, 23)  ...                            -- stands: farm_fence_east_west
+```
+
+### ✅ A corner draws no post of its own
+
+Every cell of `fence.png` is a whole panel with a post at **each** end —
+`tools/probe_fence_posts.gd` measured them 12.5px apart inside a 16px tile
+— so the two runs meeting at a corner already carry one each and the
+corner's own was a third beside them.
+
+**The corner cell stays a rail**, and that distinction is load-bearing: it
+is what refuses the diagonal into the crop
+(`test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop`,
+still green), and an id that stopped reading as a fence would lose its
+collider *and* stop being overlay-only, painting a bare earth square on
+ground already walked past. Only its art entry is gone, so nothing spawns.
+
+That nuance was worth naming to the user rather than discovered later: the
+post is removed from the picture, not the fence from the ring.
+
+### 🚧 Tests that pinned the old picture, rewritten rather than deleted
+
+Six asked where a corner's wood lands or where its post stood. Four now ask
+it only of the **lengths of rail** (a `_run_subjects` helper states the rule
+once), and the two that pinned the post's position are replaced by the
+stronger statement that none exists. One more — `test_every_rail_an_older_
+village_may_still_have_standing_keeps_its_art` — was really guarding the
+*overlay*, which is what a rail with no art would lose, so it asks that
+directly now.
+
+`_structure_art_sprites` changed shape (one cell can carry more than one
+sprite), so its three readers and the test fixture moved with it.
+
+### ⬜ Not mine, checked
+
+`test_terrain_renderer.gd` runs 185/187, and a clean `origin/main`
+worktree runs the identical 185/187 with the same two village-square
+failures.
