@@ -153,79 +153,78 @@ func _measure_carts(carts: Array) -> void:
 
 
 func _measure_caravans() -> void:
-	_lines.append("")
-	_lines.append("CARAVAN %d in flight" % _manager._active_caravans.size())
 	# A caravan departs only on a real regional shortage, which this sweep
-	# may never produce -- so the ROUTE is built from the same two well
-	# positions a real trip is given (_well_position_for_settlement, which
-	# generates a settlement without needing its chunk loaded). The SHAPE of
-	# the line is the question; who happens to be shipping grain is not.
-	var EntityRef = load("res://src/emergence/entity_ref.gd")
-	var here := Vector2i(
-		floori(float(_origin.x + (_step - 1) * CHUNK_SIZE) / CHUNK_SIZE), floori(float(_origin.y) / CHUNK_SIZE)
-	)
-	var pairs := 0
-	var routes_crossing := 0
-	var total_crossed := 0
-	var total_loaded := 0
-	var nearest_approach := 1.0e20
-	for away in [2, 3, 4, 6, 8, 12, 18, 30]:
-		for direction in [Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 0)]:
-			var far := here + Vector2i(direction.x * away, direction.y * maxi(1, away / 2))
-			var wa: Vector2 = _manager._well_position_for_settlement(EntityRef.for_settlement(here))
-			var wb: Vector2 = _manager._well_position_for_settlement(EntityRef.for_settlement(far))
-			var n := 400
-			var hit := 0
-			var seen := 0
-			for i in n + 1:
-				var at: Vector2 = wa.lerp(wb, float(i) / float(n))
-				var cc := _cell(at)
-				var ch := Vector2i(floori(float(cc.x) / CHUNK_SIZE), floori(float(cc.y) / CHUNK_SIZE))
-				if not _manager._loaded_chunks.has(ch):
-					continue
-				seen += 1
-				if _manager.has_building_at_global(cc.x, cc.y):
-					hit += 1
-				else:
-					# How close the line ever came to one, in tiles -- a
-					# route that merely misses by a hair is a route that
-					# will clip once a village grows.
-					for dx in range(-3, 4):
-						for dy in range(-3, 4):
-							if _manager.has_building_at_global(cc.x + dx, cc.y + dy):
-								nearest_approach = minf(
-									nearest_approach, Vector2(dx, dy).length()
-								)
-			pairs += 1
-			total_loaded += seen
-			total_crossed += hit
-			if hit > 0:
-				routes_crossing += 1
-	_lines.append(
-		"  %d well-to-well routes sampled; %d of them cross a building; %d of %d answerable points in one"
-		% [pairs, routes_crossing, total_crossed, total_loaded]
-	)
-	_lines.append(
-		"  nearest a route ever came to a building: %.1f tiles"
-		% (nearest_approach if nearest_approach < 1.0e19 else -1.0)
-	)
-	for away in [4, 12, 30]:
-		var there := here + Vector2i(away, away / 2)
-		var a: Vector2 = _manager._well_position_for_settlement(EntityRef.for_settlement(here))
-		var b: Vector2 = _manager._well_position_for_settlement(EntityRef.for_settlement(there))
-		var samples := 400
-		var loaded := 0
-		var crossed := 0
-		for i in samples + 1:
-			var at: Vector2 = a.lerp(b, float(i) / float(samples))
-			var c := _cell(at)
-			var chunk := Vector2i(floori(float(c.x) / CHUNK_SIZE), floori(float(c.y) / CHUNK_SIZE))
-			if not _manager._loaded_chunks.has(chunk):
-				continue
-			loaded += 1
-			if _manager.has_building_at_global(c.x, c.y):
-				crossed += 1
-		_lines.append(
-			"  %d chunks away: route %.0f px; %d / %d sampled points sit in a LOADED chunk (%.1f%%), %d of those in a building"
-			% [away, a.distance_to(b), loaded, samples + 1, 100.0 * float(loaded) / float(samples + 1), crossed]
+	# may never produce -- and the ROUTE is the question anyway. Swept over
+	# real village layouts and every direction a caravan can leave in.
+	#
+	# The first cut of this sampled FIVE directions and reported that a
+	# caravan never crosses a building. It does: 30.2% of directions did,
+	# before VillageLayout.road_exit_toward existed. Five samples of a
+	# circle is not a measurement of a circle.
+	var VillageLayout = load("res://src/world/village_layout.gd")
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
+	var ids := ["house_small", "house_medium", "house_large", "house_small", "house_medium"]
+	var straight_crossed := 0
+	var routed_crossed := 0
+	var routes := 0
+	for seed_value in range(1, 61):
+		var layout = VillageLayout.new()
+		var result: Dictionary = layout.layout(
+			ids, CHUNK_SIZE, seed_value, _always_true, _always_false
 		)
+		var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, seed_value, _always_true)
+		var landmarks: Dictionary = bones.get("landmarks", {})
+		if not landmarks.has("well") or (result["plots"] as Array).is_empty():
+			continue
+		var occupied := {}
+		for plot in result["plots"]:
+			for c in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+				occupied[c] = true
+		for key in ["civic_plot", "warehouse_plot"]:
+			var pl: Dictionary = result.get(key, {})
+			if not pl.is_empty():
+				for c in BuildingCatalog.footprint_cells(pl["building_id"], pl["origin"]):
+					occupied[c] = true
+		var well := (Vector2(landmarks["well"] as Vector2i) + Vector2(0.5, 0.5)) * float(TILE)
+		for step in 360:
+			var angle := deg_to_rad(float(step))
+			var far: Vector2 = well + Vector2(cos(angle), sin(angle)) * float(CHUNK_SIZE * TILE) * 6.0
+			routes += 1
+			if _leg_hits(occupied, well, far):
+				straight_crossed += 1
+			var out: Array = VillageLayout.road_exit_toward(
+				bones, Vector2i.ZERO, float(TILE), far
+			)
+			if out.size() != 2:
+				continue
+			if (
+				_leg_hits(occupied, well, out[0])
+				or _leg_hits(occupied, out[0], out[1])
+				or _leg_hits(occupied, out[1], far)
+			):
+				routed_crossed += 1
+	_lines.append("")
+	_lines.append("CARAVAN %d routes out of 60 real village layouts, every direction" % routes)
+	_lines.append("  straight from the well   : %d cross a building (%.1f%%)" % [
+		straight_crossed, 100.0 * float(straight_crossed) / maxf(1.0, float(routes))
+	])
+	_lines.append("  out by the road instead  : %d cross a building (%.1f%%)" % [
+		routed_crossed, 100.0 * float(routed_crossed) / maxf(1.0, float(routes))
+	])
+
+
+func _always_true(_c: Vector2i) -> bool:
+	return true
+
+
+func _always_false(_c: Vector2i) -> bool:
+	return false
+
+
+func _leg_hits(occupied: Dictionary, a: Vector2, b: Vector2) -> bool:
+	var steps := int(a.distance_to(b) / float(TILE) * 4.0) + 1
+	for i in steps + 1:
+		var at: Vector2 = a.lerp(b, float(i) / float(steps))
+		if occupied.has(Vector2i(floori(at.x / float(TILE)), floori(at.y / float(TILE)))):
+			return true
+	return false

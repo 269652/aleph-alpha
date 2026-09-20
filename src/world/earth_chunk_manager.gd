@@ -6165,6 +6165,11 @@ func _attempt_regional_resupply(
 		supplier_id, shortage_settlement_id, item_id, need,
 		origin, destination, _world_age_seconds, tier, raided, raid_fraction
 	)
+	# Out of one village by its road and in to the other by theirs, rather
+	# than straight through both. Set before anything reads the trip:
+	# travel_seconds is the ROUTE's length, so the waypoints decide how long
+	# this caravan is on the road.
+	trip.waypoints = _caravan_waypoints(supplier_id, shortage_settlement_id, origin, destination)
 	var marker := CaravanMarker.new()
 	marker.item_id = item_id
 	marker.count = need
@@ -6183,6 +6188,50 @@ func _attempt_regional_resupply(
 	departed_event.witnesses = _villager_witnesses_of(departed_event.actors)
 	_event_store.append(departed_event)
 	_memory_store.witness_event(departed_event, _world_age_seconds)
+
+
+## The corners of a caravan's route between two settlements' wells: out of
+## the supplier's village by its own road, across country, then in to the
+## waiting one by theirs.
+##
+## A caravan cannot be given the step gate every other walking marker has.
+## Its position is a pure closed-form function of elapsed time, and
+## is_arrived, raid_triggered and its PathScarring wear all read the same
+## progress -- deflecting the MARKER would only leave the marker and the
+## trip disagreeing about where the caravan is (see CaravanTrip.waypoints).
+##
+## So the route bends. Measured before it did (a 360-direction sweep over
+## 60 real village layouts): 30.2% of the directions a caravan can leave a
+## well in cross one of its own village's buildings; leaving by the road
+## and turning clear of its end crosses none of 21600.
+##
+## Empty for a settlement whose plan laid no street -- a caravan with no
+## road to leave by walks straight, exactly as every caravan used to.
+func _caravan_waypoints(
+	supplier_id: String, shortage_settlement_id: String, origin: Vector2, destination: Vector2
+) -> Array:
+	var points: Array = []
+	points.append_array(_road_exit_for_settlement(supplier_id, destination))
+	var arrival := _road_exit_for_settlement(shortage_settlement_id, origin)
+	if arrival.size() == 2:
+		# Reversed: the far point first, because this end is ARRIVED at.
+		points.append(arrival[1])
+		points.append(arrival[0])
+	return points
+
+
+## How a traveller leaves `settlement_id` bound for `toward` -- see
+## VillageLayout.road_exit_toward. Derived from the settlement's own seed,
+## so it answers for a village whose chunk is not loaded, which is every
+## caravan's far end at departure.
+func _road_exit_for_settlement(settlement_id: String, toward: Vector2) -> Array:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	return VillageLayout.road_exit_toward(
+		VillageLayout.skeleton(
+			CHUNK_SIZE, VillageLayout.seed_for(chunk_coord), _is_dry_local(chunk_coord)
+		),
+		chunk_coord * CHUNK_SIZE, float(TerrainRenderer.TILE_SIZE), toward
+	)
 
 
 ## `settlement_id`'s real "well" landmark world position -- a caravan's real
