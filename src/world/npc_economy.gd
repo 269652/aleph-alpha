@@ -142,6 +142,28 @@ static func deposit_to_purse(a_market, gold: float) -> void:
 	_set_purse(a_market, purse_of(a_market) + gold)
 
 
+## Pays `gold` OUT of the settlement's shared purse into `wallet` -- the
+## living wage (docs/concept/village_economy_balance.md mechanism 1), and a
+## TRANSFER rather than a faucet: the purse is debited and the wallet
+## credited in one call that cannot half-happen, the same shape
+## WagePayment.pay keeps for the player's own hires. True only if gold
+## really moved.
+##
+## Refuses and moves NOTHING for a missing purse or wallet, a demand that
+## is not a real payment, or a purse that cannot cover it in full -- a
+## village pays what it has, and the caller (EarthChunkManager.
+## _pay_village_wages) has already sized the demand to what is there.
+static func pay_wage_from_purse(a_market, wallet, gold: int) -> bool:
+	if a_market == null or wallet == null or gold <= 0:
+		return false
+	var purse := purse_of(a_market)
+	if purse < float(gold):
+		return false
+	_set_purse(a_market, purse - float(gold))
+	wallet.add(gold)
+	return true
+
+
 static func _set_purse(a_market, gold: float) -> void:
 	if a_market == null:
 		return

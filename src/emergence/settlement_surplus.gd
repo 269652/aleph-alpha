@@ -19,6 +19,38 @@ extends RefCounted
 ## MerchantVisit itself keeps, so a sale that cannot be completed has
 ## changed nothing.
 
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+
+
+## The cover, in assessments: however many fit in the longest a village
+## worth the detour waits between the cart's calls (MerchantVisit.
+## cover_seconds), on the clock the eating is measured on. Rounded UP,
+## because a fraction of an assessment is still an assessment somebody
+## eats through.
+static func cover_assessments() -> int:
+	return int(ceil(MerchantVisit.cover_seconds() / SettlementState.ASSESSMENT_SECONDS))
+
+
+## The MINIMUM STOCK (docs/concept/village_economy_balance.md mechanism 3):
+## the food a village of `household_count` keeps until the cart comes
+## again -- the granary's own real per-assessment draw over the cover, and
+## nothing else.
+##
+## MEASURED before this existed (tools/probe_village_economy.gd): the
+## reserve was EstateConsumption.demand_for over 2.5 days, a basket priced
+## on the 3600-second economy day handed a cover measured in 60-second
+## lived days, so ten households kept 25 units -- two assessments of food
+## -- and the cart sold the shelves down to exactly that, 23, 25, 25,
+## every visit. Nobody, or a nonsense census, keeps nothing rather than a
+## negative larder.
+static func minimum_stock_for(household_count: int) -> int:
+	if household_count <= 0:
+		return 0
+	return SettlementGranary.subsistence_draw(household_count) * cover_assessments()
+
+
 ## Every view added up, item_id -> units, for something that needs to price
 ## a settlement's whole holding.
 ##

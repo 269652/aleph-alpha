@@ -159,3 +159,61 @@ func test_only_food_is_held_back():
 	var reserve := SettlementSurplus.larder_reserve(views, ["fish"], 20)
 	assert_false(reserve.has("wood"), "timber is not the larder: %s" % str(reserve))
 	assert_eq(reserve, {"fish": 3})
+
+
+# -- the minimum stock: what a village keeps until the cart comes again ----
+#
+# docs/concept/village_economy_balance.md mechanism 3. MEASURED before this
+# existed (tools/probe_village_economy.gd): the food on a real village's
+# shelves sawed 45 -> 23 -> 45 -> 19, and what the cart left behind was
+# 23, 25, 25 -- the reserve was EstateConsumption.demand_for over 2.5 days,
+# a basket priced on the 3600-second economy day handed a cover measured in
+# 60-second lived days. Ten households really eat twelve units an
+# assessment, so 25 units was two assessments of food.
+
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+
+
+## The cover is the merchant's own round, on the clock the eating is
+## measured on: however many assessments fit in the longest a village
+## worth the detour waits between his calls.
+func test_the_cover_is_the_merchants_own_round_in_assessments():
+	assert_eq(
+		SettlementSurplus.cover_assessments(),
+		int(ceil(MerchantVisit.cover_seconds() / SettlementState.ASSESSMENT_SECONDS))
+	)
+	assert_gt(SettlementSurplus.cover_assessments(), 0)
+
+
+## The minimum stock is the granary's OWN draw -- the real per-assessment
+## eating -- over that cover, and nothing else.
+func test_the_minimum_stock_is_the_real_draw_over_the_cover():
+	for households in [1, 4, 10, 37]:
+		assert_eq(
+			SettlementSurplus.minimum_stock_for(households),
+			SettlementGranary.subsistence_draw(households) * SettlementSurplus.cover_assessments(),
+			"%d households" % households
+		)
+
+
+func test_nobody_keeps_nothing():
+	assert_eq(SettlementSurplus.minimum_stock_for(0), 0)
+	assert_eq(SettlementSurplus.minimum_stock_for(-3), 0)
+
+
+## The claim itself, simulated: a village holding exactly its minimum stock
+## and gathering nothing eats through the whole cover without going hungry,
+## and is bare -- not short -- when the cart is next due.
+func test_the_minimum_stock_feeds_the_village_until_the_cart_comes_again():
+	var households := 10
+	var stock := {"fish": SettlementSurplus.minimum_stock_for(households)}
+	for assessment in SettlementSurplus.cover_assessments():
+		assert_true(
+			int(stock["fish"]) >= SettlementGranary.subsistence_draw(households),
+			"short of a full draw on assessment %d of the cover" % (assessment + 1)
+		)
+		var result: Dictionary = SettlementGranary.catchup({}, {}, stock, households)
+		stock["fish"] = int(stock["fish"]) + int(result["stock_delta"].get("fish", 0))
+	assert_eq(int(stock["fish"]), 0, "the cover is exactly the food, no more")

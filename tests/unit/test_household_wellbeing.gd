@@ -313,3 +313,31 @@ func test_the_needs_are_weighted_in_their_own_listed_order():
 		var weight: float = HouseholdWellbeing.NEED_WEIGHTS[need_id]
 		assert_lt(weight, previous, "%s is weighted at or above the need before it" % need_id)
 		previous = weight
+
+
+# -- a full larder is the minimum stock, per household ---------------------
+#
+# docs/concept/village_economy_balance.md mechanism 4. The target was 4.0:
+# one assessment's draw, from when the draw was 4. The draw is a measured
+# 1.2 now and the target was never revisited, so "full larder" meant three
+# and a third assessments of food for no reason anybody could state -- and
+# a village the card said fed 25 of 10 read its households at 60%.
+
+const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+
+
+## One number, one meaning: a household reads its larder as full when the
+## village holds, per household, the food it never sells below.
+func test_a_full_larder_is_the_minimum_stock_per_household():
+	assert_almost_eq(
+		HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET,
+		SettlementState.FOOD_PER_HOUSEHOLD * float(SettlementSurplus.cover_assessments()),
+		0.0001
+	)
+
+
+## And it is several meals, not one: a household with one meal in store is
+## one bad day from hunger and must not read as fully fed.
+func test_a_full_larder_is_several_meals():
+	assert_gt(HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET, VillageMarket.FOOD_UNITS_PER_MEAL * 2.0)

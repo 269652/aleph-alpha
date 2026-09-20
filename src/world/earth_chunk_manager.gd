@@ -3866,6 +3866,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# immigration steps, so gold that arrives this tick is gold the
 		# village can act on this tick.
 		_step_merchant_visits(settlement_id, market, village_market)
+		# ...and the village pays its households out of what he paid
+		# (docs/concept/village_economy_balance.md mechanism 1) -- AFTER the
+		# cart, so gold that arrives this assessment is in a wallet this
+		# assessment, and out of the SAME purse he pays into, loaded or not.
+		_pay_village_wages(
+			settlement_id, village_market if village_market != null else market, household_ids
+		)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
@@ -4711,7 +4718,12 @@ func _collect_estate_tax(
 	var households: Array = []
 	var balances: Array = []
 	for household_id in _households_in_settlement(settlement_id):
-		var household = _household_store.household_for(household_id)
+		# By the household's OWN id (get_household), not household_for, which
+		# looks a household up by one of its MEMBERS' entity ids and answered
+		# null for every household id here -- so the tax debited nobody and
+		# credited nothing, and its own test passed only because the same
+		# fixture's stock drew a merchant who funded the purse instead.
+		var household = _household_store.get_household(household_id)
 		if household == null or household.wallet == null:
 			continue
 		households.append(household)
@@ -4732,6 +4744,69 @@ func _collect_estate_tax(
 ## cannot yet collect, since a Wallet holds only whole gold. Carried rather
 ## than rounded (see _collect_estate_tax).
 var _settlement_tax_carry: Dictionary = {}
+
+## settlement_id -> the sub-coin remainder of its wage bill carried into the
+## next assessment (see _pay_village_wages).
+var _settlement_wage_carry: Dictionary = {}
+
+
+## docs/concept/village_economy_balance.md mechanism 1: every assessment,
+## the village pays its households a living wage out of `purse_market`'s
+## purse -- the object the merchant pays into, so the two cannot be
+## different tanks.
+##
+## MEASURED before this existed (tools/probe_village_economy.gd): a purse
+## reading 0 -> 20 -> 1 -> 1 -> 19 -> 1, wallets 0 at every sample, ten of
+## ten villagers broke and "worst: income" permanent, because the only wage
+## in the game was the meal a villager could not afford.
+##
+## A TRANSFER, never a faucet: every coin here leaves the purse through
+## NpcEconomy.pay_wage_from_purse, which debits and credits in one call.
+## Three rules, each deliberate and each test-pinned
+## (test_earth_chunk_manager_village_wages.gd):
+##
+## - **Whole coins, remainder carried.** A Wallet holds integer gold and a
+##   household's wage is a fraction of a coin a step, so the sub-coin part
+##   of the bill is carried per settlement -- the same idiom the tax and
+##   the estate draw already run on.
+## - **The poorest are paid first** when the purse cannot cover the bill
+##   (VillageWages.wage_payouts, deterministic).
+## - **A village pays what it has, not what it owes.** The unpaid part of a
+##   bill is NOT banked as arrears: the tax already refuses to keep a debt a
+##   household can never pay, and a debt the purse can never pay is the
+##   same fiction from the other side.
+func _pay_village_wages(settlement_id: String, purse_market, household_ids: Array[String]) -> void:
+	if purse_market == null or household_ids.is_empty():
+		return
+	var owed: float = (
+		VillageWages.wage_bill_for(household_ids.size(), 1.0)
+		+ float(_settlement_wage_carry.get(settlement_id, 0.0))
+	)
+	var coins := int(floor(owed + 0.000001))
+	_settlement_wage_carry[settlement_id] = maxf(owed - float(coins), 0.0)
+	if coins <= 0:
+		return
+	var households: Array = []
+	var balances: Array = []
+	for household_id in household_ids:
+		var household = _household_store.get_household(household_id)
+		if household == null or household.wallet == null:
+			continue
+		households.append(household)
+		balances.append(int(household.wallet.balance))
+	if households.is_empty():
+		return
+	# What is really there to pay, and no more: the shortfall is simply not
+	# paid, never owed.
+	coins = mini(coins, int(floor(NpcEconomy.purse_of(purse_market) + 0.000001)))
+	if coins <= 0:
+		return
+	var payouts: Array = VillageWages.wage_payouts(balances, coins)
+	for index in payouts.size():
+		var payout := int(payouts[index])
+		if payout <= 0:
+			continue
+		NpcEconomy.pay_wage_from_purse(purse_market, households[index].wallet, payout)
 
 ## settlement_id -> StaffedProduction's own per-recipe batch remainder.
 var _settlement_staffed_production_carry: Dictionary = {}
@@ -4890,7 +4965,6 @@ var _settlement_merchant_carry: Dictionary = {}
 func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
-	var reserved := _construction_reserve_for(settlement_id)
 	# Every container this settlement really keeps goods in, market FIRST
 	# (docs/concept/traveling_merchants.md). He used to price market.stock
 	# alone while SettlementFood counted the shelves too, so a village that
@@ -4913,30 +4987,7 @@ func _step_merchant_visits(settlement_id: String, market, village_market = null)
 	views.append(market.stock)
 	for shelf in shelves:
 		views.append(shelf.stock)
-	# And the LARDER. `reserved` already holds back what the village's next
-	# BUILDING needs; nobody was holding back what its PEOPLE eat, so a
-	# merchant carried off the food and left the gold. Measured
-	# (tools/probe_village_famine.gd): purse climbing 21 -> 24 -> 25 with
-	# market food 0 at every sample, and the village dead by t=900.
-	#
-	# The cover is DERIVED, not picked: he calls at most VISITS_PER_DAY
-	# times a day when a village is barely worth the detour, so 1 /
-	# VISITS_PER_DAY days is exactly the longest a village may have to wait
-	# between sales -- the food it must still have when he next appears.
-	var census := _household_store.estate_census(_households_in_settlement(settlement_id))
-	if not census.is_empty():
-		var cover_days := 1.0 / MerchantVisit.VISITS_PER_DAY
-		var season := SeasonCycle.new().season_at(_world_age_seconds)
-		var eaten: float = float(
-			EstateConsumption.demand_for(census, cover_days, season)
-				.get(VillageEstates.FOOD_KIND_TOKEN, 0.0)
-		)
-		if eaten > 0.0:
-			var larder := SettlementSurplus.larder_reserve(
-				views, _merchant_food_ids(), int(ceil(eaten))
-			)
-			for item_id in larder:
-				reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
+	var reserved := _merchant_reserve_for(settlement_id, views)
 	var surplus := SettlementSurplus.combined(views)
 
 	var result: Dictionary = MerchantVisit.arrivals(
@@ -4974,6 +5025,30 @@ func _step_merchant_visits(settlement_id: String, market, village_market = null)
 	# gold somewhere nobody could ever spend it.
 	var purse_market = village_market if village_market != null else market
 	NpcEconomy.deposit_to_purse(purse_market, float(sale["paid"]))
+
+
+## What the cart may NOT buy: item_id -> whole units held back, across the
+## `views` he is shown -- the construction reserve (what the village's next
+## building needs) plus the LARDER (docs/concept/village_economy_balance.md
+## mechanism 3): the village's minimum stock, SettlementSurplus.
+## minimum_stock_for, spread across whatever food it really has.
+##
+## `reserved` already held back the building's timber; nobody was holding
+## back what the PEOPLE eat, so a merchant carried off the food and left
+## the gold (tools/probe_village_famine.gd: purse climbing 21 -> 24 -> 25
+## with market food 0, village dead by t=900). The first larder was the
+## estate basket over 2.5 days -- a 3600-second-day basket handed a
+## 60-second-day cover -- and measured at 25 units for ten households, two
+## assessments of food (tools/probe_village_economy.gd). It is the
+## granary's own draw over the cart's own round now, in the same clock.
+func _merchant_reserve_for(settlement_id: String, views: Array) -> Dictionary:
+	var reserved := _construction_reserve_for(settlement_id)
+	var minimum := SettlementSurplus.minimum_stock_for(_households_in_settlement(settlement_id).size())
+	if minimum > 0:
+		var larder := SettlementSurplus.larder_reserve(views, _merchant_food_ids(), minimum)
+		for item_id in larder:
+			reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
+	return reserved
 
 
 ## The food on the merchant's own buy list, in the order he would take it.
