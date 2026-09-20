@@ -182,6 +182,22 @@ const BEND_MESH_SUBDIVIDE_DEPTH := 7
 ## reaction, not ambient wind, and must not go weaker on a calm day.
 const DEFAULT_WIND_STRENGTH := 1.0
 
+## How much of the bend a plant actually takes — 1.0 being all of it, the
+## way a grass blade lays over.
+##
+## Asked for with brambles in mind: *"they should bend slightly when walked
+## over from the side"*. A cane is woody and a blade is not, but the bend
+## stays ONE implementation (docs/concept/ferns.md's own pillar) and gains
+## a scale rather than a second shader.
+##
+## It has to be its own knob because `wind_strength` cannot do this:
+## that deliberately does NOT scale the walker's push (see its own uniform
+## comment — parting is the walker's reaction, not the weather's), and
+## "bend slightly when walked over" is exactly the push. This one scales
+## the WHOLE offset, wind and push alike, because a woody stem resists
+## both.
+const DEFAULT_BEND_SCALE := 1.0
+
 static var SHADER_CODE: String = _build_shader_code()
 
 static func bend_curve(top_t: float) -> float:
@@ -206,9 +222,12 @@ static func blade_amplitude_scale(uv_x: float) -> float:
 ## every moment and every root position at once. `push` is likewise the
 ## shader's own `away.x * wake * WALKER_PUSH_UV_AMPLITUDE`, constant per card
 ## and bounded by +/-WALKER_PUSH_UV_AMPLITUDE.
-static func bend_offset(uv: Vector2, wind_phase: float, push: float, wind_strength: float = DEFAULT_WIND_STRENGTH) -> float:
+static func bend_offset(
+	uv: Vector2, wind_phase: float, push: float,
+	wind_strength: float = DEFAULT_WIND_STRENGTH, bend_scale: float = DEFAULT_BEND_SCALE
+) -> float:
 	var wind: float = sin(wind_phase + blade_phase(uv.x)) * WIND_UV_AMPLITUDE * wind_strength * blade_amplitude_scale(uv.x)
-	return (wind + push) * bend_curve(uv.y)
+	return (wind + push) * bend_curve(uv.y) * bend_scale
 
 
 ## How much of that displacement the card's own GEOMETRY carries at `uv`:
@@ -224,7 +243,10 @@ static func bend_offset(uv: Vector2, wind_phase: float, push: float, wind_streng
 ## can_show, which measures the twist off this same function's own corners
 ## instead of assuming it away. Exact (not a model) at every vertex, which is
 ## what makes the residual below meaningful.
-static func mesh_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_strength: float = DEFAULT_WIND_STRENGTH) -> float:
+static func mesh_bend_offset(
+	uv: Vector2, wind_phase: float, push: float,
+	wind_strength: float = DEFAULT_WIND_STRENGTH, bend_scale: float = DEFAULT_BEND_SCALE
+) -> float:
 	var columns := BEND_MESH_SUBDIVIDE_WIDTH + 1
 	var rows := BEND_MESH_SUBDIVIDE_DEPTH + 1
 	var scaled_u: float = clampf(uv.x, 0.0, 1.0) * float(columns)
@@ -238,13 +260,13 @@ static func mesh_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_s
 	var bottom: float = float(row) / float(rows)
 	var top: float = float(row + 1) / float(rows)
 	var lower: float = lerpf(
-		bend_offset(Vector2(left, bottom), wind_phase, push, wind_strength),
-		bend_offset(Vector2(right, bottom), wind_phase, push, wind_strength),
+		bend_offset(Vector2(left, bottom), wind_phase, push, wind_strength, bend_scale),
+		bend_offset(Vector2(right, bottom), wind_phase, push, wind_strength, bend_scale),
 		along_u
 	)
 	var upper: float = lerpf(
-		bend_offset(Vector2(left, top), wind_phase, push, wind_strength),
-		bend_offset(Vector2(right, top), wind_phase, push, wind_strength),
+		bend_offset(Vector2(left, top), wind_phase, push, wind_strength, bend_scale),
+		bend_offset(Vector2(right, top), wind_phase, push, wind_strength, bend_scale),
 		along_u
 	)
 	return lerpf(lower, upper, along_v)
@@ -318,8 +340,14 @@ static func bent_vertex(local_position: Vector2, bend_offset: float) -> Vector2:
 ## discarded (the edge-smear guard in fragment()). That makes it the number
 ## worth bounding, and it is: see BEND_MESH_SUBDIVIDE_WIDTH's own doc comment
 ## for the measured worst case.
-static func sampled_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_strength: float = DEFAULT_WIND_STRENGTH) -> float:
-	return bend_offset(uv, wind_phase, push, wind_strength) - mesh_bend_offset(uv, wind_phase, push, wind_strength)
+static func sampled_bend_offset(
+	uv: Vector2, wind_phase: float, push: float,
+	wind_strength: float = DEFAULT_WIND_STRENGTH, bend_scale: float = DEFAULT_BEND_SCALE
+) -> float:
+	return (
+		bend_offset(uv, wind_phase, push, wind_strength, bend_scale)
+		- mesh_bend_offset(uv, wind_phase, push, wind_strength, bend_scale)
+	)
 
 
 ## Which Y-band (0..BAND_COUNT-1) a row at `local_y` (within its own chunk,
@@ -382,6 +410,11 @@ uniform float wind_speed = 1.6;
 // weather and down in none. Deliberately does NOT touch the walker-push
 // term below (see `push`): parting is the walker's own reaction, not wind.
 uniform float wind_strength = 1.0;
+// How much of the bend this plant takes at all (see DEFAULT_BEND_SCALE):
+// 1.0 is a grass blade laying over, lower is a woody stem that gives a
+// little and no more. Scales the WHOLE offset, wind and walker push
+// alike, which is exactly what wind_strength above must not do.
+uniform float bend_scale = 1.0;
 // The season's multiplier on living green (see SeasonalFoliage, forwarded via
 // EarthChunkManager.set_season_tint) -- the same value the terrain layer
 // under these blades wears, so a field and the ground it stands in turn
@@ -436,7 +469,7 @@ float bend_offset_at(vec2 blade_uv, vec2 root) {
 
 	float wind = sin(TIME * wind_speed + root.x * 0.071 + root.y * 0.043 + phase) * %s * wind_strength * amplitude_scale;
 	float push = away.x * wake * %s;
-	return (wind + push) * bend;
+	return (wind + push) * bend * bend_scale;
 }
 
 void vertex() {

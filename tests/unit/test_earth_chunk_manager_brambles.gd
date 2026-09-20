@@ -19,6 +19,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
+const IllustratedBramblePatch = preload("res://src/rendering/illustrated_bramble_patch.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -45,6 +46,24 @@ func before_each():
 	)
 	_scrub()
 	manager._load_chunk(_chunk_coord)
+	_stand_in_the_wood()
+
+
+## Put the viewer in this chunk, which _load_chunk alone does not do.
+##
+## Brambles are view-filtered now, like every other ground cover — one of
+## the three seams this system was missing. Drawing is therefore a question
+## about where somebody is standing, and a fixture that never places
+## anybody sees an empty wood. Set directly rather than through update(),
+## which streams real chunks and costs about a hundred seconds a call.
+func _stand_in_the_wood() -> void:
+	var middle: Vector2i = (
+		_chunk_coord * EarthChunkManager.CHUNK_SIZE
+		+ Vector2i(EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2)
+	)
+	manager._disturbance_center_tile = middle
+	manager._decoration_center = _chunk_coord
+	manager._sync_bramble_sprites(_chunk_coord)
 
 
 func after_each():
@@ -90,23 +109,44 @@ func test_a_wood_holds_fewer_brambles_than_ferns():
 
 ## A sim nothing draws is a sim nobody sees -- the whole of the report this
 ## work came from was *"not visible"*.
-func test_every_bramble_is_really_drawn():
+##
+## Counted in INSTANCES across the bands rather than sprites per cell: a
+## thicket is drawn through the same banded MultiMesh the ferns use now,
+## because the shared bend shader cannot run on a plain Sprite2D (it reads
+## INSTANCE_CUSTOM and the instance origin). Same guarantee, one layer
+## down.
+func test_every_bramble_in_view_is_really_drawn():
 	var sim = manager._bramble_sims[_chunk_coord]
 	assert_gt(sim.get_patch_cells().size(), 0, "precondition: this wood has brambles")
-	var sprites: Dictionary = manager._bramble_sprites.get(_chunk_coord, {})
-	assert_eq(sprites.size(), sim.get_patch_cells().size(), "one sprite per thicket")
-	for cell in sim.get_patch_cells():
-		assert_not_null(sprites.get(cell), "%s is drawn" % cell)
-		assert_not_null(sprites[cell].texture, "...with real art")
+	var bands: Dictionary = manager._bramble_sprites.get(_chunk_coord, {})
+	assert_gt(bands.size(), 0, "nothing was drawn at all")
+	var instances := 0
+	for band in bands:
+		var mmi: MultiMeshInstance2D = bands[band]
+		assert_not_null(mmi.multimesh, "a band with no mesh draws nothing")
+		assert_not_null(mmi.texture, "...and no art")
+		instances += mmi.multimesh.instance_count
+	assert_gt(instances, 0, "every band was empty")
 
 
 ## Two brambles in one wood must not be the same picture -- the sheet has
 ## twenty-five clumps precisely so a thicket is not a repeated stamp.
+##
+## Asked of the REGIONS now rather than of separate textures: every card
+## samples one shared sheet and carries its own sub-rect in the MultiMesh's
+## custom-data channel, so "a different clump" means a different region,
+## not a different Texture2D.
 func test_neighbouring_brambles_do_not_all_wear_the_same_clump():
-	var sprites: Dictionary = manager._bramble_sprites.get(_chunk_coord, {})
+	var sim = manager._bramble_sims[_chunk_coord]
+	var origin := _chunk_coord * EarthChunkManager.CHUNK_SIZE
 	var seen := {}
-	for cell in sprites:
-		seen[sprites[cell].texture.get_rid()] = true
+	for cell in sim.get_patch_cells():
+		var tile: Vector2i = origin + (cell as Vector2i)
+		var seed_value := hash("%d_%d_bramble_clump" % [tile.x, tile.y])
+		for card in IllustratedBramblePatch.cards_for_cell({
+			"seed": seed_value, "ground_position": Vector2.ZERO, "growth": 1.0,
+		}):
+			seen[IllustratedBramblePatch.atlas_region_for(card.atlas_seed, 1.0)] = true
 	assert_gt(seen.size(), 1, "a wood is not one bramble stamped over and over")
 
 
@@ -214,10 +254,11 @@ func test_a_picked_bramble_is_still_standing_and_still_drawn():
 	manager.pick_blackberries_near(_stand_on(cell))
 
 	assert_true(sim.has_bramble(cell), "the cane is still there")
-	assert_not_null(
-		manager._bramble_sprites.get(_chunk_coord, {}).get(cell),
-		"...and still drawn, because it will bear again next year"
-	)
+	var instances := 0
+	for band in manager._bramble_sprites.get(_chunk_coord, {}).values():
+		if band.multimesh != null:
+			instances += band.multimesh.instance_count
+	assert_gt(instances, 0, "...and still drawn, because it will bear again next year")
 
 
 func test_standing_nowhere_near_a_bramble_picks_nothing():
@@ -323,14 +364,24 @@ func test_a_cleared_bramble_stops_being_drawn():
 	var sim = manager._bramble_sims.get(_chunk_coord)
 	var cell: Vector2i = sim.get_patch_cells()[0]
 	var g: Vector2i = _chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
-	assert_true(manager._bramble_sprites.get(_chunk_coord, {}).has(cell), "precondition: it is drawn")
+	var before := _drawn_instances()
+	assert_gt(before, 0, "precondition: it is drawn")
 
 	manager.build_at_global(g.x, g.y, "wood_floor")
 
-	assert_false(
-		manager._bramble_sprites.get(_chunk_coord, {}).has(cell),
-		"the thicket was cleared but its sprite is still standing there"
+	assert_lt(
+		_drawn_instances(), before,
+		"the thicket was cleared but its card is still standing there"
 	)
+
+
+## Every card drawn for this chunk, across every band.
+func _drawn_instances() -> int:
+	var instances := 0
+	for band in manager._bramble_sprites.get(_chunk_coord, {}).values():
+		if band.multimesh != null:
+			instances += band.multimesh.instance_count
+	return instances
 
 
 ## They go with the chunk, like every other loaded thing. Without this the
