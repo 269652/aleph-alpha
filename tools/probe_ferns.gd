@@ -23,9 +23,9 @@ extends SceneTree
 ##
 ##   ferns             30 on 242 forest cells, 0 in water — 12.4% against
 ##                     the 12.0% ForestFern.SEED_CHANCE asks for
-##   checkerboard      0.01% of drawn pixels, i.e. gone
+##   checkerboard      0.00% of drawn pixels, i.e. gone
 ##   render path       13 bands, 66 instances, every one with its texture
-##   the bend          16.4% of the frame moved when a walker stepped in
+##   the bend          16.0% of the frame moved when a walker stepped in
 ##
 ## And one thing the pictures say that no number does: a closed wood seen
 ## from above is ALL CROWN. The first frame here is what a player really

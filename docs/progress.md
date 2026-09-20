@@ -30460,8 +30460,8 @@ intact, and the structure sprite delegates.
 **Rendered, not just tested** (`tools/probe_ferns.gd`, xvfb + Mesa
 software GL, the Harz chunk): 30 ferns on 242 forest cells with none in
 water — **12.4%** against the 12.0% the constant asks for — the
-checkerboard down to **0.01%** of drawn pixels, 13 bands holding 66
-instances, and **16.4%** of the frame moving when a walker stepped in,
+checkerboard down to **0.00%** of drawn pixels, 13 bands holding 66
+instances, and **16.0%** of the frame moving when a walker stepped in,
 which is the only evidence that the bend is live rather than merely wired.
 
 The probe earned both of its findings by being wrong first, and both are

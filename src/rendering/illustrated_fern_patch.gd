@@ -28,7 +28,7 @@ const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 ## tinting would be a worse lie than leaving them green (the season tint
 ## the shared material already carries still reaches them, so a November
 ## wood is not summer-bright).
-const ATLAS_PATH := "res://assets/sprites/ferns.png"
+const ATLAS_PATH := "res://assets/sprites/plants/fern.png"
 
 ## 5x5 clumps at 1254 square — the same sheet SIZE the grass blades come
 ## at, a quarter of the cells, so each drawn clump is about twice the

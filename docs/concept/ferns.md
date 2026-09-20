@@ -150,8 +150,8 @@ moved to the module that owns keying so there is one of it rather than two.
 - ✅ **Rendered and measured, not just tested.** `tools/probe_ferns.gd`,
   under xvfb + Mesa software GL on the Harz chunk: 30 ferns on 242 forest
   cells with none in water (**12.4%** against the 12.0% asked for), the
-  checkerboard down to **0.01%** of drawn pixels, 13 bands holding 66
-  instances, and **16.4%** of the frame moving when a walker steps in —
+  checkerboard down to **0.00%** of drawn pixels, 13 bands holding 66
+  instances, and **16.0%** of the frame moving when a walker steps in —
   which is the only evidence that the bend is really live rather than
   merely wired.
 
