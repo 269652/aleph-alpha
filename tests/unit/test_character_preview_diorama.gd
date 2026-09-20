@@ -950,3 +950,101 @@ func test_the_shipped_pond_has_both_a_solid_core_and_an_eroded_rim():
 	var kept: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(columns, rows, 42)
 	assert_gt(kept.size(), 0)
 	assert_lt(kept.size(), columns * rows, "a pond that keeps every cell is a rectangle again")
+
+
+# -- staging: the hero is the subject, the rest is scenery ----------------
+
+
+## Two of the three rendered seeds put the hero half outside the frame --
+## clipped by the left edge on one and the right on the other -- because
+## every stroll target was sampled from the WHOLE footprint while the hero
+## is drawn around that point, not at it. The lane it walks is inset by its
+## own drawn extent now (CharacterPreviewLayout.hero_bounds).
+func test_no_stroll_target_can_put_the_hero_out_of_frame():
+	var lane: Rect2 = CharacterPreviewLayout.hero_bounds(CharacterPreviewDioramaScript.FOOTPRINT)
+	for attempt in 200:
+		var target: Vector2 = diorama._pick_new_target()
+		assert_true(
+			lane.has_point(target) or target == diorama.character_view.position,
+			"target %s is outside the hero's lane %s" % [target, lane]
+		)
+
+
+## Walked for real, not just sampled: the hero's own body stays inside the
+## frame for every step of a long stroll.
+func test_the_hero_never_walks_out_of_frame():
+	var footprint: Vector2 = CharacterPreviewDioramaScript.FOOTPRINT
+	var half_width := CharacterPreviewLayout.hero_drawn_width() * 0.5
+	var head := CharacterPreviewLayout.hero_drawn_height()
+	diorama._enter_action(CharacterActionPicker.Action.WANDER)
+	diorama.set("_action_time_remaining", 10000.0)
+	for step in 600:
+		diorama._process(0.1)
+		var at: Vector2 = diorama.character_view.position
+		assert_between(at.x, half_width - 0.01, footprint.x - half_width + 0.01, "step %d: x" % step)
+		assert_between(at.y, head - 0.01, footprint.y + 0.01, "step %d: y" % step)
+
+
+## A portrait is not a fight. The ambient boar is a real CreatureMarker, so
+## it arrives wearing the world's combat UI -- a red health bar floating
+## over the scenery in every rendered seed.
+func test_the_ambient_boar_wears_no_combat_ui():
+	for child in diorama.boar_node.get_children():
+		if child is ColorRect:
+			assert_false(child.visible, "a %s bar is showing over the diorama" % child.name)
+
+
+## The subject has to read as the subject. Measured (tools/probe_diorama_
+## subject_sizes.gd): the boar drew 46.5 world units tall against the
+## hero's 19.8 -- more than twice the height and three times the width, in
+## a panel whose whole job is to show the hero.
+func test_the_hero_reads_taller_than_the_ambient_boar():
+	var boar_height: float = diorama.boar_node.texture.get_height() * diorama.boar_node.scale.y
+	assert_lt(
+		boar_height,
+		CharacterPreviewLayout.hero_drawn_height(),
+		"the ambient boar is drawn %.1f world units tall against the hero's %.1f" % [
+			boar_height, CharacterPreviewLayout.hero_drawn_height()
+		]
+	)
+
+
+## A fish asks whether the TILE it is over is water (FishMarker.
+## _compute_is_water_tile), and at the shipped scene the whole pond is
+## smaller than one real world tile -- so a centre-of-tile test answers
+## "grassland" for a fish swimming happily in the middle of the water, and
+## the fish stops dead. The pond was two tiles wide before the footprint
+## halved, which is the only reason this ever worked.
+func test_a_pond_smaller_than_a_world_tile_still_reads_as_water_to_a_fish():
+	var layout = diorama.get("_layout")
+	var tile_size: float = CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE
+	assert_lt(
+		layout.pond_half_size.x * 2.0, tile_size * 2.0,
+		"precondition: the shipped pond really is about one world tile across"
+	)
+	# Every point a fish can actually REACH, not just where it spawned: the
+	# fish checks the tile it wants to step onto before committing to it
+	# (FishMarker._compute_is_water_tile), so one land-reading tile inside
+	# its own wander circle is enough to freeze it where it floats.
+	var reach: float = layout.pond_radius * CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION
+	for step in 24:
+		var angle := TAU * float(step) / 24.0
+		var point: Vector2 = layout.pond_center + Vector2(cos(angle), sin(angle)) * reach
+		var tile := Vector2i(floori(point.x / tile_size), floori(point.y / tile_size))
+		assert_eq(
+			diorama.biome_at_global(tile.x, tile.y), "ocean",
+			"a fish can swim to %s, over tile %s, which reads as land" % [point, tile]
+		)
+
+
+## The other side of the same rule: a tile the pond does not reach at all
+## is still land, so the fish stays confined to the water.
+func test_a_tile_the_pond_does_not_reach_is_still_land():
+	assert_eq(diorama.biome_at_global(-100, -100), CharacterPreviewDioramaScript.GROUND_BIOME)
+	var layout = diorama.get("_layout")
+	var tile_size: float = CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE
+	var far_tile := Vector2i(
+		floori((layout.pond_center.x + tile_size * 4.0) / tile_size),
+		floori(layout.pond_center.y / tile_size)
+	)
+	assert_eq(diorama.biome_at_global(far_tile.x, far_tile.y), CharacterPreviewDioramaScript.GROUND_BIOME)

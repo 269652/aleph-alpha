@@ -159,6 +159,15 @@ const HERO_WATER_RIPPLE_INTERVAL := 0.4
 ## tiny pond, so a bird's circling stays mostly on-screen instead of spending
 ## most of its time off past the frame's own edge.
 const BIRD_WANDER_RADIUS := 20.0
+
+## How tall the ambient boar is drawn, as a fraction of the hero's own
+## drawn height. Below 1.0 by definition -- the hero is the subject of this
+## panel and has to read as the biggest thing in it (pinned by
+## test_the_hero_reads_taller_than_the_ambient_boar). Below 1.0 by THIS
+## much is a framing choice, test-pinned like every other one in this file:
+## far enough under that the boar reads as standing further back, not as a
+## rival for attention, without shrinking to a piglet.
+const BOAR_HEIGHT_FRACTION_OF_HERO := 0.72
 ## Same scaled-down reasoning as BIRD_WANDER_RADIUS -- AmbientFlyerRenderer's
 ## own BUTTERFLY_RADIUS (30.0) comfortably exceeds this diorama's footprint.
 ## build_flyer has no radius-override parameter the way build_bird does (see
@@ -559,8 +568,12 @@ func _hold_still() -> void:
 	character_view.set_movement_state(character_view.MovementState.IDLE)
 
 
+## The hero's own LANE, not the whole footprint: a strip across the front
+## of the scene, inset by the hero's own drawn extent. Two of the three
+## rendered seeds put the hero half out of frame while this sampled the
+## footprint at large -- see CharacterPreviewLayout.hero_bounds.
 func _pick_new_target() -> Vector2:
-	var bounds := Rect2(Vector2.ZERO, FOOTPRINT)
+	var bounds := CharacterPreviewLayout.hero_bounds(FOOTPRINT)
 	for attempt in MAX_TARGET_ATTEMPTS:
 		var candidate := CharacterStroll.pick_target(bounds, _rng)
 		if _layout.is_clear(candidate):
@@ -1056,14 +1069,34 @@ func biome_at_global(tile_x: int, tile_y: int) -> String:
 	# stopped being measured in world tiles: the incoming coordinate is a
 	# real world tile (that is what FishMarker asks in), the grid it is
 	# looked up in is the pond's own cell.
-	var tile_center := Vector2(
-		(float(tile_x) + 0.5) * POND_TILE_WORLD_SIZE, (float(tile_y) + 0.5) * POND_TILE_WORLD_SIZE
+	#
+	# The tile is tested by OVERLAP, not by whether its centre falls in the
+	# water. At the shipped scene the whole pond is about one world tile
+	# across (it was two before the footprint halved), so a centre test
+	# answers "land" for tiles a fish is swimming in the middle of -- and a
+	# fish checks the tile it wants to step ONTO before committing to it
+	# (FishMarker._compute_is_water_tile), so one such tile inside its own
+	# wander circle freezes it where it floats. Safe at this scale because
+	# the diorama confines its fish far more tightly than a tile anyway
+	# (CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION, ~4 world units of
+	# the pond's centre), so a tile that merely clips the pond's rim is one
+	# no fish can reach.
+	var tile := Rect2(
+		Vector2(float(tile_x), float(tile_y)) * POND_TILE_WORLD_SIZE,
+		Vector2.ONE * POND_TILE_WORLD_SIZE
 	)
-	if not _pond_bounds.has_point(tile_center):
+	if not _pond_bounds.intersects(tile):
 		return GROUND_BIOME
-	var local := (tile_center - _pond_bounds.position) / _pond_cell_world_size(_layout)
-	var cell := Vector2i(floori(local.x), floori(local.y))
-	return "ocean" if _pond_cells.has(cell) else GROUND_BIOME
+	var cell_size := _pond_cell_world_size(_layout)
+	# Which of the pond's own cells that tile covers -- any kept one makes
+	# it water. Clamped into the grid, since a tile can hang outside it.
+	var first := ((tile.position - _pond_bounds.position) / cell_size).floor()
+	var last := ((tile.end - _pond_bounds.position) / cell_size).floor()
+	for row in range(maxi(int(first.y), 0), mini(int(last.y), _pond_rows_for(_layout) - 1) + 1):
+		for column in range(maxi(int(first.x), 0), mini(int(last.x), _pond_columns_for(_layout) - 1) + 1):
+			if _pond_cells.has(Vector2i(column, row)):
+				return "ocean"
+	return GROUND_BIOME
 
 
 ## The other half of the same duck-typed "world" contract -- a fish's own
@@ -1224,11 +1257,34 @@ func _build_butterfly(flyer_renderer: AmbientFlyerRenderer, butterfly_position: 
 ## a harmlessly ambient presence, exactly like the diorama's fish/birds
 ## already are -- the hero's own swing (see the FIGHT action) is what
 ## actually reads as "fighting", not the boar fighting back.
+## Two things the real world's own boar marker arrives wearing that a
+## PORTRAIT has no use for.
+##
+## Its combat UI: a CreatureMarker raises a health bar (and a taming trust
+## bar) as a matter of course, and in every rendered seed that showed up as
+## a red bar floating over the scenery of a character creator. Hidden
+## through the marker's own set_status_bars_visible rather than by reaching
+## into its children, so the diorama has no opinion about how many bars
+## there are.
+##
+## And its SIZE. Measured (tools/probe_diorama_subject_sizes.gd): a boar
+## draws 30.0 x 46.5 world units against the hero's 10.0 x 19.8 -- more
+## than twice the height and three times the width of the one thing this
+## panel exists to show, which is why it dominated every frame it appeared
+## in. Scaled so it reads as the ambient scenery it is (see BOAR_HEIGHT_
+## FRACTION_OF_HERO), the same "the real world's own value comfortably
+## exceeds this diorama's whole footprint, so scale it" reasoning
+## BIRD_WANDER_RADIUS and FISH_SWIM_SPEED already apply.
 func _build_boar() -> void:
 	var seed_value := hash(_layout.boar_position)
 	boar_node = CreatureRenderer.new()._build_marker(
 		self, "boar", _layout.boar_position, seed_value, null, TerrainRenderer.TILE_SIZE
 	)
+	boar_node.set_status_bars_visible(false)
+	var drawn_height := float(boar_node.texture.get_height()) * boar_node.scale.y
+	if drawn_height > 0.0:
+		var wanted := CharacterPreviewLayout.hero_drawn_height() * BOAR_HEIGHT_FRACTION_OF_HERO
+		boar_node.scale *= wanted / drawn_height
 
 
 ## The FISH action's own bobber (see _start_fishing_cast) -- one Sprite2D,

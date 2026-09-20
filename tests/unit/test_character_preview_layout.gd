@@ -53,21 +53,36 @@ func test_pond_stays_within_the_footprint():
 
 
 ## Reported live: "the fish pond should be at the edge" -- a pond parked
-## near dead-centre every time read as a specimen posed in the middle of
-## an empty room rather than a real feature of a believable little scene.
-## Checked as "close to WHICHEVER edge is nearest," not one specific side,
-## since which edge is picked is itself seeded/random.
-func test_pond_sits_close_to_one_edge_of_the_footprint():
-	for seed_value in [1, 2, 3, 4, 5, 6, 7, 8]:
-		var layout := CharacterPreviewLayout.generate(seed_value, footprint)
-		var distance_to_nearest_edge: float = minf(
-			minf(layout.pond_center.x, footprint.x - layout.pond_center.x),
-			minf(layout.pond_center.y, footprint.y - layout.pond_center.y)
-		)
-		assert_almost_eq(
-			distance_to_nearest_edge, layout.pond_radius, 8.0,
-			"seed %d: pond centre %s should sit close to an edge of %s" % [seed_value, layout.pond_center, footprint]
-		)
+## near dead-centre EVERY TIME read as a specimen posed in the middle of an
+## empty room rather than a real feature of a believable little scene.
+##
+## The fix used to be to shove it against one of the four randomly-chosen
+## edges, which the staged composition supersedes: a roll of "bottom" now
+## parks the pond in the hero's own lane, and "left"/"right" hides it
+## behind a framing tree (see _pond_center_in_the_middle_ground). What the
+## report was actually about survives as this -- the pond really moves
+## across the frame from seed to seed, rather than always landing in the
+## same place.
+func test_the_pond_is_not_parked_in_the_same_spot_every_time():
+	# The SHIPPED footprint, not this file's square one: how much room the
+	# pond has to drift across is what the staged composition leaves
+	# between the two framing trunks, and at a square footprint the pond is
+	# so large relative to the frame that almost none is left. This is a
+	# claim about the scene the player sees.
+	var footprint: Vector2 = CharacterPreviewDioramaForLayout.FOOTPRINT
+	var seen: Array[Vector2] = []
+	for seed_value in 40:
+		seen.append(CharacterPreviewLayout.generate(seed_value, footprint).pond_center)
+	var leftmost: float = seen[0].x
+	var rightmost: float = seen[0].x
+	for centre in seen:
+		leftmost = minf(leftmost, centre.x)
+		rightmost = maxf(rightmost, centre.x)
+	var radius: float = CharacterPreviewLayout.generate(0, footprint).pond_radius
+	assert_gt(
+		rightmost - leftmost, radius,
+		"across 40 seeds the pond only ever moved %.1f units -- less than its own radius" % (rightmost - leftmost)
+	)
 
 
 func test_tree_positions_are_within_the_footprint():
@@ -78,14 +93,22 @@ func test_tree_positions_are_within_the_footprint():
 			assert_true(rect.has_point(tree_position), "seed %d, tree %s" % [seed_value, tree_position])
 
 
-func test_tree_positions_do_not_overlap_the_pond():
-	for seed_value in [1, 2, 3, 4, 5]:
+## No trunk may stand in open water. Checked against the pond's own
+## ELLIPSE (pond_half_size) rather than the circular envelope at
+## pond_radius -- the circle is a safe outer bound for placement, but what
+## a viewer actually sees is the rectangle, so this is the shape that says
+## whether a trunk is really in the water.
+func test_no_trunk_stands_in_the_pond():
+	for seed_value in 40:
 		var layout := CharacterPreviewLayout.generate(seed_value, footprint)
 		for tree_position in layout.tree_positions:
-			var clearance: float = tree_position.distance_to(layout.pond_center)
-			assert_true(
-				clearance >= layout.pond_radius,
-				"seed %d: tree at %s is only %.1f from a %.1f-radius pond" % [seed_value, tree_position, clearance, layout.pond_radius]
+			var offset: Vector2 = tree_position - layout.pond_center
+			var normalized := Vector2(
+				offset.x / layout.pond_half_size.x, offset.y / layout.pond_half_size.y
+			)
+			assert_gt(
+				normalized.length(), 1.0,
+				"seed %d: tree at %s stands inside the pond at %s" % [seed_value, tree_position, layout.pond_center]
 			)
 
 
@@ -264,30 +287,53 @@ func test_every_seed_still_places_some_grass():
 ## nearest the footprint's own centre; at 0.5, 37/100 did, with the meadow's
 ## own clump-touch ratio only dropping from 0.97 to 0.92.
 func test_grass_field_noise_scale_lets_the_centre_actually_receive_grass():
-	var center := footprint * 0.5
-	var near_center: Array[Vector2] = [Vector2(40, 40), Vector2(56, 40), Vector2(40, 56), Vector2(56, 56)]
+	# The four cells nearest the geometric centre are no longer candidates
+	# for grass at all -- the staged pond sits there now (see
+	# _pond_center_in_the_middle_ground), and a cell under water cannot
+	# grow a clump under ANY noise scale. Counting them would measure where
+	# the pond sits rather than what this constant does.
+	#
+	# So the same claim is made against the ground a viewer would call "the
+	# middle" today: the CLEAR cell closest to the footprint's own centre.
+	# At the old 0.12 noise scale the field's peak always landed in the
+	# same lattice region and the middle was structurally excluded however
+	# it was ranked; that is what this guards, and it is exactly as true of
+	# the nearest clear cell as it was of the geometric centre.
+	var centre := footprint * 0.5
 	var seeds_with_center := 0
 	var num_seeds := 100
 	for seed_value in num_seeds:
 		var result := CharacterPreviewLayout.generate(seed_value, footprint)
-		for nc in near_center:
-			if result.grass_positions.has(nc):
-				seeds_with_center += 1
-				break
-	# Re-measured after POND_RADIUS_FRACTION grew (reported live: "the pond
-	# should be bigger"): a physically bigger pond legitimately reaches
-	# toward the centre for more seed/edge combinations, so the rate the
-	# noise fix alone can achieve dropped from 37/100 (at the old 0.22
-	# fraction) to 9/100 -- a real, expected consequence of two independent,
-	# deliberate changes interacting, not a regression in the noise field
-	# itself: still clearly non-zero, nothing like the OLD fix's own "0/100,
-	# structurally never" failure this test guards against. Thresholded at
-	# num_seeds/20 rather than pinned exactly to 9, so a small, unrelated
-	# future change to either constant doesn't flip this test on noise alone.
+		var nearest = _clear_cell_nearest(result, footprint, centre)
+		if nearest != null and result.grass_positions.has(nearest):
+			seeds_with_center += 1
 	assert_gt(
 		seeds_with_center, num_seeds / 20,
-		"only %d/%d seeds ever placed grass near the footprint's own centre -- the noise field is still structurally excluding it" % [seeds_with_center, num_seeds]
+		"only %d of %d seeds grew a clump on the clear ground nearest the centre -- the noise field is still structurally excluding it" % [seeds_with_center, num_seeds]
 	)
+
+
+## The grass-grid cell closest to `point` that this layout left clear, or
+## null when the whole grid is occupied. Walks the grid exactly the way
+## generate() itself does, so "a cell" means the same thing here as there.
+func _clear_cell_nearest(result, fp: Vector2, point: Vector2):
+	var best = null
+	var best_distance := INF
+	var columns := int(fp.x / CharacterPreviewLayout.GRASS_CLUMP_SPACING)
+	var rows := int(fp.y / CharacterPreviewLayout.GRASS_CLUMP_SPACING)
+	for cell_y in rows:
+		for cell_x in columns:
+			var candidate := Vector2(
+				(float(cell_x) + 0.5) * CharacterPreviewLayout.GRASS_CLUMP_SPACING,
+				(float(cell_y) + 0.5) * CharacterPreviewLayout.GRASS_CLUMP_SPACING
+			)
+			if not result.is_clear(candidate):
+				continue
+			var distance := candidate.distance_to(point)
+			if distance < best_distance:
+				best_distance = distance
+				best = candidate
+	return best
 
 
 ## The grass that IS kept has to clump, not speckle: a meadow reads as
@@ -313,32 +359,39 @@ func test_kept_grass_cells_clump_together():
 	)
 
 
-## The camera frames exactly the footprint (see CharacterPreviewDiorama's
-## own FOOTPRINT and main_menu's derived camera zoom), and a tree is drawn
-## from its trunk FOOT upward across ProceduralTreeSprite.WORLD_SIZE -- so a
-## position sampled from the raw footprint puts canopies above the frame's
-## top edge and trunks past its sides (reported live: trees clipped by the
-## frame).
-func test_tree_positions_leave_room_for_the_trees_own_drawn_body():
+## A framing tree is DELIBERATELY allowed to overhang the frame now -- that
+## is what makes it frame rather than merely stand there. What the original
+## report was about ("three quarters of a tree outside the frame", a
+## canopy floating with no trunk under it) survives as the real rule: the
+## TRUNK, the thing that anchors a tree to the ground, is always well
+## inside the frame, and the majority of the canopy comes with it.
+func test_a_framing_tree_is_anchored_in_frame_even_though_it_overhangs_it():
 	# * VISUAL_SCALE: whatever the sprite draws bigger than WORLD_SIZE by
-	# (see that constant's own doc comment; currently 1.0, a no-op here) --
-	# the clipping margin must grow with it or this reintroduces the exact
-	# bug this test was written for.
+	# (see that constant's own doc comment; currently 1.0, a no-op here).
 	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5 * ProceduralTreeSprite.VISUAL_SCALE
-	var height := float(ProceduralTreeSprite.WORLD_SIZE.y) * ProceduralTreeSprite.VISUAL_SCALE
+	var rect := Rect2(Vector2.ZERO, footprint)
 	for seed_value in 60:
 		var result := CharacterPreviewLayout.generate(seed_value, footprint)
 		for tree_position in result.tree_positions:
-			assert_gte(tree_position.x - half_width, 0.0, "seed %d: tree %s clipped at the left" % [seed_value, tree_position])
-			assert_lte(tree_position.x + half_width, footprint.x, "seed %d: tree %s clipped at the right" % [seed_value, tree_position])
-			assert_gte(tree_position.y - height, 0.0, "seed %d: tree %s canopy clipped at the top" % [seed_value, tree_position])
-			assert_lte(tree_position.y, footprint.y, "seed %d: tree %s clipped at the bottom" % [seed_value, tree_position])
+			assert_true(
+				rect.has_point(tree_position),
+				"seed %d: trunk %s outside the frame" % [seed_value, tree_position]
+			)
+			var inside_left: float = minf(tree_position.x + half_width, footprint.x)
+			var inside_right: float = maxf(tree_position.x - half_width, 0.0)
+			assert_gt(
+				inside_left - inside_right, half_width,
+				"seed %d: more than half of tree %s's canopy is outside the frame" % [seed_value, tree_position]
+			)
 
 
 ## The inset band is derived from the tree art's own DRAWN size (world size
 ## times VISUAL_SCALE -- see that constant's own doc comment), never an
 ## eyeballed margin -- if the art or its visual scale ever change, the
-## placement follows.
+## placement follows. tree_bounds is no longer what places the framing
+## trees (see framing_tree_positions), but it is still the shared statement
+## of "how much room a tree's own drawn body needs", which both the pond's
+## trunk clearance and hero_bounds' own inset are modelled on.
 func test_tree_bounds_are_derived_from_the_tree_arts_own_size():
 	var bounds := CharacterPreviewLayout.tree_bounds(footprint)
 	var drawn_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE
@@ -524,3 +577,97 @@ func test_the_heros_whole_body_stays_inside_the_frame_anywhere_in_its_lane():
 	# head is hero_drawn_height above the highest point it can stand on.
 	assert_gte(lane.position.y - CharacterPreviewLayout.hero_drawn_height(), 0.0, "head-room")
 	assert_lte(lane.end.y, fp.y, "feet stay on the ground plane")
+
+
+## Trees stand at the far LEFT and far RIGHT, one each, deliberately close
+## enough to the side edges that part of each canopy sits outside the
+## frame. That is the framing device the rendered seeds were missing: at
+## the old random scatter the two trees piled into the middle of the panel
+## and stood between the camera and the hero. A canopy filling an upper
+## corner reads as the scene continuing past the panel instead.
+func test_trees_frame_the_scene_from_its_two_side_edges():
+	var fp := Vector2(96, 48)
+	for seed_value in [1, 7, 42, 1234]:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = seed_value
+		var trees := CharacterPreviewLayout.framing_tree_positions(fp, rng)
+		assert_eq(trees.size(), CharacterPreviewLayout.TREE_COUNT, "seed %d" % seed_value)
+		var xs := [trees[0].x, trees[1].x]
+		xs.sort()
+		assert_lt(xs[0], fp.x * 0.25, "one tree hugs the left edge (seed %d)" % seed_value)
+		assert_gt(xs[1], fp.x * 0.75, "and one the right (seed %d)" % seed_value)
+
+
+## Both are rooted in the scenery band at the back, never down in the lane
+## the hero walks -- a tree trunk planted in the foreground would stand in
+## front of the subject rather than behind it.
+func test_framing_trees_root_in_the_back_of_the_scene():
+	var fp := Vector2(96, 48)
+	var lane := CharacterPreviewLayout.hero_bounds(fp)
+	for seed_value in [1, 7, 42, 1234]:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = seed_value
+		for tree in CharacterPreviewLayout.framing_tree_positions(fp, rng):
+			assert_lt(tree.y, lane.position.y, "seed %d: %s" % [seed_value, tree])
+
+
+## Each canopy really does overhang its own side edge -- the property that
+## makes it read as framing rather than as two trees that happen to be far
+## apart. Measured against the tree ART's own drawn width, never a margin
+## picked by eye.
+func test_each_framing_canopy_overhangs_its_own_side_edge():
+	var fp := Vector2(96, 48)
+	var half_canopy := (
+		float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE * 0.5
+	)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 42
+	var trees := CharacterPreviewLayout.framing_tree_positions(fp, rng)
+	var xs := [trees[0].x, trees[1].x]
+	xs.sort()
+	assert_lt(xs[0] - half_canopy, 0.0, "the left canopy reaches past the left edge")
+	assert_gt(xs[1] + half_canopy, fp.x, "the right canopy reaches past the right edge")
+
+
+## The ambient boar is scenery too: it stands behind the hero, in the same
+## band as the trees. It rendered dead centre and in front of the pond
+## before, where at 30 x 46 world units it was simply the biggest thing in
+## the picture.
+func test_the_ambient_boar_stands_in_the_scenery_band():
+	var fp := Vector2(96, 48)
+	var back := CharacterPreviewLayout.back_band(fp)
+	for seed_value in 40:
+		var stand := CharacterPreviewLayout.generate(seed_value, fp).boar_position
+		assert_true(back.has_point(stand), "seed %d put the boar at %s" % [seed_value, stand])
+
+
+## ...and it does not stand in either of the framing trees.
+## ...and out of the pond, and out of both trunks -- the same is_clear
+## predicate every other placement in the layout answers to. A boar
+## standing in open water is not scenery, it is a bug.
+func test_the_ambient_boar_stands_on_clear_ground():
+	var fp := Vector2(96, 48)
+	for seed_value in 40:
+		var layout := CharacterPreviewLayout.generate(seed_value, fp)
+		assert_true(
+			layout.is_clear(layout.boar_position),
+			"seed %d stood the boar at %s, in the pond at %s or a trunk" % [
+				seed_value, layout.boar_position, layout.pond_center
+			]
+		)
+
+
+## The whole staging, end to end, on the real generated layout: scenery at
+## the back, water in the middle, the hero's lane at the front.
+func test_generate_stages_the_scene_in_depth():
+	var fp := Vector2(96, 48)
+	var lane := CharacterPreviewLayout.hero_bounds(fp)
+	for seed_value in [1, 7, 42, 99, 1234, 4021]:
+		var result := CharacterPreviewLayout.generate(seed_value, fp)
+		assert_lt(
+			result.pond_center.y, lane.position.y,
+			"seed %d: the pond should sit behind the hero's lane, not in it" % seed_value
+		)
+		for tree in result.tree_positions:
+			assert_lt(tree.y, lane.position.y, "seed %d: tree in the hero's lane" % seed_value)
+		assert_lt(result.boar_position.y, lane.position.y, "seed %d: boar in the hero's lane" % seed_value)

@@ -182,11 +182,10 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 
 	result.pond_radius = minf(footprint.x, footprint.y) * POND_RADIUS_FRACTION
 	result.pond_half_size = Vector2(result.pond_radius, result.pond_radius / POND_ASPECT_RATIO)
-	result.pond_center = _pond_center_near_an_edge(result.pond_radius, footprint, rng)
+	result.pond_center = _pond_center_in_the_middle_ground(result.pond_radius, footprint, rng)
 
-	var tree_area := tree_bounds(footprint)
-	for i in TREE_COUNT:
-		result.tree_positions.append(_position_clear_of_pond(result, tree_area, rng))
+	# Assigned left and right, not rolled -- see framing_tree_positions.
+	result.tree_positions.assign(framing_tree_positions(footprint, rng))
 
 	for i in PEBBLE_COUNT:
 		var angle := rng.randf_range(0.0, TAU)
@@ -223,7 +222,8 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 		result.flower_positions.append(_position_clear_of_pond(result, full_bounds, rng))
 	for i in WORM_COUNT:
 		result.worm_positions.append(_position_clear_of_pond(result, full_bounds, rng))
-	result.boar_position = _position_clear_of_pond(result, full_bounds, rng)
+	# Staged, not scattered -- see boar_stand.
+	result.boar_position = boar_stand(footprint, result, rng)
 
 	# Butterflies fly overhead -- no obstacle avoidance needed, same as birds.
 	for i in BUTTERFLY_COUNT:
@@ -379,6 +379,97 @@ static func back_band(footprint: Vector2) -> Rect2:
 	return Rect2(Vector2.ZERO, Vector2(footprint.x, footprint.y * BACK_BAND_FRACTION))
 
 
+## Where a framing tree's TRUNK stands, as a fraction of the tree art's own
+## drawn width in from the frame's side edge. Below 0.5 the canopy's own
+## half-width reaches past that edge, which is the whole point: part of the
+## tree sits outside the frame, so it reads as the scene continuing rather
+## than as a tree that happens to be standing near the corner. Expressed
+## against the ART's width rather than the footprint's, so the overhang
+## stays the same fraction OF A TREE whatever size the scene is.
+const TREE_FRAME_INSET_FRACTION := 0.35
+
+## How far along the back band a framing tree may drift, as a fraction of
+## that band's own height -- enough that two seeds don't look identical,
+## little enough that both trees stay clearly "at the back".
+const TREE_DEPTH_JITTER := 0.45
+
+## How far from the frame's own centreline the ambient boar stands, as a
+## fraction of the footprint's width. Off-centre on purpose: dead centre it
+## stands directly behind the hero, and at 30 x 46 world units (measured --
+## see tools/probe_diorama_subject_sizes.gd) that is the one placement where
+## it reliably swallows the subject.
+const BOAR_OFFSET_FRACTION := 0.22
+
+
+## One tree at each side edge, rooted in the back band -- the diorama's
+## framing, and the change that turns its scatter into a composition.
+##
+## Rendered seeds showed why a random scatter cannot do this job: with both
+## trees sampled from the same rectangle, they piled into the middle of the
+## panel and stood between the camera and the hero (see the seeds saved by
+## tools/probe_diorama_render.gd). Left and right are assigned, not rolled;
+## only the depth along the back band and a little lateral drift come from
+## the seed, so every seed gets the same reliable framing and a slightly
+## different scene inside it.
+static func framing_tree_positions(footprint: Vector2, rng: RandomNumberGenerator) -> Array[Vector2]:
+	var drawn_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE
+	var inset := drawn_width * TREE_FRAME_INSET_FRACTION
+	var band := back_band(footprint)
+	var positions: Array[Vector2] = []
+	for side in [0.0, 1.0]:
+		var x: float = lerpf(inset, footprint.x - inset, side)
+		# Drift inward only -- outward would push a trunk off the frame,
+		# and a floating canopy with no visible trunk is the failure the
+		# original tree_bounds inset was added to stop.
+		var drift := rng.randf_range(0.0, inset * 0.5)
+		x += drift if side == 0.0 else -drift
+		var depth := band.end.y - rng.randf_range(0.0, band.size.y * TREE_DEPTH_JITTER)
+		positions.append(Vector2(x, depth))
+	return positions
+
+
+## How many depths across the back band the boar tries before giving up on
+## its preferred side -- walked from the band's foot upward, so it steps
+## BACK out of the water rather than sideways out of its own composition.
+const BOAR_DEPTH_TRIES := 6
+
+## How many rejection samples any placement in this file takes before
+## falling back. Shared rather than written per call site -- it was a bare
+## 30 inside _position_clear_of_pond and nothing else could reuse it.
+const MAX_PLACEMENT_ATTEMPTS := 30
+
+## Where the ambient boar stands: in the scenery band with the trees, off
+## to one seeded side of centre, and clear of the pond and both trunks --
+## checked against `result.is_clear`, the same single predicate the grass
+## scatter and the hero's own stroll targets are checked against, so "what
+## counts as an obstacle" still lives in exactly one place.
+##
+## Both sides are tried, seeded side first: the pond drifts across the
+## frame, so the side that is clear depends on where it landed, and a boar
+## standing in the pond is not scenery, it is a bug.
+static func boar_stand(footprint: Vector2, result: Result, rng: RandomNumberGenerator) -> Vector2:
+	var band := back_band(footprint)
+	var side := 1.0 if rng.randi() % 2 == 0 else -1.0
+	for preferred in [side, -side]:
+		var x: float = footprint.x * (0.5 + preferred * BOAR_OFFSET_FRACTION)
+		for step in BOAR_DEPTH_TRIES:
+			# step + 1, so the first try is strictly INSIDE the band rather
+			# than exactly on its far edge, and the last reaches its top.
+			var y: float = band.end.y - band.size.y * ((float(step) + 1.0) / float(BOAR_DEPTH_TRIES))
+			var candidate := Vector2(x, y)
+			if result.is_clear(candidate):
+				return candidate
+	# Neither preferred column has a clear depth: fall back to the same
+	# bounded rejection sampling every other placement in this file uses.
+	for attempt in MAX_PLACEMENT_ATTEMPTS:
+		var candidate := Vector2(
+			rng.randf_range(0.0, footprint.x), rng.randf_range(band.position.y, band.end.y)
+		)
+		if result.is_clear(candidate):
+			return candidate
+	return band.get_center()
+
+
 ## Where a tree's own POSITION (the foot of its trunk) may land so that its
 ## whole drawn body stays inside the camera's frame -- which is exactly the
 ## footprint (see CharacterPreviewDiorama.FOOTPRINT and the camera derived
@@ -409,25 +500,40 @@ static func tree_bounds(footprint: Vector2) -> Rect2:
 	)
 
 
-## A pond centre close to one randomly-chosen edge of `footprint` -- reads
-## as a real feature of a believable little scene (the water continuing
-## past the frame, implied rather than a specimen posed dead-centre in an
-## empty room). The position ALONG that edge (not toward/away from it) is
-## still randomized across the middle band, so the pond doesn't always
-## land in a corner either.
-static func _pond_center_near_an_edge(pond_radius: float, footprint: Vector2, rng: RandomNumberGenerator) -> Vector2:
-	var near_edge := pond_radius + POND_EDGE_MARGIN
-	var along_x := rng.randf_range(near_edge, footprint.x - near_edge)
-	var along_y := rng.randf_range(near_edge, footprint.y - near_edge)
-	match rng.randi() % 4:
-		0:
-			return Vector2(near_edge, along_y)  # left
-		1:
-			return Vector2(footprint.x - near_edge, along_y)  # right
-		2:
-			return Vector2(along_x, near_edge)  # top
-		_:
-			return Vector2(along_x, footprint.y - near_edge)  # bottom
+## The pond sits in the MIDDLE GROUND: behind the hero's lane, in front of
+## the scenery band, with only its position across the frame left to the
+## seed.
+##
+## It used to be pushed against one of the four edges at random, so it read
+## as water continuing past the frame rather than a specimen posed in an
+## empty room -- the right instinct, but it also meant a roll of 3 parked it
+## in the BOTTOM edge, which is now the hero's own lane, and a roll of 0 or
+## 1 hid it behind a framing tree. Depth is staged now (see
+## HERO_BAND_FRACTION); the "continuing past the frame" reading comes from
+## letting it run off the SIDE it drifts toward instead, which the clamp
+## below deliberately permits.
+static func _pond_center_in_the_middle_ground(pond_radius: float, footprint: Vector2, rng: RandomNumberGenerator) -> Vector2:
+	var lane := hero_bounds(footprint)
+	var half_height := pond_radius / POND_ASPECT_RATIO
+	# Between the scenery band's foot and the hero's lane, as far as the
+	# pond's own half-height allows -- clamped rather than asserted, so a
+	# footprint too short to hold all three bands still yields a sane
+	# centre instead of an inverted range.
+	var nearest := lane.position.y - half_height - POND_EDGE_MARGIN
+	var farthest := back_band(footprint).end.y
+	var y := rng.randf_range(minf(farthest, nearest), maxf(farthest, nearest))
+	# Across the frame, between the two framing trunks and clear of both by
+	# the pond's own half-width: a trunk standing in open water reads as a
+	# bug, not as a lakeside tree, and the trees' sides are assigned rather
+	# than rolled now (see framing_tree_positions), so this is a range that
+	# can be computed instead of a rejection sample. Still a real range, not
+	# a fixed centre -- the pond drifts across it per seed, which is what
+	# the old "park it against a random edge" rule was really for.
+	var trunk_inset := float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE * TREE_FRAME_INSET_FRACTION
+	var nearest_x := trunk_inset + TREE_MARGIN + pond_radius
+	var farthest_x := footprint.x - nearest_x
+	var x := rng.randf_range(minf(nearest_x, farthest_x), maxf(nearest_x, farthest_x))
+	return Vector2(x, y)
 
 
 ## A random point inside `bounds`, clear of the pond AND every tree already
@@ -443,7 +549,7 @@ static func _pond_center_near_an_edge(pond_radius: float, footprint: Vector2, rn
 ## footprint/seed combination could in principle leave very little clear
 ## room.
 static func _position_clear_of_pond(result: Result, bounds: Rect2, rng: RandomNumberGenerator) -> Vector2:
-	for attempt in 30:
+	for attempt in MAX_PLACEMENT_ATTEMPTS:
 		var candidate := Vector2(
 			rng.randf_range(bounds.position.x, bounds.end.x),
 			rng.randf_range(bounds.position.y, bounds.end.y)
