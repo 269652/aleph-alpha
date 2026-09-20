@@ -156,6 +156,29 @@ func _report_where_the_food_is(chunk_coord: Vector2i, settlement_id: String) -> 
 		)
 
 
+## The village purse and the villagers' own pockets. Once food is on the
+## stall, MONEY is the next thing that can stop somebody eating:
+## NpcEconomy._try_eat draws a subsistence wage from the purse and then
+## BUYS. A village with a full market and an empty purse starves beside
+## its own food.
+func _purse_and_pockets(chunk_coord: Vector2i, settlement_id: String) -> String:
+	var NpcEconomy = load("res://src/world/npc_economy.gd")
+	var SettlementFood = load("res://src/emergence/settlement_food.gd")
+	var village_market = SettlementFood.village_market_for(settlement_id, _manager._loaded_villages)
+	var purse: float = 0.0 if village_market == null else NpcEconomy.purse_of(village_market)
+	var broke := 0
+	var villagers := 0
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if not is_instance_valid(node) or not node.has_method("setup_economy"):
+			continue
+		if node.economy == null or node.economy.wallet == null:
+			continue
+		villagers += 1
+		if node.economy.wallet.balance < 1.0:
+			broke += 1
+	return "purse %.1f gold, %d of %d villagers broke" % [purse, broke, villagers]
+
+
 func _sample() -> void:
 	if _measured:
 		return
@@ -207,5 +230,6 @@ func _sample() -> void:
 			_market_food(chunk_coord),
 			_most_starved(chunk_coord), Starvation.seconds_to_die(),
 		])
+		_lines.append("  %s" % _purse_and_pockets(chunk_coord, settlement_id))
 		_report_where_the_food_is(chunk_coord, settlement_id)
 		return
