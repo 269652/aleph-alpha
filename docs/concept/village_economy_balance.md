@@ -510,9 +510,10 @@ standing where there were two fields and a pond:
   shelf. Eleven mouths on four fields and one pond is what drains the
   shelves from 45 to 4. Not a fault in the count, and closed since in
   [village_ponds.md](village_ponds.md) ("A pond dug the day the fisher's
-  house stands"): the house the ladder raises for them settles the
-  ground around it the day it stands, and the pond is dug beside it and
-  handed to them the same moment.
+  house stands"): they move into the roof that let them in on the next
+  settlement step ([village_growth.md](village_growth.md), "…and nobody
+  ever moved in"), the ground settles around it the same step, and the
+  pond is dug beside it and handed to them.
 - **Herb reads 1.00 throughout**; fuel read 0.00 at two samples (450 and
   600 s) while a trade-hall project started and took its wood, and the
   purse fell once, 720 → 369, at the sample the newcomer arrived, then

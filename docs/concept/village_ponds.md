@@ -123,6 +123,26 @@ pond is handed to that villager; what no record claims (a house from
 before houses remembered their villager) is handed out in roster order,
 as before (`_hand_out_fisher_ponds`).
 
+### And in real play the house is one already standing
+
+The pinned path completes a house project in the newcomer's name. In
+play that project is rarely what houses them: a newcomer is let in
+because a roof stands empty ([village_growth.md](village_growth.md),
+"Room is made first, moved into after"), and until 2026-09-20 nothing
+moved them into it — a household is housed by *owning* a house, the empty
+one belonged to the village, and the ladder then owed them a house of
+their own that a village with its frontage spent could not site.
+Measured: the fisher who arrived at 750 s worked no water for the rest
+of the run while two houses stood empty. On every settlement step now,
+each household with nowhere to live takes a standing house nobody on the
+roster owns (`EarthChunkManager._house_the_waiting`, that doc's "…and
+nobody ever moved in"), and the same `settle_the_ground` runs the same
+step — so the fisher's pond is dug beside the house they moved into, the
+day they moved in (`test_the_house_they_move_into_gets_them_their_pond_
+the_same_step`). A record that still remembered the villager who left is
+brought up to date, so a house inherited from a departed household says
+who lives there now.
+
 ### Why not re-derive the village, and what that measured
 
 The first cut re-derived the whole village on a completed building, the
