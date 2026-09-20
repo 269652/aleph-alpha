@@ -28040,3 +28040,48 @@ Tests: `test_interior_templates.gd` (29, up from 22), `test_house_decor.gd`
 (9), plus additions to `test_player.gd`; `test_house_interior_view.gd` (23),
 `test_house_interior_view_occupants.gd` (15) and `test_building_catalog.gd`
 (75) green alongside.
+
+## A field's fence shut its own farmer out (`concept/village_farms.md`, "The rail stands on the inner edge", 2026-09-20)
+
+Reported live, with the village in shot: *"The farmer doesn't farm anymore"*.
+
+✅ **A regression from `f64a360e`** ("a villager walks round a wall and a
+rail, not through them"), which gave rails a hitbox against villagers. A
+field's rails stand on its **inner** edge, so the one villager they shut out
+is the farmer whose beds they enclose.
+
+✅ **Measured, not guessed — and three wrong guesses were measured away
+first.** `tools/probe_village_farming.gd` on a real village: of three
+villagers with a field, one worked 58 beds in 600s and the other two worked
+**none**, each frozen in `APPROACHING` for 2650 of 2750 on-field ticks. The
+hypotheses that died, in order:
+
+| Guess | How it died |
+| --- | --- |
+| The fence blocks them | Tested `fence_blocks_step_global` with **pixel** coordinates — it takes tiles — and on a straight line to the bed centre rather than the 2px step actually taken. Read false. Wrong test, right suspect. |
+| The carter round hijacks the target | `VillageCart.walks_the_round` is carter-only |
+| A conversation freezes them | 0 talking ticks while on the field |
+| Some other override hijacks the target | Recorded the real target every tick: it was the field for all 2650 |
+
+What finally showed it was tracing the actual per-tick step: position frozen,
+a 2px step east proposed, and `_slid_along_walls` handing back the same
+position — then asking the fence in **tile** coordinates: `FENCE=true`.
+
+✅ **The worker may cross into ground they themselves work.** "The gate"
+exists for this, but reaching one needs pathfinding a `Sprite2D` walking one
+`move_toward` per frame does not have — `f64a360e` said so itself: *"boxed
+in on both, they stay put"*. Nothing else moves: every other rail still
+stops them, a neighbour's included, and no villager without a field is
+exempt.
+
+After, over the same 600s run: the herbalist **0 → 100 wheat** (30 deposits,
+all six beds worked), farmer one **45 → 77** (18 → 29 deposits, 3 → 6 beds).
+
+🚧 **A farmer whose field lies beyond ANOTHER farmstead's ring still cannot
+reach it.** In the probe's village the third farmer stands west of its
+neighbour's fenced beds with its own field east of them, and walks into that
+ring's rail forever — still 0 of 6 beds. Its own gate would serve if it went
+to its farmhouse frontage first; that routing is deliberately not attempted
+here. Named rather than silently left.
+
+Tests: `test_npc_marker.gd` + `test_npc_marker_farming.gd` 100/100 (+3 new).

@@ -455,6 +455,31 @@ moat round every field with the rails floating in the middle of it. A rail
 is a **line on one edge** instead — the edge facing the beds it encloses —
 and the rest of its own tile is ordinary ground.
 
+- **The worker may cross into their own beds.** Rails stop a villager the
+  way they stop an animal (`NpcMarker._blocked_step`) — but a field's rails
+  stand on its *inner* edge, so the one villager they shut out is the
+  farmer whose beds they enclose. Reported live: *"The farmer doesn't farm
+  anymore"*. Measured on a real village with
+  `tools/probe_village_farming.gd`: of three villagers with a field, one
+  worked 58 beds in ten minutes and the other two worked **none**, frozen
+  in `APPROACHING` for 2650 of 2750 on-field ticks — the herbalist nine
+  pixels from its own soil, refused the last step south into it.
+
+  "The gate" above exists for exactly this, but *reaching* it needs
+  pathfinding a `Sprite2D` walking one `move_toward` per frame does not
+  have. The commit that gave rails their hitbox said so itself: *"boxed in
+  on both, they stay put"*. So a villager may cross into a cell of their
+  own `field_cells`, and nothing else moves — every other rail still stops
+  them, **a neighbour's field included**, and no villager without a field
+  is exempt from any rail. The farmer is who the enclosure is *for*; it is
+  there to keep animals out, not the worker.
+
+  Still open, and measured rather than assumed: a farmer whose own field
+  lies beyond **another** farmstead's ring still cannot reach it. In the
+  probe's village the third farmer stands west of its neighbour's fenced
+  beds with its own field east of them, and walks into that ring's rail
+  forever. Its own gate would serve if it went to its farmhouse frontage
+  first; that is the routing this rule deliberately does not attempt.
 - **Which edge.** `VillageFarm.fence_inner_direction` is the inverse of what
   the facing names: a rail closing the field's *north* side stands north of
   the beds, so its rails lie on its own *south* edge. Pinned against
