@@ -27470,17 +27470,46 @@ villagers asked about nothing at all.
   you cannot be IN, a rail is an edge you cannot CROSS, so the ring round
   a field remains ordinary ground.
 
-### ⬜ Not done: the player still walks through fences
+### ✅ Done (2026-09-20): the player is stopped by a fence
 
-The one part of the fence report still open. A fence tile is not a
-`BuildingPiece`, so `_sync_piece_collision` never spawns a body for it and
-the player passes straight through. It cannot simply be registered as a
-solid piece: `village_farm.gd` records that a rail used to be a whole
-solid tile and was deliberately made a LINE on one edge ("move the fences
-to the inner edge of the enclosure and treat the rest of the tile as
-street"), so the player needs an EDGE collider on the side
-`fence_edge_normal` names, not a tile-sized box. Flagged rather than
-guessed at.
+Carried open for several rounds, and the diagnosis recorded here was the
+right one. A fence tile is not a `BuildingPiece`, so `_sync_piece_collision`
+never spawned a body and the player -- the one walker in the game that is a
+real `CharacterBody2D` -- passed straight through, while every animal and
+villager respected the same rails through `rails_block_step`.
+
+It could not be registered as a solid piece, for the reason this entry
+already gave: a rail stands on the INNER EDGE of its cell and the rest of
+that cell is street you may walk. So it gets an **edge** body.
+`VillageFarm.fence_collider_normal`/`fence_collider_rect` own the geometry --
+the same inner edge `rails_block_step` already shuts, so physics and the step
+rule read one source and cannot disagree about a rail.
+
+**A corner post deliberately gets no collider at all**, and that is the
+load-bearing case rather than an omission. Its inner direction is DIAGONAL,
+so an edge collider would have to lie along one of its two cardinal sides --
+and both of those are the runs it caps. Walling either shuts the ring
+itself, which is the exact opposite of "treat the rest of the tile as
+street" and precisely what `_rail_stops_step` already refuses. The diagonal a
+corner does block needs nothing of its own: the two neighbouring runs'
+colliders meet at the shared corner point and a body with any width cannot
+thread it.
+
+`FENCE_COLLIDER_THICKNESS_PX` is derived rather than chosen, and both bounds
+are pinned by test: at least the fastest the player can ever be (mounted on a
+maximum-fitness horse, 180 px/s = 3.0 px in one 60Hz tick, so the rail holds
+even if a step is ever resolved without sweeping), and at most a quarter of a
+tile, so it stays a LINE rather than becoming the wall the ring is not.
+
+**TDD:** 10 geometry pins in `test_village_farm.gd` plus 5 wiring pins in the
+new `test_earth_chunk_manager_rail_collision.gd` (a real rail in a real chunk
+produces a body, a strip not a block, on the edge the crop is behind, corners
+raise none, and pulling the rail out takes its body with it). 4 of those 5
+confirmed red against the unwired manager; the corner one passes from the
+start, which is what makes it a regression guard. One of my own tests was
+wrong first: it asserted a "north" rail's collider touches its northern edge,
+when a rail on the field's north side closes its own SOUTHERN one -- the side
+the crop is on.
 
 ### 🚧 Honest note
 

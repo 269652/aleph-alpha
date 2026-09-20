@@ -587,6 +587,56 @@ static func is_fence_corner_tile(tile_id: String) -> bool:
 	return fence_facing_of(tile_id).begins_with("corner")
 
 
+## How thick a rail's own collider is, in pixels.
+##
+## Derived, not chosen. The floor is the fastest the player can ever be --
+## mounted on a maximum-fitness horse, Taming.MOUNTED_SPEED *
+## MAX_FITNESS_SPEED_MULTIPLIER = 180 px/s, which is 3.0 px in one 60Hz
+## physics tick -- so the rail holds even if a step is ever resolved without
+## sweeping. The ceiling is a quarter of a tile, because a rail has to stay a
+## LINE on one edge rather than a wall filling the cell, which is the whole
+## distinction the walkable ring depends on. Both bounds are pinned by
+## test_village_farm.gd rather than written down in this comment and trusted.
+const FENCE_COLLIDER_THICKNESS_PX := 4.0
+
+
+## The edge a rail's own collider sits on, as an outward normal -- the same
+## inner edge rails_block_step already shuts, so what stops the PLAYER
+## (physics) and what stops everybody else (that query) cannot disagree
+## about a given rail.
+##
+## Vector2i.ZERO for anything that gets no collider at all: ordinary ground,
+## and a CORNER post. The corner is the load-bearing case. Its inner
+## direction is DIAGONAL, so an edge collider would have to lie along one of
+## its two cardinal sides -- and both of those are the runs it caps. Walling
+## either shuts the ring itself, the exact opposite of "treat the rest of the
+## tile as street" and precisely what _rail_stops_step already refuses. The
+## diagonal a corner does block needs no collider of its own: the two
+## neighbouring runs' colliders meet at the shared corner point, and a body
+## with any width at all cannot thread that.
+static func fence_collider_normal(tile_id: String) -> Vector2i:
+	if not is_fence_tile(tile_id) or is_fence_corner_tile(tile_id):
+		return Vector2i.ZERO
+	return fence_inner_direction(tile_id)
+
+
+## That collider as a rectangle in TILE-LOCAL pixels -- (0, 0) is the tile's
+## own top-left corner. Rect2() (zero size) for a tile that gets none.
+##
+## It spans the tile FULLY across the edge it lies on, so two rails side by
+## side meet and leave no seam to squeeze through, and it never reaches
+## outside its own tile.
+static func fence_collider_rect(tile_id: String, tile_size: float, thickness: float) -> Rect2:
+	var normal := fence_collider_normal(tile_id)
+	if normal == Vector2i.ZERO:
+		return Rect2()
+	if normal.x != 0:
+		var x := tile_size - thickness if normal.x > 0 else 0.0
+		return Rect2(x, 0.0, thickness, tile_size)
+	var y := tile_size - thickness if normal.y > 0 else 0.0
+	return Rect2(0.0, y, tile_size, thickness)
+
+
 ## Whether a step from one cell to the next CROSSES a rail's inner edge --
 ## the one thing a rail stops. `step` is the move as a cell delta (only its
 ## sign per axis matters); `from_tile_id`/`to_tile_id` are the modifications

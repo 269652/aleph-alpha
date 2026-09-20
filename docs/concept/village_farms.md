@@ -812,6 +812,31 @@ again.
 - **[village_growth.md](village_growth.md)** — the farmhouse is already on
   the growth ladder; this gives it a worker and a purpose.
 
+### The rail's own hitbox
+
+Every walker but one already respected the rails: `rails_block_step` is an
+ask-before-you-step query, and a marker is a `Sprite2D` that asks it. The
+**player** is a real `CharacterBody2D`, which cannot ask anything -- it needs
+something in the world to hit, and a rail is not a `BuildingPiece`, so
+nothing was ever spawned for it. The player walked through every fence in the
+game (reported, and carried open for several rounds).
+
+The fix is an **edge** body, never a tile-sized one, because a rail stands on
+the inner edge of its cell and the rest of that cell is street.
+`fence_collider_normal` and `fence_collider_rect` own it, reading the same
+inner edge `rails_block_step` shuts -- so what stops the player and what
+stops everybody else cannot drift apart.
+
+A **corner post gets none.** Its inner direction is diagonal, so an edge
+collider would lie along one of the two runs it caps, and walling either
+would shut the walkable ring -- the same thing `_rail_stops_step` already
+refuses for the same reason. The diagonal it blocks is closed by the two
+neighbouring runs' colliders meeting at the shared corner.
+
+`FENCE_COLLIDER_THICKNESS_PX` is derived and test-bounded on both sides: at
+least one 60Hz tick of the fastest the player can be (a maximum-fitness
+mount, 3.0 px), and at most a quarter tile so it stays a line.
+
 ## Status
 
 - ✅ **A field sows what the village is short of** (2026-09-20) —

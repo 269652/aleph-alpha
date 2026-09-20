@@ -12,6 +12,8 @@ extends GutTest
 ## own ground and no tile is ever worked twice.
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+## For the real top speed the rail's thickness is derived from.
+const Taming = preload("res://src/gameplay/taming.gd")
 const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
@@ -981,3 +983,132 @@ func test_every_bed_of_a_fresh_field_is_broken_before_any_is_re_sown():
 		plots[index] = _plot_in_state("empty")
 	for plot in plots:
 		assert_not_null(plot, "a bed was left unbroken after a full pass of the field")
+
+
+# -- the rail's own hitbox ---------------------------------------------------
+#
+# Reported live and carried for several rounds: the player walks straight
+# through fences. Every other walker already respects them -- rails_block_step
+# is an ask-before-you-step rule, and markers are Sprite2Ds that ask. The
+# PLAYER is a real CharacterBody2D, and nothing in the world was ever there
+# for it to collide with, because a rail is not a BuildingPiece and so got no
+# StaticBody2D.
+#
+# It cannot simply be made a solid tile: a rail stands on the INNER EDGE of
+# its cell and the rest of that cell is street you may walk (see
+# rails_block_step). So the collider is an edge, not a tile.
+
+
+func test_a_rail_puts_its_collider_on_the_edge_it_closes():
+	for facing in ["north", "south", "east", "west"]:
+		var tile_id := VillageFarm.fence_tile_for(facing)
+		assert_eq(
+			VillageFarm.fence_collider_normal(tile_id),
+			VillageFarm.fence_inner_direction(tile_id),
+			"%s: the collider sits on the same edge rails_block_step shuts" % facing
+		)
+
+
+## A CORNER post gets none, and this is the load-bearing case. Its inner
+## direction is DIAGONAL, so an edge collider would have to lie on one of its
+## two cardinal sides -- and both of those are the runs it caps. Walling
+## either one shuts the ring itself, which is the exact opposite of "treat
+## the rest of the tile as street" and what _rail_stops_step already refuses.
+## The diagonal it does block is closed by the two neighbouring runs' own
+## colliders meeting at the shared corner.
+func test_a_corner_post_gets_no_collider_so_the_ring_stays_walkable():
+	for facing in VillageFarm.FENCE_TILE_IDS:
+		var tile_id: String = VillageFarm.FENCE_TILE_IDS[facing]
+		if not VillageFarm.is_fence_corner_tile(tile_id):
+			continue
+		assert_eq(
+			VillageFarm.fence_collider_normal(tile_id), Vector2i.ZERO,
+			"%s: a corner may not wall the runs it caps" % facing
+		)
+
+
+func test_ordinary_ground_gets_no_collider():
+	assert_eq(VillageFarm.fence_collider_normal(""), Vector2i.ZERO)
+	assert_eq(VillageFarm.fence_collider_normal("road"), Vector2i.ZERO)
+
+
+# -- the shape of that edge --------------------------------------------------
+
+func _rail_rect(facing: String) -> Rect2:
+	return VillageFarm.fence_collider_rect(
+		VillageFarm.fence_tile_for(facing), 16.0, VillageFarm.FENCE_COLLIDER_THICKNESS_PX
+	)
+
+
+func test_the_collider_lies_inside_its_own_tile():
+	for facing in ["north", "south", "east", "west"]:
+		var rect := _rail_rect(facing)
+		assert_gte(rect.position.x, 0.0, facing)
+		assert_gte(rect.position.y, 0.0, facing)
+		assert_lte(rect.end.x, 16.0, facing)
+		assert_lte(rect.end.y, 16.0, facing)
+
+
+## It spans the tile fully ACROSS the edge, so two rails side by side meet
+## and leave no seam for a player to squeeze through.
+func test_neighbouring_rails_meet_with_no_gap_between_them():
+	for facing in ["north", "south"]:
+		assert_eq(_rail_rect(facing).size.x, 16.0, "%s must span the full width" % facing)
+	for facing in ["east", "west"]:
+		assert_eq(_rail_rect(facing).size.y, 16.0, "%s must span the full height" % facing)
+
+
+## The edge is named by the collider's NORMAL, not by the rail's facing --
+## and the two are opposite, which is the point. A "north" rail stands on the
+## north side of the FIELD, so the edge it closes is its own SOUTH one, the
+## side the crop is on. Asserting it the other way round is what the first
+## draft of this test did.
+func test_the_collider_touches_the_edge_its_normal_names():
+	for facing in ["north", "south", "east", "west"]:
+		var normal := VillageFarm.fence_collider_normal(VillageFarm.fence_tile_for(facing))
+		var rect := _rail_rect(facing)
+		if normal.y > 0:
+			assert_almost_eq(rect.end.y, 16.0, 0.0001, facing)
+		elif normal.y < 0:
+			assert_almost_eq(rect.position.y, 0.0, 0.0001, facing)
+		elif normal.x > 0:
+			assert_almost_eq(rect.end.x, 16.0, 0.0001, facing)
+		else:
+			assert_almost_eq(rect.position.x, 0.0, 0.0001, facing)
+
+
+## ...and that opposition is itself worth pinning, because it is the thing a
+## reader gets wrong: the rail closes the side the crop is on.
+func test_a_rails_collider_faces_the_crop_not_the_street():
+	assert_eq(
+		VillageFarm.fence_collider_normal(VillageFarm.fence_tile_for("north")),
+		Vector2i(0, 1), "a rail on the field's north side closes its southern edge"
+	)
+	assert_eq(
+		VillageFarm.fence_collider_normal(VillageFarm.fence_tile_for("west")),
+		Vector2i(1, 0), "a rail on the field's west side closes its eastern edge"
+	)
+
+
+func test_a_tile_with_no_rail_has_no_rect_at_all():
+	assert_eq(
+		VillageFarm.fence_collider_rect("", 16.0, VillageFarm.FENCE_COLLIDER_THICKNESS_PX).size,
+		Vector2.ZERO
+	)
+
+
+# -- and why the thickness is the number it is -------------------------------
+
+## Thick enough that the FASTEST thing the player can be -- mounted on a
+## maximum-fitness horse, Taming.MOUNTED_SPEED * MAX_FITNESS_SPEED_MULTIPLIER
+## = 180 px/s -- cannot cross it inside one 60Hz physics tick (3.0 px), so
+## the rail holds even if a step is ever resolved without sweeping.
+func test_the_rail_is_thicker_than_the_fastest_single_step_across_it():
+	var top_speed := Taming.MOUNTED_SPEED * Taming.MAX_FITNESS_SPEED_MULTIPLIER
+	assert_gte(VillageFarm.FENCE_COLLIDER_THICKNESS_PX, top_speed / 60.0)
+
+
+## ...and thin enough to still be a LINE on one edge rather than a wall
+## filling the cell, which is the whole distinction the ring depends on.
+func test_the_rail_is_still_a_line_and_not_a_wall():
+	assert_lte(VillageFarm.FENCE_COLLIDER_THICKNESS_PX, 16.0 / 4.0)
