@@ -35,6 +35,68 @@ func test_an_empty_settlement_has_nobody_housed_and_nobody_waiting():
 	assert_eq(census["unhoused_household_ids"], [] as Array[String])
 
 
+## A household that has LEFT the settlement still owns the house it built:
+## EarthChunkManager._record_household_departure appends an event and
+## touches nothing else -- no roof is released, no villager goes anywhere.
+## So the census met roofs whose owners were not on the roster it was
+## handed, and counted them among "ours" anyway. Reported live off the
+## settlement card: *"Population 1 (10 housed)"*, which is impossible on
+## its face -- you cannot have ten of one household under roofs.
+##
+## It is not cosmetic. `housed_count >= household_count` tells
+## VillageGrowth.next_building there is nobody left to house, and
+## `spare_house_capacity = capacity - housed_count` tells
+## VillageImmigration there is no room to take anybody in. A village with
+## ghost owners can therefore never raise another house NOR accept a
+## newcomer, and its population can only fall -- reported in the same
+## breath: *"The villages population is declining"*.
+##
+## VillageAssembly names the contract this breaks in its own argument
+## list: "housed_count -- how many of THEM have a roof".
+func test_a_roof_owned_by_somebody_who_has_left_is_not_counted_as_ours():
+	var store = HouseholdStore.new()
+	var ours := _house_owned_by(store, EntityRef.for_npc(1), Vector2i(4, 4))
+	# Departed: still owns its house, no longer on the settlement's roster.
+	_house_owned_by(store, EntityRef.for_npc(2), Vector2i(8, 8))
+
+	var census: Dictionary = VillageCensus.of(
+		[ours],
+		[_record("house_small", Vector2i(4, 4)), _record("house_small", Vector2i(8, 8))],
+		store
+	)
+	assert_eq(census["housed_count"], 1, "a household that left was counted among ours")
+
+
+## Never more of us under roofs than there are of us. The invariant the
+## card's own line reads as, stated directly so no future owner lookup can
+## break it quietly.
+func test_no_more_households_are_housed_than_there_are_households():
+	var store = HouseholdStore.new()
+	var ours := _house_owned_by(store, EntityRef.for_npc(1), Vector2i(4, 4))
+	var records: Array = [_record("house_small", Vector2i(4, 4))]
+	for i in range(2, 12):
+		_house_owned_by(store, EntityRef.for_npc(i), Vector2i(i * 2, i * 2))
+		records.append(_record("house_small", Vector2i(i * 2, i * 2)))
+
+	var census: Dictionary = VillageCensus.of([ours], records, store)
+	assert_lte(int(census["housed_count"]), 1, "more roofs than households were counted as ours")
+
+
+## ...and the roof they left behind is room the village may count on
+## again, which is what lets it take somebody in rather than freezing.
+func test_a_roof_whose_owner_has_left_is_room_the_village_still_has():
+	var store = HouseholdStore.new()
+	var ours := _house_owned_by(store, EntityRef.for_npc(1), Vector2i(4, 4))
+	_house_owned_by(store, EntityRef.for_npc(2), Vector2i(8, 8))
+
+	var census: Dictionary = VillageCensus.of(
+		[ours],
+		[_record("house_small", Vector2i(4, 4)), _record("house_small", Vector2i(8, 8))],
+		store
+	)
+	assert_gt(int(census["spare_house_capacity"]), 0, "the village had no room and could never grow again")
+
+
 func test_a_household_owning_a_real_house_here_counts_as_housed():
 	var store = HouseholdStore.new()
 	var housed := _house_owned_by(store, EntityRef.for_npc(1), Vector2i(4, 4))
