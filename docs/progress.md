@@ -29343,3 +29343,100 @@ wood flush against the bed-facing edge means pushing it back the other way,
 and the offset's sign stopped meaning what was asserted. The rewrite pins
 where the wood LANDS, which is what the rule was always about, and now holds
 corners to **both** of their axes rather than straight rails to one.
+
+## They move in, and they starve (`concept/village_mortality.md`, 2026-09-20)
+
+Asked for directly: *"now make the npcs move in and make them starve and
+die if they don't have food"*.
+
+Two halves of one thing, and a new concept doc for them, because none
+existed — `death.md` is the PLAYER's nine lives and says nothing about
+NPCs.
+
+### ✅ Villagers follow the roster, both ways
+
+The gap this ledger recorded last round, closed. The villagers standing in
+a chunk were a SNAPSHOT: `VillageRenderer._population_for` reads the real
+roster, but only at spawn time, so a household admitted while the player
+stood there got nobody. `reconcile_villagers` runs per settlement step and
+brings the street into line with the ledger.
+
+Additive on purpose. A villager who dies removes themselves, which is the
+removal that has a cause a player watched; culling markers to match a
+shrunken roster would have to pick somebody arbitrary, and the one it
+picked would be as likely to be the farmer you were watching as anybody.
+
+### ✅ Hunger left at the top kills
+
+`Starvation`, pure and static, measured in hunger **cycles** rather than
+days — there are two day-lengths in this codebase (SeasonCycle's 14400s of
+material economy, EarthChunkManager's 60s a player feels) and a mortality
+clock written against the wrong one either kills instantly or never kills
+at all. Reading the drive's own cycle means it cannot drift onto a
+different clock than the hunger it measures.
+
+A death is a **departure with a reason**: it goes out through the same
+`npc_departed` event the estate exodus already appends, so the census, the
+tier, the ladder and the settlement card all see it with no new plumbing,
+and the roof stops counting as one of ours.
+
+### The whole loop, measured (`tools/probe_village_famine.gd`)
+
+```
+  seconds   roster   standing  hungriest market food  starved/win
+        0       10         10       0.30          0      0/200
+      600       12         12       1.00          0    151/200
+      750       12         12       1.00          0    189/200
+      900       12         12       1.00          0    102/200
+     1200       12         12       1.00          0    174/200
+     1500        7          7       1.00          0    117/200
+     2400       13         13       1.00          0    181/200
+```
+
+Five villagers starve between 1200 and 1500; the roster falls 12 → 7;
+immigration refills it and the newcomers appear. **`standing` equals
+`roster` at every single sample**, through five deaths and six arrivals —
+the strongest form of the claim the reconcile makes. The village ends
+larger than it started.
+
+At 750 the worst-off villager reached 189 of 200 and then fell back to
+102 as food arrived. That fallback IS the mechanic: the cart of grain
+saving somebody, which is what the window exists for.
+
+### 🚧 Three things this got wrong, all caught by measuring
+
+**A coarse step over-billed starvation.** Billing a whole step at the
+hunger level it ENDED on killed a villager who was starving for only its
+last instant — and steps here are not frame-sized (a settlement step is
+30s, a catch-up longer). Caught by its own test
+(`test_a_meal_at_the_last_moment_saves_them`): the villager was dead
+before the meal could reach them. Now billed pro rata along the linear
+rise.
+
+**The reconcile resurrected extinct villages.** It read the roster through
+`_population_for`, which treats 0 as *"never recorded, fall back to the
+founding roster"* — right for spawning, badly wrong for reconciling, since
+a village whose last household died looks identical to one never written
+down. Measured: a village fell to a roster of 0 and got ten fresh
+villagers on the street, who starved, forever.
+
+**The probe lied first.** Its first cut stepped only the settlements and
+the villagers, not the clock or the farm plots, so nothing could GROW
+food — and it reported a total wipe-out. Trusting it would have meant
+retuning a constant that was fine, which is precisely the mistake that
+made `LITRES_PER_TENDING` four times too big earlier the same day.
+Recorded rather than quietly corrected.
+
+### 🚧 Found, not fixed
+
+A village in permanent famine is still judged attractive by
+`VillageImmigration`: `market food` sits at 0 and `hungriest` at 1.00 from
+t=600 on, while households keep arriving. Its gate reads
+`_food_per_household`, which counts stock the villagers themselves cannot
+eat — the same "counted as food but unreachable" split
+[village_warehouse.md](concept/village_warehouse.md) already had to fix
+one layer down. Noted where it was measured.
+
+Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
+`test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_
+mortality.gd` 5/5 (new), `test_village_renderer.gd` 150/150.
