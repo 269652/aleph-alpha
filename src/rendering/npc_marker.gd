@@ -120,6 +120,13 @@ var water_errand := WaterErrand.AT_HOME
 ## would let a villager change their mind halfway across the square when
 ## the other tank crossed its own threshold, and the bucket in their hand
 ## would silently change what it was for.
+## Which settlement this villager belongs to (EntityRef.for_settlement),
+## set by VillageRenderer, which is the only thing that knows. "" for a
+## villager nobody is simulating a village for -- a test fixture, or a
+## marker built without one -- who then simply dies without anybody being
+## told (docs/concept/village_mortality.md mechanism 2).
+var settlement_id := ""
+
 var _errand_target: Dictionary = {}
 
 ## The nearest this leg has brought them to where the bucket is going, how
@@ -533,6 +540,13 @@ func _process(delta: float) -> void:
 	# after it: a starving villager puts the bucket down, because thirst
 	# answered from a household tank is never as urgent as having nothing
 	# to eat.
+	# Before anything else this frame: a villager who has starved to death
+	# has no day left to plan (docs/concept/village_mortality.md mechanism
+	# 2). Checked after condition.advance above, so the hunger that killed
+	# them is this frame's hunger and not last frame's.
+	if _step_starvation():
+		return
+
 	_step_water_errand(delta)
 	_sync_carried_item()
 	if WaterErrand.overrides_schedule(water_errand):
@@ -1113,6 +1127,34 @@ func _put_the_bucket_down(retry_in: float) -> void:
 	_errand_closest_px = INF
 	_errand_stalled_seconds = 0.0
 	_errand_retry_in = maxf(_errand_retry_in, retry_in)
+
+
+## One frame of dying of hunger. True when this villager is gone, and the
+## caller must stop touching them.
+##
+## A villager does not vanish on a die roll: they have spent
+## Starvation.seconds_to_die at the top of their own hunger drive, having
+## visibly failed to find food that whole time (pillar 2). The village is
+## told so the household leaves the roster with them
+## (EarthChunkManager.record_villager_death) -- a marker that simply
+## disappeared would leave exactly the ghost owner village_growth.md
+## already had to fix.
+##
+## No corpse: a villager is not a creature, and carrion.md's loot table is
+## not the right vocabulary for a person. What a dead villager leaves
+## behind is a question death.md has not answered for NPCs yet.
+func _step_starvation() -> bool:
+	if economy == null or not economy.needs.has_starved_to_death():
+		return false
+	if (
+		_world != null
+		and settlement_id != ""
+		and identity != null
+		and _world.has_method("record_villager_death")
+	):
+		_world.record_villager_death(settlement_id, identity.seed_value)
+	queue_free()
+	return true
 
 
 ## The building this villager must fetch water for right now, or {} when
