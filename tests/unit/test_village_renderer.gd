@@ -8,6 +8,7 @@ extends GutTest
 ## free" shape as TreeRenderer/CreatureRenderer/FishRenderer.
 
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -3617,3 +3618,163 @@ func test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on():
 			"and no more than a sane overhang tall"
 		)
 	assert_gt(checked, 0, "precondition: this village really raised a well")
+
+
+## Reported a FOURTH time, with the hamlet in shot: *"There's still a
+## village without plaza and city hall... all villages should have a city
+## hall"*.
+##
+## The three earlier rounds each fixed a real reason the SQUARE could not be
+## sited (the decorative street jitter vetoing dry columns; a rule demanding
+## room for a house beside the square). What none of them changed is the
+## last line of `VillageLayout.plaza_x0_for`: when no candidate column is
+## dry it returns `centred` anyway -- a site it has just proved is wet. The
+## village then plans its square there, never paves it, and
+## `_place_civic_building_if_missing` refuses because the plot is not road.
+##
+## This measures the real rate across many villages rather than arguing
+## from one screenshot.
+func test_every_village_big_enough_for_a_seat_gets_one():
+	var without: Array = []
+	var checked := 0
+	var coords: Array = []
+	for row in [3, 6, 9, 12, 15, 18, 21, 24]:
+		coords.append_array(_settlement_chunks_with_farmers(row, 12))
+	for coord in coords:
+		var world := StubWorld.new()
+		world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		checked += 1
+		if _placed(world, "city_hall").is_empty():
+			without.append(str(coord))
+	assert_gt(checked, 8, "precondition: enough real villages to say anything")
+	assert_eq(
+		without.size(), 0,
+		"%d of %d villages have no seat: %s" % [without.size(), checked, str(without.slice(0, 8))]
+	)
+
+
+## The case the coverage test above cannot reach, and the one in the
+## screenshot: a village whose CENTRED square site is unusable. The report
+## was a forest-edge hamlet, and `_is_buildable_local` -- the very
+## predicate the skeleton is handed as `is_dry` -- rejects forest as well
+## as water, so a village hemmed in by trees is in exactly this position.
+##
+## `plaza_x0_for` is built to slide the square along the street until it
+## finds a site that works. What it does when nothing works is return
+## `centred` anyway -- the site it has just proved unusable -- and the
+## village then plans a square it can never pave, so
+## `_place_civic_building_if_missing` refuses the seat for want of road.
+## Asked for directly: *"all villages should have a city hall"*.
+func test_a_village_slides_its_square_clear_of_unbuildable_ground_and_still_gets_a_seat():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+	# Only the CENTRED site is spoiled -- the rest of the street row is
+	# ordinary ground, so a square genuinely fits elsewhere on it.
+	var centred: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	for y in range(centred.position.y, centred.end.y):
+		for x in range(centred.position.x, centred.end.x):
+			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	assert_eq(
+		_placed(world, "city_hall").size(), 1,
+		"the square slides off the bad ground and the village keeps its seat"
+	)
+
+
+## The forest-edge case, and the one the report is about: a village with
+## room for a SEAT but nowhere for a whole SQUARE.
+##
+## The plaza is 8 wide by 6 deep; the hall is 4x3. `_is_buildable_local` --
+## the predicate the skeleton is handed -- rejects forest as well as water,
+## so a hamlet hemmed in by trees can easily have a pocket that fits the
+## hall and no pocket that fits the square. `plaza_x0_for` then falls
+## through its whole search and returns `centred` regardless, the village
+## plans a square on ground it cannot pave, and the seat is refused for
+## want of road -- silently, with nothing said anywhere.
+##
+## Asked for directly, a fourth time: *"all villages should have a city
+## hall"*. A square is how a village would LIKE to seat its hall; it is not
+## a condition of having one.
+func test_a_village_with_room_for_a_seat_but_not_a_square_still_gets_its_seat():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+	# Trees over everything on the street band except a pocket too narrow
+	# for the 8-wide square but wide enough for the 4x3 hall.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	var pocket_x0 := CHUNK_SIZE / 2 - 3
+	for y in range(street_y - VillageLayout.PLAZA_ROWS_NORTH, street_y + VillageLayout.PLAZA_ROWS_SOUTH + 1):
+		for x in CHUNK_SIZE:
+			if x >= pocket_x0 and x < pocket_x0 + 6:
+				continue  # the pocket: 6 wide, less than PLAZA_WIDTH_TILES
+			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	assert_eq(
+		_placed(world, "city_hall").size(), 1,
+		"a square is how a village would LIKE to seat its hall, not a condition of having one"
+	)
+
+
+## The other half of the same report: *"a village without plaza"*. A square
+## the village planned but never paved would be invisible on the ground,
+## and would also silently cost the village its seat (the civic plot IS the
+## square's paving).
+##
+## Measured across 32 real villages: every one paves its whole square
+## except a 4x3 block in the north-centre -- which is not a hole, it is the
+## CITY HALL standing on it. Worth a test precisely because it looks like a
+## defect: the first run of this measurement reported "32 of 32 villages
+## planned a square they never paved" before the shape was printed and the
+## block turned out to be the hall's own footprint.
+func test_every_village_paves_the_square_it_planned_apart_from_the_seat_on_it():
+	var unpaved_villages: Array = []
+	var checked := 0
+	var coords: Array = []
+	for row in [3, 9, 15, 21]:
+		coords.append_array(_settlement_chunks_with_farmers(row, 8))
+	for coord in coords:
+		var world := StubWorld.new()
+		world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		checked += 1
+		var bones: Dictionary = VillageLayout.skeleton(
+			CHUNK_SIZE, VillageLayout.seed_for(coord),
+			func(cell: Vector2i) -> bool:
+				return not world.unbuildable_cells.has(coord * CHUNK_SIZE + cell) \
+					and not world.water_cells.has(coord * CHUNK_SIZE + cell)
+		)
+		var plaza: Rect2i = bones["plaza"]
+		# The seat's own cells are the one legitimate exception.
+		var seat: Dictionary = {}
+		for cell in BuildingCatalog.footprint_cells("city_hall", bones["civic_plot"]["origin"]):
+			seat[cell as Vector2i] = true
+		var unpaved := 0
+		for y in range(plaza.position.y, plaza.end.y):
+			for x in range(plaza.position.x, plaza.end.x):
+				if seat.has(Vector2i(x, y)):
+					continue
+				var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
+				if not TerrainRenderer.is_road_tile(world.modification_at_global(g.x, g.y)):
+					unpaved += 1
+		if unpaved > 0:
+			unpaved_villages.append("%s: %d cells" % [str(coord), unpaved])
+	assert_gt(checked, 8, "precondition: enough real villages")
+	assert_eq(
+		unpaved_villages.size(), 0,
+		"%d of %d villages left real holes in their square: %s"
+			% [unpaved_villages.size(), checked, str(unpaved_villages.slice(0, 6))]
+	)
