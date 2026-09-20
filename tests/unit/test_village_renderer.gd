@@ -3543,3 +3543,36 @@ func test_siting_and_derivation_never_disagree_about_an_origin():
 				"siting said %s at %s, derivation handed over %d cells"
 					% [str(sited), str(origin), derived.size()]
 			)
+
+
+## The market square is not somewhere you fence a field.
+##
+## A GUARD, not a fix. Chasing *"There are fenced enclosures without
+## farmhouse"*, tools/probe_village_supply.gd reported a `farm_fence_east`
+## inside chunk (682,132)'s plaza rect -- but this test, written to
+## reproduce that on a real fixture village, passed immediately. The likely
+## explanation is the probe's own rect: it derives the skeleton with a
+## water-only `is_buildable`, where VillageRenderer uses its richer
+## `_is_buildable_local`, so the two can choose different columns for the
+## square and the probe may simply have been reading the wrong eight.
+##
+## So the rail-on-the-square reading is NOT established, and nothing was
+## changed on the strength of it. What is pinned here is the rule itself,
+## which is worth holding whether or not it has ever been broken: the farm
+## pass reserves the landmarks and not the square, so this is exactly the
+## kind of thing that could start happening silently.
+func test_no_farm_rail_is_ever_laid_across_the_market_square():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	var checked := 0
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
+			checked += 1
+			assert_false(
+				VillageFarm.is_fence_tile(String(world.built_tiles.get(g, ""))),
+				"a farm rail stands on the square at %s" % str(g)
+			)
+	assert_gt(checked, 0, "the premise: this village has a square to protect")
