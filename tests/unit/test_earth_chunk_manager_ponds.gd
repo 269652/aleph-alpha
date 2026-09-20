@@ -307,3 +307,93 @@ func test_a_pond_cannot_be_fished_below_nothing():
 		manager.catch_pond_fish_at(_tile.x, _tile.y)
 	assert_gte(manager.pond_fish_at(_tile.x, _tile.y), 0.0, "a pond went into debt")
 	assert_false(manager.catch_pond_fish_at(_tile.x, _tile.y))
+
+
+# -- the water you can SEE, on the visit that digs it ----------------------
+#
+# Reported live with a screenshot: "The built pond renders as earth instead
+# of water" -- a fenced rectangle of flat brown with the pond's own fish
+# swimming on it, which is this file's own opening line made real ("a pond
+# nothing reads as water is a brown square with fish drawn on it").
+#
+# Every query already answered correctly; what was missing was the PAINT.
+# Water rides one overlay (docs/concept/hydrology.md, "ONE WATER SURFACE"),
+# and _paint_river_flow_overlay runs once per chunk load -- while the
+# village that digs the pond runs LATER in that same load. So the overlay
+# pass had already been and gone, and build_at_global never repainted it.
+# What was left is the bare pond_water modification, which the painter has
+# no tile of its own for and falls through to flat earth.
+
+
+## A loaded cell this chunk's own water surface does not reach: dry ground,
+## far enough from the Spree that the flow overlay has erased it outright.
+## Dug there, a pond's water can only be water the DIG painted.
+func _a_dry_cell_with_no_water_surface(flow_layer: TileMapLayer) -> Vector2i:
+	var origin := Vector2i(
+		floori(float(_tile.x) / EarthChunkManager.CHUNK_SIZE) * EarthChunkManager.CHUNK_SIZE,
+		floori(float(_tile.y) / EarthChunkManager.CHUNK_SIZE) * EarthChunkManager.CHUNK_SIZE
+	)
+	for y in EarthChunkManager.CHUNK_SIZE:
+		for x in EarthChunkManager.CHUNK_SIZE:
+			var cell := origin + Vector2i(x, y)
+			if flow_layer.get_cell_source_id(cell) != -1:
+				continue
+			if manager.is_water_at_global(cell.x, cell.y):
+				continue
+			if manager.modification_at_global(cell.x, cell.y) != "":
+				continue
+			return cell
+	fail_test("no dry cell clear of the water surface in this chunk")
+	return _tile
+
+
+func test_a_pond_dug_now_shows_its_water_now():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	var cell := _a_dry_cell_with_no_water_surface(flow_layer)
+
+	manager.build_at_global(cell.x, cell.y, VillagePond.POND_TILE_ID)
+
+	assert_ne(
+		flow_layer.get_cell_source_id(cell), -1,
+		"a pond dug this session must be water on screen now, not after the next reload"
+	)
+	flow_layer.free()
+
+
+## The same cell, painted the same way a RELOAD would paint it -- which is
+## what "it looked right the second time you walked past" actually means,
+## and the only check that cannot be fooled by painting SOMETHING there.
+func test_a_dug_ponds_water_is_the_water_a_reload_would_paint():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	var cell := _a_dry_cell_with_no_water_surface(flow_layer)
+	manager.build_at_global(cell.x, cell.y, VillagePond.POND_TILE_ID)
+	var dug := flow_layer.get_cell_atlas_coords(cell)
+
+	var chunk_coord := Vector2i(
+		floori(float(cell.x) / EarthChunkManager.CHUNK_SIZE),
+		floori(float(cell.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	manager._unload_chunk(chunk_coord)
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(dug, flow_layer.get_cell_atlas_coords(cell), "the dig must paint what the reload paints")
+	flow_layer.free()
+
+
+## And the other direction, for the same reason: water that was filled in
+## must stop being painted as water without waiting for a reload either.
+func test_filling_a_pond_in_takes_its_water_surface_with_it():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	var cell := _a_dry_cell_with_no_water_surface(flow_layer)
+	manager.build_at_global(cell.x, cell.y, VillagePond.POND_TILE_ID)
+
+	manager.destroy_at_global(cell.x, cell.y)
+
+	assert_eq(
+		flow_layer.get_cell_source_id(cell), -1,
+		"filled-in ground must not go on being painted as water"
+	)
+	flow_layer.free()

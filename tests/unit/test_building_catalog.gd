@@ -282,8 +282,15 @@ func test_every_ladder_building_is_a_real_catalog_entity_nobody_lives_in():
 		assert_ne(BuildingCatalog.interior_family_of(building_id), "", "%s needs an interior family" % building_id)
 
 
-func test_the_production_building_ids_list_is_exactly_the_non_civic_ladder():
-	assert_eq(BuildingCatalog.PRODUCTION_BUILDING_IDS, ["sawmill", "farmhouse", "blacksmith", "brewery"] as Array[String])
+## The works, which is the ladder's own non-civic rungs PLUS the fisher's
+## hut -- a works a village raises over a dug pond rather than climbs to
+## (docs/concept/village_ponds.md, "The hut on the bank"). The ladder keeps
+## its own list, so the two can differ without either lying.
+func test_the_production_building_ids_list_is_the_non_civic_ladder_plus_the_fishers_hut():
+	assert_eq(
+		BuildingCatalog.PRODUCTION_BUILDING_IDS,
+		["sawmill", "farmhouse", "blacksmith", "brewery", "fisher_hut"] as Array[String]
+	)
 	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("warehouse"), "a warehouse is a commons, not a trade")
 	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("city_hall"))
 
@@ -908,3 +915,49 @@ func test_a_building_with_no_scale_of_its_own_is_unchanged():
 func test_a_cottage_still_covers_most_of_its_own_plot():
 	var drawn := BuildingCatalog.drawn_plot_width_tiles(2, "house_small")
 	assert_gt(drawn / 2.0, 0.6, "a cottage that covers less than this is a model of a cottage")
+
+
+# -- borrowed art (docs/concept/building.md, "Asset contract") -------------
+#
+# "use farmhouse sprite until illustration exists" -- asked for directly,
+# for the fisher's hut. A building may name another's sheet to be drawn
+# from, and that borrowed sheet is the LAST link of its chain, so the day
+# its own file lands it wins with no code change at all.
+
+func test_a_fisher_hut_is_drawn_from_the_farmhouses_sheet_until_its_own_lands():
+	assert_eq(BuildingCatalog.draws_as_of("fisher_hut"), "farmhouse")
+	var paths: Array = []
+	for entry in BuildingCatalog.finished_sheet_chain("fisher_hut", 7):
+		paths.append(entry["path"])
+	assert_true(
+		paths.has(BuildingCatalog.sheet_of("farmhouse")),
+		"a hut with no art of its own must still be a building, not a box"
+	)
+
+
+## Its OWN sheet comes first, so dropping fisher_hut.png in is the whole of
+## replacing the placeholder -- the borrowed link simply stops being
+## reached.
+func test_a_borrowed_sheet_never_hides_the_buildings_own():
+	for building_id in BuildingCatalog.all_building_ids():
+		var borrowed := BuildingCatalog.draws_as_of(building_id)
+		if borrowed == "":
+			continue
+		var paths: Array = []
+		for entry in BuildingCatalog.finished_sheet_chain(building_id, 3):
+			paths.append(entry["path"])
+		assert_lt(
+			paths.find(BuildingCatalog.sheet_of(building_id)),
+			paths.find(BuildingCatalog.sheet_of(borrowed)),
+			"%s must try its own sheet before %s's" % [building_id, borrowed]
+		)
+
+
+## And a borrowed sheet is read with the SHEET's own grid, not the
+## borrower's -- farmhouse.png has six columns where every other contract
+## sheet has eight, and eight columns read off six would walk two of them
+## off the end of the row.
+func test_a_borrowed_sheet_is_read_with_its_own_grid():
+	for entry in BuildingCatalog.finished_sheet_chain("fisher_hut", 7):
+		if entry["path"] == BuildingCatalog.sheet_of("farmhouse"):
+			assert_eq(int(entry["columns"]), BuildingCatalog.sheet_columns_of("farmhouse"))
