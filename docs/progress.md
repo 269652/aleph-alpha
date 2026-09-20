@@ -30003,6 +30003,41 @@ shelter rung raises *their* house, and the spare roof stays as the standing
 invitation for the next. Population advances one household per house
 actually built — the pace the original report asked for.
 
+### ✅ And the roster rises, on the same watch every other reading used
+
+`tools/probe_village_famine.gd`, the 1200-second watch every measurement in
+this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse  wallets
+         0       10         10       0.30          0      0.0        0
+       300       10         10       0.60          2      0.0        0
+       600       10         10       1.00          0     20.0        0
+       900       11         11       1.00          0      0.0        0
+      1200       11         11       1.00          0      1.0        0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes merged | 10 → 10 → 10 → 10 → 10 |
+| **+ both growth links** | **10 → 10 → 10 → 11 → 11** |
+
+**Nobody dies and the village grows.** `standing` equals `roster` at every
+sample, so the villager reconcile holds through the arrival: the eleventh
+household is somebody you can SEE.
+
+**Honest limit:** it is tight. The worst-off villager reached 185 of 200
+through the starvation window at t=900 and fell back to 125 by t=1200 —
+fed each time, but not comfortably. And the arrival lands at t=900 where
+the pre-faucet village reached twelve by t=600, so growth is slower than it
+was when gold was conjured. Both point at the same open gap
+([milling_and_baking.md](concept/milling_and_baking.md)): the harvest sits
+in farmhouses and the market reads 0, so a wage buys a meal only where a
+villager can reach one.
+
 ### 🚧 The lesson, and it is the same one in a new costume
 
 A fix documented against one function is not a fix if the caller has moved
