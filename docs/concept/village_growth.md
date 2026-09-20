@@ -336,6 +336,61 @@ function is not a fix, if the caller has moved to another.** What made it
 findable was a probe that prints each gate condition separately, rather
 than the roster alone.
 
+#### …and the one case the rung exists for was the one case the build refused
+
+With the rung firing, the village chose `house_small` on every settlement
+step and `room` stayed **0**. The same probe, extended to the whole build
+pipeline:
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  -
+      200     10     10     0     3.60       6      0   yes    house_small  -
+      500     10     10     0     3.20       6      0   yes    house_small  -
+```
+
+Food over the threshold, six spare hands, a site available, the house
+chosen every time — and no project ever started.
+
+`_apply_village_growth_decision` credited a new home to `waiting[0]` and
+**returned** when nobody was waiting. That is right for the shelter rung at
+the top of the ladder, which exists for a *named* household, and exactly
+wrong for the lowest rung, which raises a house **because** everybody is
+already housed and no roof stands empty. The one case the rung exists for
+was the one case the caller refused.
+
+So who a new building belongs to is a question with an answer, rather than
+a reason to refuse: `VillageGrowth.owner_for`.
+
+- A waiting household's home is **theirs** — the first in the queue, which
+  `VillageCensus` sorts, so a repeated decision lands on the same plot
+  rather than queuing a second house somewhere else next tick.
+- A home for nobody in particular is the **settlement's**. Not unowned: the
+  village owns it, and it stands empty as exactly the invitation
+  `VillageImmigration.arrivals` gates on.
+- Nobody lives in a sawmill, so a works is the village's either way.
+
+Measured after both links:
+
+```
+  seconds  house housed  room  next build   building now
+        0     10     10     0   house_small  house_small:0
+      400     10     10     0   house_small  house_small:0
+      500     10     10     1   -            -
+
+  house_small x11   (was x10)
+```
+
+Chosen, **begun**, finished, and `room` is 1.
+
+**Exactly one commons house is ever raised**, which is worth stating
+because the rung looks like it could run away. Once it stands, spare
+capacity is 1, so the rung stops firing. From then on each arrival is
+unhoused, the shelter rung raises *their* house, and the spare roof
+remains as the standing invitation for the next one. Population advances
+one household per house actually built — the pace this section already
+asked for.
+
 The shape this gives a growing village: build the rungs it is entitled to →
 find itself with no spare roof → raise a house → somebody moves into it →
 no spare roof again. Population now advances one household per house
