@@ -188,6 +188,7 @@ const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -4746,19 +4747,41 @@ func _step_merchant_visits(settlement_id: String, market) -> void:
 	if market == null:
 		return
 	var reserved := _construction_reserve_for(settlement_id)
+	# Every container this settlement really keeps goods in, market FIRST
+	# (docs/concept/traveling_merchants.md). He used to price market.stock
+	# alone while SettlementFood counted the shelves too, so a village that
+	# hauled its harvest into the warehouse -- which is the whole point of
+	# the carter's round -- put it beyond the reach of its own only income.
+	# Reported as "way too much food and the NPCs don't have an income",
+	# which is one fault, not two.
+	var shelves: Array = _settlement_structure_stocks(settlement_id)
+	var views: Array = [market.stock]
+	for shelf in shelves:
+		views.append(shelf.stock)
+	var surplus := SettlementSurplus.combined(views)
+
 	var result: Dictionary = MerchantVisit.arrivals(
-		SETTLEMENT_STEP_INTERVAL, market.stock,
+		SETTLEMENT_STEP_INTERVAL, surplus,
 		float(_settlement_merchant_carry.get(settlement_id, 0.0)), reserved
 	)
 	_settlement_merchant_carry[settlement_id] = result["carry"]
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(market.stock, reserved)
+	var sale: Dictionary = MerchantVisit.purchase(surplus, reserved)
 	if int(sale["paid"]) <= 0:
 		return
-	for item_id in sale["bought"]:
-		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
+	# Out of the real containers the goods were actually in: paying for
+	# warehouse fish and taking them out of the market would invent goods in
+	# one place and destroy them in another.
+	var plan: Array = SettlementSurplus.allocate(sale["bought"], views)
+	var from_market: Dictionary = plan[0]
+	for item_id in from_market:
+		market.remove_stock(str(item_id), float(from_market[item_id]))
+	for index in shelves.size():
+		var taken: Dictionary = plan[index + 1]
+		for item_id in taken:
+			shelves[index].remove_stock(str(item_id), int(floor(float(taken[item_id]))))
 	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
 
 
