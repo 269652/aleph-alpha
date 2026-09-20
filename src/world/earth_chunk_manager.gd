@@ -3826,6 +3826,12 @@ func step_settlements(delta_seconds: float) -> void:
 		)
 		# ...and every one of them has a pail by the door to fetch it with.
 		stock_household_buckets_in(RegionalTrade.chunk_coord_of(settlement_id))
+		# ...and the villagers standing there follow the roster, so a
+		# household that moved in this step is somebody you can SEE
+		# (docs/concept/village_mortality.md mechanism 4). Runs after
+		# immigration, on purpose: a newcomer admitted this tick gets a
+		# villager this tick rather than one step later.
+		_reconcile_village_villagers(RegionalTrade.chunk_coord_of(settlement_id))
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -4560,6 +4566,21 @@ func _record_household_departure(settlement_id: String, household) -> void:
 	departed.importance = 0.2
 	_event_store.append(departed)
 	_memory_store.witness_event(departed, _world_age_seconds)
+
+
+## The villagers standing in a loaded village catch up with its roster
+## (docs/concept/village_mortality.md mechanism 4).
+##
+## Only a LOADED village: an unloaded one has no markers to reconcile, and
+## spawning people into a chunk nobody is looking at is the same invented
+## number immigration already refuses to guess at.
+func _reconcile_village_villagers(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	_loaded_villages[chunk_coord] = _village_renderer.reconcile_villagers(
+		_creatures_parent, chunk_coord, chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self, _loaded_villages[chunk_coord]
+	)
 
 
 ## A villager has starved to death (docs/concept/village_mortality.md
