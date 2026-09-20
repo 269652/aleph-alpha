@@ -307,9 +307,94 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	# instead is what turned a post into a whole tile of rail.
 	if inner.x != 0 and inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.y, 1))
+	# A straight run is scaled by the distance between its own two POST
+	# CENTRES, not by the length of its wood. Every cell of fence.png is a
+	# whole panel -- a post at EACH end -- so two panels whose wood merely
+	# MEETS put two posts at every junction a few pixels apart, reported with
+	# an enclosure in shot: *"the enclosures render unnecessary vertical
+	# rails"*. One tile between a panel's own posts puts them on its tile's
+	# two edges, where the neighbour's near post lands too, and the pair draw
+	# as one. See docs/concept/village_farms.md, "Consecutive rails SHARE a
+	# post".
+	var vertical_run := inner.x != 0
+	var spacing := _post_spacing_of(subject, image, vertical_run)
+	if spacing > 0.0:
+		return float(tile_size) / spacing
+	# No two post bands found: fall back to the older wood-spans-a-tile rule
+	# rather than returning a nonsense scale for art this cannot read.
 	if inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.x, 1))
 	return float(tile_size) / float(maxi(art.size.y, 1))
+
+
+## Measured once per subject: scanning a whole source cell per rail spawn
+## would be real work repeated for every rail in every enclosure.
+static var _post_spacing_cache: Dictionary = {}
+
+
+## How far apart a rail panel's two POST CENTRES are, along the axis its run
+## travels, in the source image's own pixels -- or 0.0 when two post bands
+## cannot be told apart, which the caller treats as "measurement failed".
+##
+## A post spans the panel's whole cross-axis and the rails between span only
+## their own bars, so posts stand out as slices of higher coverage. Reading
+## that reliably needs two guards, BOTH load-bearing and both found by
+## measuring the real sheet rather than reasoned about:
+##
+## - The threshold sits between the RAIL level (the median of the slices
+##   carrying content) and a robust high percentile, never at a fixed
+##   multiple of either. The front views' posts cover about twice their
+##   rails (0.53 vs 0.27), but the top views' end caps only about 1.3x their
+##   bar (0.13 vs 0.10) -- one fixed multiple cannot read both.
+## - The percentile is robust, not the plain maximum, and a band must be at
+##   least 2% of the run wide. The trimmed cells carry stray edge slices --
+##   including one FULLY OPAQUE column at the far end -- which own the
+##   maximum and otherwise swallow the entire run between them.
+static func _post_spacing_of(subject: String, image: Image, vertical_run: bool) -> float:
+	if _post_spacing_cache.has(subject):
+		return _post_spacing_cache[subject]
+	var along := image.get_height() if vertical_run else image.get_width()
+	var across := image.get_width() if vertical_run else image.get_height()
+	var coverage: Array[float] = []
+	var content: Array[float] = []
+	for i in range(along):
+		var opaque := 0
+		for j in range(across):
+			var pixel := image.get_pixel(j, i) if vertical_run else image.get_pixel(i, j)
+			if pixel.a > 0.5:
+				opaque += 1
+		var value := float(opaque) / float(maxi(across, 1))
+		coverage.append(value)
+		if value > 0.02:
+			content.append(value)
+	var spacing := 0.0
+	if content.size() >= 3:
+		content.sort()
+		var rail_level: float = content[content.size() / 2]
+		var high: float = content[mini(int(float(content.size()) * 0.9), content.size() - 1)]
+		var threshold: float = rail_level + (high - rail_level) * 0.4
+		var min_width: int = maxi(2, int(round(float(along) * 0.02)))
+		var bands: Array = []
+		var run_start := -1
+		for i in range(along):
+			var is_post: bool = coverage[i] >= threshold
+			if is_post and run_start < 0:
+				run_start = i
+			if (not is_post) and run_start >= 0:
+				if i - run_start >= min_width:
+					bands.append([run_start, i - 1])
+				run_start = -1
+		if run_start >= 0 and along - run_start >= min_width:
+			bands.append([run_start, along - 1])
+		if bands.size() >= 2:
+			var first: Array = bands[0]
+			var last: Array = bands[bands.size() - 1]
+			spacing = (
+				(float(last[0]) + float(last[1])) * 0.5
+				- (float(first[0]) + float(first[1])) * 0.5
+			)
+	_post_spacing_cache[subject] = spacing
+	return spacing
 
 
 ## Where a subject's footprint_texture really stands INSIDE its own tile, as
