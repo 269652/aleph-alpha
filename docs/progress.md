@@ -27447,6 +27447,68 @@ than delete them, the placement invariants they were really pinning (a
 workspot is not a road or a wall; it touches the paving) were retargeted
 onto `NpcMarker.workspot_position`, which outlives the prop. 131/131.
 
+### ✅ Done (2026-09-20): ...and so do whole-building entities
+
+Reported unchanged after all of the above landed: **"NPCs still walk
+through houses and ignore the hitbox"**.
+
+The gates were right; the question was half of one. A village house is a
+whole-building **entity** now (docs/concept/building.md, "Buildings are
+entities; interiors are scenes"): its cells carry the building id and
+`BuildingCatalog.FOOTPRINT_TILE_ID`, and it has **no `BuildingPiece` walls
+at all** -- `BuildingCatalog.occupies` says so in as many words, "a legacy
+BuildingPiece or a single-tile placeable is its own thing and answers false
+here". So `piece_blocks_movement_at_global`, the one question all four
+gates asked, answers `false` on every cell of a cottage, while the player
+is stopped by a `StaticBody2D` over its whole footprint. **The player and
+the markers were being stopped by two different kinds of building.**
+
+`AgentPassability.blocked_predicate_for` had made it structural: an
+`elif`, so a world that knew about pieces never asked about buildings at
+all. That preference was deliberate and its worry was real -- routing on a
+whole footprint would shut a villager out of a piece-built structure's
+walkable DOOR and FLOOR -- but it defended the wrong thing.
+
+- ✅ **One shared question.** `AgentPassability.structure_blocks(world,
+  tile)` asks both, and is read by `TileRouter`'s predicate, `WalkGate`,
+  `NpcMarker._blocked_step` and
+  `CreatureMarker._building_blocks_arrival` -- six gates cannot answer it
+  six ways.
+- ✅ **What protects a door is disjointness, not preference.** A
+  `wood_wall` blocks the piece question and answers `false` to
+  `has_building_at_global`; `wood_door` and `wood_floor` stay walkable
+  through both. Measured on real stamped pieces, not asserted.
+- ✅ **A whole footprint is solid, and that costs nothing.** A building
+  entity's interior is a separate scene entered from its DOORSTEP, which
+  `BuildingCatalog.doorstep_of` puts "just south of the door, outside the
+  footprint". Nobody ever walked through the footprint to get in.
+
+**TDD:** new `test_marker_gates_block_buildings.gd` (10 tests) works on a
+REAL `house_medium` in a real Berlin chunk rather than a stub -- a stub can
+be made to answer anything, and what was wrong here was which question the
+*real* world was asked. Three confirmed red (route, walk gate, slide) with
+two diagnosis tests passing beside them (the body exists; the piece
+question is silent about it). It also pins the body's world rect against
+the cells the world calls a building, so player and markers cannot drift
+apart again. 10/10, plus 14/14 in `test_agent_passability.gd`.
+
+`test_the_piece_question_is_preferred_over_the_footprint_one` asserted the
+`elif` against a stub that answered `true` to **both** questions -- a world
+that does not exist -- and so pinned this bug in place. Retargeted onto the
+invariant that actually protects a door.
+
+**One of my own tests was wrong first**, the same class of mistake as ever:
+the "diagonal into the house" aimed at a cell one row BELOW the footprint,
+where there was nothing to be stopped by and nothing to slide along. Now
+stated in cells off the house's own corner.
+
+**Pre-existing failures, confirmed unchanged by stashing the change and
+re-running:** `test_npc_marker_farming` (3), `_timber` (1), `_fishing` (1),
+`_hunting` (1).
+
+**Still ungated:** the caravan and cart markers have no world reference to
+ask with; plumbing one through is a separate change and is the user's call.
+
 ### ✅ Walls and rails stop animals and villagers
 
 "Horses still aren't blocked by houses", "fences should have a hitbox

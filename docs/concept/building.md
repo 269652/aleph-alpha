@@ -121,6 +121,19 @@ structure does today. `remove_building` reverses all of it.
 `building_at_global(x, y)` answers for any footprint cell;
 `building_door_near(pixel, radius)` finds a doorstep for the Enter prompt.
 
+**A building entity stops walkers too, and that took a second report**
+(2026-09-20). The `StaticBody2D` above is what stops the *player*. Every
+other walker in the game is a `Sprite2D` that moves by assigning
+`position`, so no body has ever had the slightest effect on one — they ask
+a gate instead, and that gate asked `piece_blocks_movement_at_global`,
+which is about legacy `BuildingPiece` walls and answers `false` on every
+cell of a building entity. Hence *"NPCs still walk through houses and
+ignore the hitbox"*, reported after the gates already existed.
+`AgentPassability.structure_blocks` now asks both questions, and
+`has_building_at_global` covers exactly the footprint this body covers (a
+test pins the two rects against each other). Entering is untouched: the
+doorstep is outside the footprint by construction.
+
 **A house stands IN its plot, not across it** (2026-09-19). Reported live
 with a screenshot of three cottages in a row: *"make the cottages a bit
 smaller and add a padding so they have a gap between them and the top
