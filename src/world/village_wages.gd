@@ -17,6 +17,23 @@ extends RefCounted
 ## hunter's catch funds the village, which is exactly the specialization
 ## npc.md calls "real rather than cosmetic".
 ##
+## -- The LEVY half is no longer wired (2026-09-20) --
+##
+## Asked directly: *"Gold should only be conjured by the travelling
+## merchant"*. `levy_on`, `take_home_of` and `deposit` split a coin that
+## NpcEconomy minted per food unit gathered, and that mint was the faucet
+## (docs/concept/traveling_merchants.md, "The merchant is the ONLY
+## faucet"). It is closed: a producer's work earns the village GOODS, and
+## the merchant pays for those.
+##
+## The three functions and their derivation are kept, still tested, because
+## the reasoning below is worth having written down if a levy is ever
+## wanted again -- but nothing in src/ calls them, and
+## test_the_old_levy_arithmetic_is_not_wired_to_anything fails if anything
+## starts. What IS live here is the subsistence wage (paid out of the
+## purse) and estate_tax_for/tax_debits (paid into it, out of real
+## wallets).
+##
 ## -- Why the levy rate is DERIVED, not chosen --
 ##
 ## The share is the non-producer fraction of the real occupation census
@@ -191,3 +208,45 @@ static func estate_tax_for(
 		var provision := float(provision_by_estate.get(estate, 0.0))
 		take += VillageEstates.tax_per_day(estate, provision) * households * days
 	return take
+
+
+## What each household actually hands over, given their `balances` in whole
+## gold and a whole-coin `owed`.
+##
+## Tax is a TRANSFER, not a faucet (docs/concept/traveling_merchants.md,
+## "The merchant is the ONLY faucet"). estate_tax_for says what a village is
+## OWED; this says what it can really collect, and the caller takes exactly
+## these coins out of exactly these wallets before crediting the purse.
+## Without it, _collect_estate_tax credited the purse and debited nobody,
+## which made it a second place gold came from nothing.
+##
+## One debit per balance, in the order given, so a caller maps each back to
+## the household it came from without a second key -- the same shape
+## SettlementSurplus.allocate keeps for the merchant's own sale.
+##
+## Two rules worth stating because they are deliberate:
+##
+## - **Nobody is ever debited more than they hold.** That single property is
+##   what makes this a transfer: collecting can never invent a coin.
+## - **A village collects what is there, not what it is due.** Households
+##   short of coin pay what they have and the rest is simply not collected;
+##   the shortfall is NOT banked as arrears. A debt a household can never
+##   pay is a number that only grows, and it would make the purse's balance
+##   a fiction again -- which is the very thing this closes.
+static func tax_debits(balances: Array, owed: int) -> Array:
+	var debits: Array = []
+	for _balance in balances:
+		debits.append(0)
+	var remaining := owed
+	if remaining <= 0:
+		return debits
+	for index in balances.size():
+		if remaining <= 0:
+			break
+		var held := int(balances[index])
+		if held <= 0:
+			continue
+		var take := mini(held, remaining)
+		debits[index] = take
+		remaining -= take
+	return debits

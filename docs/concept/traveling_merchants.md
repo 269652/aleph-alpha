@@ -179,6 +179,63 @@ containers, one eater" question
 open. It says only that the merchant reads all of them, which is what makes
 the gold faucet reach the goods a village actually has.
 
+## Mechanism — the merchant is the ONLY faucet
+
+Asked directly: *"Gold should only be conjured by the travelling
+merchant"*.
+
+This file's own opening already claimed that — *"A village's gold used to
+come from nowhere... A traveling merchant is the faucet that replaces
+it"* — and it was not true. Two other places minted gold with nothing
+behind it:
+
+| Faucet | What it did | Standing |
+|---|---|---|
+| `NpcEconomy._earn` | a coin per food unit gathered, whether or not anyone bought it | **closed** |
+| `_collect_estate_tax` | credited the purse and debited **nobody** | **closed** |
+
+The rule now, and it is an invariant rather than an aspiration:
+
+> The settlement purse gains gold from **one** place: a merchant paying
+> for goods he takes away. Everything else that moves gold is a
+> **transfer** — it must debit exactly what it credits.
+
+### A producer is paid like everyone else
+
+`_earn` split a conjured coin between the purse and the producer's own
+wallet. With it gone, a producer draws from the purse through the same
+`_draw_subsistence_wage` every other villager uses — which was already
+written for this and says so: *"Deliberately NOT gated on occupation... in
+practice a working producer's own take-home already covers the price, so
+this only ever fires for them once their work has genuinely stopped
+paying."* That parenthesis is simply no longer true, and the mechanism
+underneath needed no change at all.
+
+What a producer's work earns the village is now the **goods**, which the
+merchant pays for. That is the whole point: a hunter feeds the village by
+filling the warehouse, not by minting a coin as the arrow lands.
+
+### Tax is a transfer, so it must be taken from somebody
+
+`estate_tax_for` says what a village is *owed*. What it can actually
+**collect** is bounded by what its households hold, and the coins really
+leave their wallets. `VillageWages.tax_debits` is that, and it is pure: a
+list of balances and a whole-coin demand in, one debit per household out,
+never more than a household has, summing to no more than is owed.
+
+Two details that are rules rather than conveniences:
+
+- **Whole coins only, with the remainder carried.** A `Wallet` holds
+  integer gold and a kossaet owes 0.25 a day, so collecting per step would
+  round a real debt to nothing or to four times itself. The fraction
+  carries per settlement — the same carry-until-it-crosses-a-whole-unit
+  idiom `NpcEconomy._take_home_carry` already runs on.
+- **A village collects what is there, not what it is due.** Households
+  short of coin pay what they have and the rest is simply not collected;
+  the shortfall is not banked as arrears. A debt a household can never pay
+  is a number that only ever grows, and it would make the purse's balance
+  a fiction again.
+
 ## Mechanism — what the gold is for
 
 Once a purse has real money in it, the paths that spend it are already
