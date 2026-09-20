@@ -95,9 +95,12 @@ func _gate(chunk_coord: Vector2i, settlement_id: String) -> Dictionary:
 		),
 		"ladder_share": VillageGrowth.ladder_share(present),
 		"carry": float(_manager._settlement_immigration_carry.get(settlement_id, 0.0)),
-		"next_building": VillageGrowth.next_building(
-			household_ids.size(), int(census["housed_count"]), present
-		),
+		# Through the SAME function the village really asks -- the assembly,
+		# not VillageGrowth's ladder directly. The first cut of this probe
+		# asked the ladder with three arguments, so `spare_house_capacity`
+		# defaulted to "there is already room" and the column read "-" for
+		# a reason that was about the probe rather than the village.
+		"next_building": _manager.next_building_for_settlement(chunk_coord),
 	}
 
 

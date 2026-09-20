@@ -18440,6 +18440,14 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
+		# How many roofs really stand EMPTY, which is what lets the
+		# assembly raise one when none does (VillageAssembly.next_building's
+		# lowest rung, docs/concept/village_growth.md "Room is made first,
+		# moved into after"). Without it the assembly reads the default
+		# "there is already room", and a village that has housed everybody
+		# and answered every petition owes itself nothing for ever --
+		# measured at room 0 through a whole 1200-second watch.
+		"spare_house_capacity": int(census["spare_house_capacity"]),
 		"present_building_ids": _settlement_present_building_ids(chunk_coord),
 		# How many of each, so a works that feeds people can be raised again
 		# while it is outnumbered by the mouths (mechanism 7).
@@ -18606,14 +18614,17 @@ func _mean_household_needs(assessments: Array) -> Dictionary:
 ## acts on, so the card cannot promise a building the village is not
 ## actually about to raise.
 func _next_growth_building_for(
-	chunk_coord: Vector2i, household_ids: Array, census: Dictionary
+	chunk_coord: Vector2i, household_ids: Array, _census: Dictionary
 ) -> String:
 	if household_ids.is_empty():
 		return ""
-	return VillageGrowth.next_building(
-		household_ids.size(), int(census.get("housed_count", 0)),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
-	)
+	# The SAME question _apply_village_growth_decision acts on, not a second
+	# prediction of it. It used to walk VillageGrowth's ladder directly,
+	# which is neither the function the village really asks (the assembly)
+	# nor handed the spare capacity that decides its lowest rung -- so the
+	# card could promise a building the village was not about to raise, and
+	# stay silent about the one it was.
+	return next_building_for_settlement(chunk_coord)
 
 
 func settlement_tier_of(settlement_id: String) -> String:
