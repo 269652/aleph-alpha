@@ -300,6 +300,17 @@ pave its square (`VillageRenderer._lay_plaza_if_missing`). It also means a
 plot that is paved AROUND later becomes paved itself, with no migration
 and no second source of truth to drift.
 
+**Confirmed on a real render**, not only by test, the way every other
+"what does this look like" question in this repo is
+(`tools/probe_village_render.gd`, under `xvfb` + Mesa software GL): the
+hall's plot is cobbled continuously into the plaza around it with no seam
+and no square, and a cottage's plot reads as the ground it stands in --
+measured rgb(0.21, 0.29, 0.07) inside the kerb against rgb(0.22, 0.33,
+0.06) for the open grass beside it and rgb(0.40, 0.38, 0.34) for the
+street, where the flat tile it used to paint is rgb(0.35, 0.25, 0.15).
+The dither is grass-weighted at that distance, so a yard reads as ground
+a house was set into rather than a rectangle cut out of it.
+
 **The kerb is drawn, too.** `ProceduralFootprintKerbSprite` draws the
 footprint's own outline at art resolution -- a dark edge with a lighter
 inner line and a joint every few pixels, so it reads as laid kerb stones
@@ -312,6 +323,20 @@ Its middle is fully transparent: the kerb marks the plot, it never paints
 over the ground the rule above just chose. A construction site draws no
 kerb -- it has no collision body yet, and a border round a hitbox that
 does not exist would be a lie.
+
+**Honest gaps.** A yard's INNER cells do not dither, because nothing real
+borders them: `paint()` excludes modified neighbours (a multi-tile floor
+must not seam against its own middle), so a footprint three or more cells
+across in BOTH directions keeps its innermost cells on the flat tile
+inside a dithered ring -- two of them in a 4x3 hall, one in a 3x3, and
+none at all in the 2x2 and 3x2 most of a village is. Every such cell is
+under the building's own art, which is drawn at the footprint's full
+width, so none of them is visible today -- but it is a real seam waiting
+for the first building drawn with a see-through middle. The kerb is drawn
+for a paved plot too, where it is an outline over the square rather than
+a kerb between two surfaces; that is what "so the hitbox is visible"
+asked for, and it does mean a village square carries outlines a
+photograph of one would not.
 
 ### When the ground says no: water, a split spine, and a drowned square
 
@@ -658,6 +683,20 @@ tile, no dividers, no directional variants (see
   [civic_construction.md](civic_construction.md) "Meeting Hall". Tested
   (`test_civic_build_decision.gd`,
   `test_earth_chunk_manager_city_hall_rising.gd`).
+- ✅ **The ground a building stands on, and its kerb** (2026-09-20). A
+  footprint no longer falls through onto one flat earth square: it paints
+  the ground its own kerb is made of (`TerrainRenderer.building_ground_
+  tile_for`/`building_ground_by_cell`, `PAVED_KERB_SHARE`), so a hall on
+  the square is cobbled seamlessly into it and every other plot keeps a
+  worn yard that dithers into the biome around it. Re-derived per paint,
+  nothing persisted, so older villages heal on reload.
+  `ProceduralFootprintKerbSprite` draws the plot's own outline from the
+  same rect as the collision body, beneath the building's art. Measured
+  before and after on three real settlements
+  (`tools/probe_building_ground.gd`) and confirmed on a real render
+  (`tools/probe_village_render.gd`). Tested (`test_building_ground.gd`,
+  `test_procedural_footprint_kerb_sprite.gd`, `test_terrain_renderer.gd`,
+  `test_earth_chunk_manager_buildings.gd`).
 
 ## Legacy: structure building from pieces (older player-built structures only)
 

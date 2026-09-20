@@ -23883,3 +23883,99 @@ a few tiles wide at most.
 
 🚧 **Rails never weather or break.** The sheet carries Worn and Destroyed
 rows and only Pristine is ever drawn, because nothing damages a fence.
+
+## A building stands on the ground it was raised on, and its plot shows its own kerb (`concept/building.md`, 2026-09-20)
+
+Reported live with a screenshot: *"the background of the houses 2x2 should
+be variable; if the city hall is placed on the plaza it should have
+cobblestone background so it looks seamless... also there should be some
+kind of border so the hitbox is visible."*
+
+**The cause, measured before anything was changed.** A building's
+placement writes its own ids into `Chunk.modifications` — the building id
+on the anchor, `BuildingCatalog.FOOTPRINT_TILE_ID` on every other
+footprint cell — and neither is a tile `TerrainRenderer` knows, so both
+fell through `atlas_coords_for_modification`'s fail-safe default onto the
+single flat `EARTH_COLOR` square. Every building in the world stood on the
+same brown rectangle whatever it had been built on; worse, a hall raised
+on the village square had that square's own paving *lifted* out from under
+it by `_place_building_over_roads` and replaced with the rectangle.
+`tools/probe_building_ground.gd` (new, kept) measured it across three real
+settlements near lat 48.6 lon 12.7: **28 buildings, 28 flat-earth squares,
+all three town halls included.**
+
+**The rule: a building stands on the ground its own kerb is made of.** The
+kerb is the ring of cells immediately around the footprint — 18 cells
+round a 4×3 hall, 12 round a 2×2 cottage. More than
+`TerrainRenderer.PAVED_KERB_SHARE` of it carrying laid Road means the
+footprint paints Road too; anything less keeps the trodden earth yard, and
+that yard now goes through the same branch `PathScarring`'s worn ground
+already takes, so its outer cells dither into whatever biome borders them
+instead of cutting a hard square out of the grass. Both halves of the
+report's "variable" — the ground a building carries is a reading of its
+surroundings, never a constant.
+
+**The share is half, and the real geometry is what put it there.** On
+those same villages every town hall's kerb is 12 of 18 paved (67%), the
+same 12 of 18 in all three because plaza and civic plot are both pure
+functions of the chunk and its seed; an ordinary house/farmhouse/sawmill
+plot runs 7–43% — its doorstep and a spur, no more. Three corner plots of
+the 28 sat above half (58%, 71%, 86%) and are genuinely ringed by street,
+so paving them is the rule working rather than an exception to it.
+`test_the_town_hall_on_a_real_villages_square_stands_on_the_square` builds
+the kerb out of `VillageLayout`'s own real output rather than a made-up
+ring, so a change to the plaza or the street pitch fails there instead of
+on screen — mutation-checked by raising the share to 0.75 and watching all
+four seeds fail.
+
+**Nothing is persisted.** The ground is re-derived from the chunk on every
+paint, so a village saved before this existed heals on its next load (the
+same property that lets an older village re-derive and pave its square),
+and a plot that is paved *around* later becomes paved itself with no
+migration and no second source of truth to drift.
+
+**The kerb is drawn, too.** `ProceduralFootprintKerbSprite` (new) draws
+the plot's own outline at art resolution — two art pixels of stone, one of
+lit top face, a joint every eight so it reads as laid kerb stones rather
+than a debug rectangle — and `_spawn_building_node` carries it *beneath*
+the building's art (children paint in tree order; the art sprite is now
+named `Art` so nothing has to guess which `Sprite2D` is which), built from
+the same `footprint_px` the `StaticBody2D`'s `RectangleShape2D` is built
+from. What is drawn IS the hitbox rather than a picture of one that can
+drift from it, pinned by
+`test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect`. Its
+middle is fully transparent, so it never paints over the ground the rule
+above just chose. A construction site draws none — it has no collision
+body yet.
+
+**After, on the same three villages:** 3 halls and 3 street-corner plots
+on cobbles, 20 yards dithering into grassland or forest, 2 fully enclosed
+cells still flat (their every cardinal neighbour is itself modified, so
+there is nothing real to dither toward). **Confirmed on a real render**
+(`tools/probe_village_render.gd`, new, under `xvfb` + Mesa software GL,
+because a headless run paints no pixels): the hall's plot is cobbled
+continuously into the plaza with no seam, and a cottage's plot measures
+rgb(0.21, 0.29, 0.07) inside its kerb against rgb(0.22, 0.33, 0.06) for
+the open grass beside it and rgb(0.40, 0.38, 0.34) for the street — where
+the flat tile it used to paint is rgb(0.35, 0.25, 0.15).
+
+Honest gaps, both real:
+
+🚧 **A yard's innermost cells do not dither.** `paint()` excludes modified
+neighbours (a multi-tile floor must not seam against its own middle), so a
+footprint three or more cells across in BOTH directions keeps its inner
+cells on the flat tile inside a dithered ring — two in a 4×3 hall, one in
+a 3×3, none at all in the 2×2 and 3×2 most of a village is. Every such
+cell sits under the building's own art, which is drawn at the footprint's
+full width, so none is visible today; it is a seam waiting for the first
+building drawn with a see-through middle.
+
+🚧 **The kerb is drawn on a paved plot too**, where it is an outline over
+the square rather than a boundary between two surfaces. That is what "so
+the hitbox is visible" asked for, and it does mean a village square
+carries outlines a photograph of one would not.
+
+Tested: `test_building_ground.gd` (7, new),
+`test_procedural_footprint_kerb_sprite.gd` (7, new),
+`test_terrain_renderer.gd` (+5), `test_earth_chunk_manager_buildings.gd`
+(+4).
