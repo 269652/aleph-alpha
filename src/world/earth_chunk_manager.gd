@@ -3827,6 +3827,12 @@ func step_settlements(delta_seconds: float) -> void:
 		)
 		# ...and every one of them has a pail by the door to fetch it with.
 		stock_household_buckets_in(RegionalTrade.chunk_coord_of(settlement_id))
+		# ...and the villagers standing there follow the roster, so a
+		# household that moved in this step is somebody you can SEE
+		# (docs/concept/village_mortality.md mechanism 4). Runs after
+		# immigration, on purpose: a newcomer admitted this tick gets a
+		# villager this tick rather than one step later.
+		_reconcile_village_villagers(RegionalTrade.chunk_coord_of(settlement_id))
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -4561,6 +4567,45 @@ func _record_household_departure(settlement_id: String, household) -> void:
 	departed.importance = 0.2
 	_event_store.append(departed)
 	_memory_store.witness_event(departed, _world_age_seconds)
+
+
+## The villagers standing in a loaded village catch up with its roster
+## (docs/concept/village_mortality.md mechanism 4).
+##
+## Only a LOADED village: an unloaded one has no markers to reconcile, and
+## spawning people into a chunk nobody is looking at is the same invented
+## number immigration already refuses to guess at.
+func _reconcile_village_villagers(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	_loaded_villages[chunk_coord] = _village_renderer.reconcile_villagers(
+		_creatures_parent, chunk_coord, chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self, _loaded_villages[chunk_coord]
+	)
+
+
+## A villager has starved to death (docs/concept/village_mortality.md
+## mechanism 3). True when somebody really was taken off the roster.
+##
+## A death is a DEPARTURE WITH A REASON, not a second mechanism beside it:
+## it goes out through the same `npc_departed` event the estate exodus
+## already appends, so _households_in_settlement, the census, the tier,
+## the growth ladder and the settlement card all see it with no new
+## plumbing -- and the roof they owned stops counting as one of ours,
+## exactly as VillageCensus' roster rule arranges.
+##
+## False for a villager who does not live here, and for one already gone:
+## a death that fired twice would cost the village two households for one
+## person, and a marker can be freed on the same frame the settlement
+## step notices it.
+func record_villager_death(settlement_id: String, seed_value: int) -> bool:
+	var household = _household_store.household_for(EntityRef.for_npc(seed_value))
+	if household == null:
+		return false
+	if not _households_in_settlement(settlement_id).has(household.id):
+		return false
+	_record_household_departure(settlement_id, household)
+	return true
 
 
 ## docs/concept/village_estates.md mechanism 6: the households pay into the

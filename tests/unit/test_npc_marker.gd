@@ -1997,3 +1997,113 @@ func test_a_villager_making_slow_progress_is_not_given_up_on():
 		WaterErrand.is_running(marker.water_errand),
 		"they put the bucket down while still walking steadily toward the well"
 	)
+
+
+# -- starving to death (docs/concept/village_mortality.md mechanism 2) ------
+#
+# Asked for directly: *"make them starve and die if they don't have
+# food"*. The check sits beside the hunger interrupt, which is where a
+# villager's relationship with food is already decided.
+
+const Starvation = preload("res://src/emergence/starvation.gd")
+
+
+## A world that only remembers who it was told died.
+class BuryingWorld:
+	extends StubWorld
+	var buried: Array = []
+
+	func record_villager_death(settlement_id: String, seed_value: int) -> bool:
+		buried.append({"settlement": settlement_id, "seed": seed_value})
+		return true
+
+
+## A villager with an empty market to buy from and no way to feed
+## themselves from their own work.
+##
+## The occupation matters and is chosen, not inherited: seed 1 (this
+## file's default) is a HUNTER, and a hunter standing in a region full of
+## game feeds itself off its own work (NpcEconomy.feeds_itself_from_work)
+## and correctly never starves -- which is what
+## test_a_producer_who_feeds_itself_from_its_work_does_not_starve pins.
+## Seed 2 is a nurse: somebody who has to BUY their food, and so has
+## nothing when the market is empty.
+func _a_villager_with_nothing_to_eat() -> BuryingWorld:
+	var world := BuryingWorld.new()
+	marker.identity = NpcIdentity.new(2)
+	marker.setup(world, TILE_SIZE)
+	marker.settlement_id = "settlement:test"
+	marker.setup_economy(VillageMarket.new())
+	assert_ne(marker.identity.occupation, "hunter", "precondition: they cannot feed themselves")
+	return world
+
+
+## Runs them past the whole starvation window.
+func _starve(steps: int = 400) -> void:
+	var slice := Starvation.seconds_to_die() / 100.0
+	for i in steps:
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			return
+		marker._process(slice)
+
+
+func test_a_villager_with_nothing_to_eat_starves_to_death():
+	_a_villager_with_nothing_to_eat()
+	_starve()
+	assert_true(marker.is_queued_for_deletion(), "they starved and stayed standing there")
+
+
+func test_the_village_is_told_who_died():
+	var world := _a_villager_with_nothing_to_eat()
+	_starve()
+	assert_eq(world.buried.size(), 1, "a villager died and the village never heard")
+	assert_eq(world.buried[0]["seed"], marker.identity.seed_value)
+	assert_eq(world.buried[0]["settlement"], "settlement:test")
+
+
+func test_a_villager_who_keeps_eating_does_not_die():
+	var world := _a_villager_with_nothing_to_eat()
+	var slice := Starvation.seconds_to_die() / 100.0
+	for i in 400:
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			break
+		marker.economy.needs.feed()
+		marker._process(slice)
+	assert_false(marker.is_queued_for_deletion(), "a villager who ate every day still died")
+	assert_true(world.buried.is_empty())
+
+
+## A villager nobody is simulating a village for still has a body.
+func test_a_villager_with_no_village_to_tell_still_dies():
+	var world := StubWorld.new()
+	marker.identity = NpcIdentity.new(2)
+	marker.setup(world, TILE_SIZE)
+	marker.setup_economy(VillageMarket.new())
+	_starve()
+	assert_true(marker.is_queued_for_deletion())
+
+
+## A producer standing in a region that still yields eats off its own
+## work, and mortality must not break that. The famine chain this file
+## already carries (see the hunger interrupt's own note: a hunter sent to
+## an empty market "never worked again") exists precisely because a
+## producer who cannot feed itself deadlocks -- and now it would die.
+func test_a_producer_who_feeds_itself_from_its_work_does_not_starve():
+	var world := BuryingWorld.new()
+	marker.identity = NpcIdentity.new(1)
+	marker.setup(world, TILE_SIZE)
+	marker.settlement_id = "settlement:test"
+	marker.setup_economy(VillageMarket.new())
+	assert_eq(marker.identity.occupation, "hunter", "precondition: somebody who works for their food")
+	_starve()
+	assert_false(
+		marker.is_queued_for_deletion(),
+		"a hunter starved to death in a region full of game"
+	)
+	assert_true(world.buried.is_empty())
+
+
+## A marker with no economy has no hunger to die of, and must not crash.
+func test_a_villager_with_no_economy_never_starves():
+	marker._process(0.1)
+	assert_false(marker.is_queued_for_deletion())
