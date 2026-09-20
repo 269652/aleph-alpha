@@ -276,17 +276,55 @@ func test_a_household_that_left_never_comes_back_on_the_next_step():
 
 # -- the ledger -----------------------------------------------------------
 
-## Mechanism 6 live: a provided village really does pay into the same purse
-## the subsistence wage comes out of.
-func test_a_provided_village_really_pays_tax_into_the_shared_purse():
+## Mechanism 6 live through the step: a provided village's tax is OWED and
+## accrues every assessment. It comes due in whole coins only after a run
+## of assessments (a cottager owes a quarter coin an economy day), and
+## through the step the purse cannot tell a tax from the cart's payment or
+## a wage -- which is how this test's first form ("the purse rose after one
+## step") stayed green while the collector debited nobody: it never could
+## have risen from tax in one step at all. The accrual is pinned here; the
+## transfer itself is pinned by test_the_tax_really_leaves_the_households_
+## wallets below.
+func test_a_provided_village_really_accrues_tax_every_assessment():
 	_found(6)
 	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 900)
 	_market().add_stock("herb", 900)
-	var before: float = NpcEconomy.purse_of(_market())
+	_market().add_stock("bread", 900)
 	_step()
-	assert_true(
-		NpcEconomy.purse_of(_market()) > before,
-		"a fully provided village paid nothing into its own purse"
+	assert_gt(
+		float(manager._settlement_tax_carry.get(_settlement_id, 0.0)), 0.0,
+		"a fully provided village accrued no tax at all"
+	)
+
+
+## And the tax is a TRANSFER: the coins really leave the households'
+## wallets. Called directly rather than through the step, because the step
+## moves merchant gold and wages through the same purse and the purse alone
+## cannot tell a tax from a visit -- which is exactly how the collector
+## looked every household up by the wrong id and debited nobody while the
+## test above stayed green.
+func test_the_tax_really_leaves_the_households_wallets():
+	var households := _found(6)
+	for household_id in households:
+		manager.household_store().get_household(household_id).wallet.add(40)
+	var provided := {}
+	for estate in VillageEstates.ESTATE_IDS:
+		for good in VillageEstates.basket_goods(estate):
+			provided[good] = 1.0
+	var purse_before: float = NpcEconomy.purse_of(_market())
+	var days := 40.0
+	manager._collect_estate_tax(_market(), _settlement_id, provided, days)
+	var wallets_after := 0
+	for household_id in households:
+		wallets_after += int(manager.household_store().get_household(household_id).wallet.balance)
+	var owed := int(floor(VillageWages.estate_tax_for(
+		manager.estate_census_for_settlement(_settlement_id), {VillageEstates.STARTING_ESTATE: 1.0}, days
+	)))
+	assert_gt(owed, 0, "the premise: forty provided days of six cottagers owe whole coins")
+	assert_eq(wallets_after, 6 * 40 - owed, "the coins did not leave the wallets")
+	assert_almost_eq(
+		NpcEconomy.purse_of(_market()) - purse_before, float(owed), 0.0001,
+		"what the purse gained is not what the wallets lost"
 	)
 
 

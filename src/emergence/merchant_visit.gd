@@ -93,6 +93,12 @@ const CART_CAPACITY := 20
 ## rate.
 const SECONDS_PER_DAY := 60.0
 
+## docs/concept/village_economy_balance.md mechanism 2, asked for in as
+## many words: *"the city should generate double the income through export
+## goods than it costs to pay all workers"*. What the cart pays a village
+## for the labour since his last call is its wage bill times this.
+const EXPORT_INCOME_TO_WAGE_BILL_RATIO := 2.0
+
 ## Visits per day to a village with something, anything, worth buying.
 const VISITS_PER_DAY := 0.4
 ## How much a full surplus adds to that draw, as a multiple.
@@ -190,6 +196,42 @@ static func price_of(item_id: String) -> int:
 	return 0
 
 
+## What the cart owes a village for `wage_bill` of labour: the bill, times
+## the ratio the request names. A negative bill is no bill.
+static func labour_value_for(wage_bill: float) -> float:
+	return maxf(wage_bill, 0.0) * EXPORT_INCOME_TO_WAGE_BILL_RATIO
+
+
+## The PRICE INDEX (docs/concept/village_economy_balance.md mechanism 2):
+## the labour value over what the surplus is worth at the farm gate,
+## floored at the farm gate. Per unit that is `2 x wage / per-capita
+## output` in base-value terms -- the labour-value price, measured by the
+## merchant at his own gate rather than by any production hook -- and the
+## floor means a village whose output is worth more than its bill is paid
+## for its output rather than for its bill. No labour to pay for, or no
+## surplus to price, is the farm gate.
+static func price_index(labour_value: float, surplus_value: float) -> float:
+	if labour_value <= 0.0 or surplus_value <= 0.0:
+		return 1.0
+	return maxf(1.0, labour_value / surplus_value)
+
+
+## What one unit of `item_id` fetches at `index`: the base price times it,
+## so every relativity the base prices derive (a beam is six logs) holds
+## at any level, and a good he does not deal in is still worth nothing.
+static func unit_price_of(item_id: String, index: float) -> float:
+	return float(price_of(item_id)) * index
+
+
+## What the whole sellable surplus above `reserved` is worth at the farm
+## gate -- every unit at its base price.
+static func surplus_value(stock: Dictionary, reserved: Dictionary = {}) -> float:
+	var value := 0.0
+	for item_id in buy_list():
+		value += float(_surplus_of(stock, reserved, item_id) * price_of(item_id))
+	return value
+
+
 ## How many whole units of sellable goods a settlement is holding -- what
 ## decides both whether a merchant comes at all and how soon.
 static func sellable_units(stock: Dictionary, reserved: Dictionary = {}) -> int:
@@ -257,7 +299,22 @@ static func arrivals(
 ## is the only thing that puts wood into a settlement's market and `wood` is
 ## on the buy list -- so a village that grew from 10 households to 31 built
 ## not one house for any of them.
-static func purchase(stock: Dictionary, reserved: Dictionary = {}) -> Dictionary:
+##
+## `labour_value` is what the village is owed for the labour since his last
+## call (labour_value_for over the wage bill; docs/concept/
+## village_economy_balance.md mechanism 2), and it sets the level: every
+## unit is paid base x price_index. THE CART CARRIES WHAT IT TAKES. Above
+## the floor, paying the labour value means taking the whole surplus, and
+## he does; at the floor he takes enough units, dearest first, to cover
+## the labour value at base, and never fewer than CART_CAPACITY -- so the
+## fixed cart is a floor on a visit rather than a ceiling on a village's
+## income, and what a hoard earns above the labour value is its base value,
+## exactly as before. `labour_value` 0 is the farm-gate sale it always was.
+##
+## `paid` is a float, because the index is: the purse holds a float, and
+## rounding a visit to whole coins would lose a small village's fraction
+## forever.
+static func purchase(stock: Dictionary, reserved: Dictionary = {}, labour_value: float = 0.0) -> Dictionary:
 	var order: Array = []
 	for item_id in buy_list():
 		var available := _surplus_of(stock, reserved, item_id)
@@ -265,15 +322,26 @@ static func purchase(stock: Dictionary, reserved: Dictionary = {}) -> Dictionary
 			order.append([-price_of(item_id), item_id, available])
 	order.sort()
 
+	var index := price_index(labour_value, surplus_value(stock, reserved))
 	var bought := {}
-	var paid := 0
-	var room := CART_CAPACITY
+	var paid := 0.0
+	var taken := 0
+	var covered := 0.0
 	for entry in order:
-		if room <= 0:
-			break
 		var item_id: String = entry[1]
-		var units: int = mini(int(entry[2]), room)
+		var available: int = int(entry[2])
+		var price := price_of(item_id)
+		var units := available
+		if index <= 1.0:
+			var for_the_labour := 0
+			if covered < labour_value:
+				for_the_labour = int(ceil((labour_value - covered) / float(price)))
+			var for_the_cart := maxi(CART_CAPACITY - taken, 0)
+			units = mini(available, maxi(for_the_labour, for_the_cart))
+		if units <= 0:
+			continue
 		bought[item_id] = units
-		paid += units * price_of(item_id)
-		room -= units
-	return {"bought": bought, "paid": paid}
+		paid += float(units) * unit_price_of(item_id, index)
+		taken += units
+		covered += float(units * price)
+	return {"bought": bought, "paid": paid, "index": index}
