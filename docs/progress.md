@@ -27483,6 +27483,23 @@ walkable DOOR and FLOOR -- but it defended the wrong thing.
   `BuildingCatalog.doorstep_of` puts "just south of the door, outside the
   footprint". Nobody ever walked through the footprint to get in.
 
+**Measured on a real village, before and after**
+(`tools/probe_villagers_in_houses.gd` — 10 villagers, 17 buildings loaded,
+900 frames of 0.05 s each):
+
+| | before | after |
+| --- | --- | --- |
+| frames standing inside a building | **1818 / 9000 (20.2%)** | **0 / 9000** |
+| villagers ever inside one | **9 / 10** | **0 / 10** |
+| worst offender | carter, 621 frames | — |
+| ...of which the PIECE question would also have refused | **0** | — |
+
+That last row is the diagnosis in one number: not one of the 1818 cells a
+villager stood on inside a house was a cell the old question would have
+refused, because a house entity has no `BuildingPiece` in it. Every marker
+had a world and a valid wall predicate the whole time — the gate was never
+missing, it was asking about the wrong kind of building.
+
 **TDD:** new `test_marker_gates_block_buildings.gd` (10 tests) works on a
 REAL `house_medium` in a real Berlin chunk rather than a stub -- a stub can
 be made to answer anything, and what was wrong here was which question the
