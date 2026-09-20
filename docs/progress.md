@@ -30021,6 +30021,60 @@ meal — rather than left as numbers in a comment.
   because `main` had already chosen the other end of the same fix and
   carrying both would split the tank again.
 
+## Only a building raised ON paving is cobbled to its walls (`concept/building.md`, 2026-09-20)
+
+Reported with three farmhouses in shot, each standing on its own grey pad:
+*"make the farm houses ground grass instead of cobblestone... only
+buildings placed on pavement like the city hall should get the pavement bg
+... the farmhouses should be placed on grass / forest biomes without
+pavement under it"*.
+
+✅ **Measured first, on the villages that actually show it.** Re-running
+`tools/probe_building_ground.gd` over three real settlements near lat 48.6
+lon 12.7:
+
+```
+farmhouse   origin=(13, 19) 3x2  kerb 14/14 paved (100%)  plaza=false  painted as road (cobbles)
+farmhouse   origin=(20, 19) 3x2  kerb 11/14 paved ( 79%)  plaza=false  painted as road (cobbles)
+house_small origin=(17, 19) 2x2  kerb 10/12 paved ( 83%)  plaza=false  painted as road (cobbles)
+city_hall   origin=(14, 13) 4x3  kerb 12/18 paved ( 67%)  plaza=true   painted as road (cobbles)
+totals: road (cobbles) on open ground: 10   road (cobbles) on plaza: 3
+```
+
+✅ **The threshold was not badly chosen; it was asked the wrong question.**
+`PAVED_KERB_SHARE` was set at half when an ordinary house/farmhouse/sawmill
+plot ran 7-43% against a hall's 67%. A plot wedged between the square's
+southern rows and the second street is ringed by paving on every side while
+standing on none of it, so the worst offenders now beat the hall outright —
+100% against 67%. **No threshold can separate them**, and raising it would
+only have moved which villages broke.
+
+✅ **What separates them is which buildings a village ever raises on its own
+paving, and exactly one does.** The civic plot IS the paved square
+(`_civic_plot_origin_for` refuses a plot whose every footprint cell is not
+already a road tile), while `can_build_house_from_blueprint`,
+`_is_clear_settlement_site` and `VillageLayout._street_plot_fits` each
+refuse a modified footprint outright. `building_ground_tile_for` asks both
+questions now, and both halves earn their keep: a hall raised where there
+is no paving keeps its own ground, and a farmhouse ringed by the whole
+village keeps its grass.
+
+✅ **Confirmed on a real render**, not only by test
+(`tools/probe_village_render.gd` under `xvfb` + Mesa software GL, which
+takes a third frame now for the farmhouse — the hardest plot there is): the
+farmhouse and its yard stand on grass with the village's paving running
+past them, and the hall is still cobbled seamlessly into its square.
+End to end, `road (cobbles) on open ground` falls from **10 to 0** across
+the same three villages, and the three halls keep theirs.
+
+🚧 **Nothing is persisted, so an older save heals on its next load** — the
+same property that lets an older village re-derive and pave its square. The
+pads already written into a save are not pads; they were re-derived every
+paint, so they simply stop being drawn.
+
+Tests: 14/14 in `test_building_ground.gd` (+6), with the five rings the
+reported villages really measured pinned as data.
+
 ## Nothing grows in a pond, and a pond keeps its fish (`concept/village_ponds.md`, 2026-09-20)
 
 Reported live with the water in shot: *"Now there's a pond, but grass grows

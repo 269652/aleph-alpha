@@ -29,6 +29,32 @@ const BUILDING_IDS: Array[String] = ["house_small", "house_medium", "house_large
 ## out of BUILDING_IDS so no villager is ever handed one to live in.
 const CIVIC_BUILDING_IDS: Array[String] = ["city_hall", "warehouse"]
 
+## The buildings a village raises ON its own laid paving -- the only ones
+## whose footprint is cobbled up to its walls rather than showing the
+## ground it was raised on (TerrainRenderer.building_ground_tile_for).
+##
+## Exactly one, and it is not a choice so much as a reading of what the
+## village already does: the civic plot IS the paved square, since
+## EarthChunkManager._civic_plot_origin_for refuses a plot whose every
+## footprint cell is not already a road tile. Every other placement path
+## refuses a modified footprint outright -- can_build_house_from_blueprint
+## (road_allowed false), _is_clear_settlement_site (unmodified only),
+## VillageLayout._street_plot_fits (never the square) -- so no other
+## building can ever be standing on paving to begin with.
+##
+## Reported with three farmhouses in shot, each on its own grey pad: "make
+## the farm houses ground grass instead of cobblestone... only buildings
+## placed on pavement like the city hall should get the pavement bg".
+## Cross-pinned against VillageLayout.CIVIC_BUILDING_ID in
+## test_building_ground.gd, so the list and the plot the square reserves
+## can never drift apart.
+const PAVED_PLOT_BUILDING_IDS: Array[String] = ["city_hall"]
+
+
+## Whether a village ever raises `building_id` on its own laid paving.
+static func stands_on_laid_paving(building_id: String) -> bool:
+	return PAVED_PLOT_BUILDING_IDS.has(building_id)
+
 ## Production buildings (docs/concept/village_growth.md's growth ladder):
 ## the works a village raises as it grows -- the sawmill at the forest
 ## edge first, since timber is the input every later building is made of,
