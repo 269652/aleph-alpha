@@ -5327,6 +5327,69 @@ func _step_village_immigration(settlement_id: String, market, household_ids: Arr
 	_settlement_immigration_carry[settlement_id] = result["carry"]
 	for i in int(result["arrivals"]):
 		admit_household(chunk_coord)
+	# ...and moved in, really (docs/concept/village_growth.md "...and
+	# nobody ever moved in"): the roof that let them in is one nobody on
+	# the roster owns, and a household is housed by owning one.
+	_house_the_waiting(chunk_coord)
+
+
+## Every household with nowhere to live takes a standing house nobody on
+## the roster owns -- one the village raised for nobody in particular, or
+## one a household that left still held -- oldest waiting first, one
+## household to a roof (docs/concept/village_growth.md "...and nobody ever
+## moved in"). True when somebody moved in.
+##
+## A household is housed by OWNING a house (VillageCensus.of reads the
+## store's property registry), and the only way one ever came to own one
+## was a project completed in its name. So a newcomer let in because a
+## roof stood empty stood under none: the ladder owed them a house of
+## their own, which a village with its frontage spent could not site, and
+## they waited for ever beside the empty ones. Measured with the economy
+## probe: a fisher who arrived at 750 s worked no water for the rest of
+## the run while two houses stood empty.
+##
+## Taking the house is a real transfer of the property (grant_property),
+## so the census, the ladder and the readout see them housed at once, and
+## the ground settles around them the same step (_settle_the_ground): the
+## house's record says who lives there now, a fisher's pond is dug beside
+## it and handed to them, and their home is its door.
+func _house_the_waiting(chunk_coord: Vector2i) -> bool:
+	if not _loaded_chunks.has(chunk_coord):
+		return false
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	var census := _village_census_for(chunk_coord, household_ids)
+	var waiting: Array = census["unhoused_household_ids"]
+	if waiting.is_empty():
+		return false
+	var roster := {}
+	for household_id in household_ids:
+		roster[household_id] = true
+	# Spare roofs, in the deterministic (y, x) order buildings_in_chunk
+	# already keeps; a roof whose owner is on the roster is somebody's.
+	var spare: Array = []
+	for record in buildings_in_chunk(chunk_coord):
+		if BuildingCatalog.capacity_of(record.get("id", "")) <= 0:
+			continue
+		var origin_local: Vector2i = record.get("origin_local", Vector2i.ZERO)
+		var owner := VillageCensus.household_owning(chunk_coord, origin_local, _household_store)
+		if owner == "" or not roster.has(owner):
+			spare.append(origin_local)
+	var moved_in := false
+	# Oldest waiting first: the roster is in arrival order.
+	for household_id in household_ids:
+		if spare.is_empty():
+			break
+		if not waiting.has(household_id):
+			continue
+		var origin_local: Vector2i = spare.pop_front()
+		_household_store.grant_property(
+			household_id, ConstructionProject.for_site(chunk_coord, origin_local, "", "").property_id()
+		)
+		moved_in = true
+	if moved_in:
+		_settle_the_ground(chunk_coord)
+	return moved_in
 
 
 ## settlement_id -> VillageImmigration's own sub-unit carry, the same

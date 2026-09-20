@@ -565,8 +565,10 @@ func settle_the_ground(
 
 ## A house its owner lives in carries their trade and seed: the recovery's
 ## own backfill rule (_recover_existing_village), applied to the houses the
-## world says these villagers own. A record that already remembers its
-## villager is left alone.
+## world says these villagers own. A record that already says its owner
+## lives there is left alone; one that remembers nobody, or somebody who
+## left (a household that moved into a departed household's house, see
+## EarthChunkManager._house_the_waiting), is brought up to date.
 func _claim_owned_houses(chunk_coord: Vector2i, npcs: Array, world) -> void:
 	if not world.has_method("house_origin_for_villager") or not world.has_method("set_building_resident"):
 		return
@@ -577,7 +579,7 @@ func _claim_owned_houses(chunk_coord: Vector2i, npcs: Array, world) -> void:
 		var owned_origin = world.house_origin_for_villager(chunk_coord, npc.seed_value)
 		if owned_origin == null or not records_by_origin.has(owned_origin):
 			continue
-		if int(records_by_origin[owned_origin].get("resident_seed", 0)) != 0:
+		if int(records_by_origin[owned_origin].get("resident_seed", 0)) == npc.seed_value:
 			continue
 		world.set_building_resident(chunk_coord, owned_origin, npc.occupation, npc.seed_value)
 

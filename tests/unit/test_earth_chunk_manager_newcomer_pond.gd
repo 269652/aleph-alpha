@@ -259,3 +259,92 @@ func test_the_newcomers_home_is_their_own_door():
 	var doorstep: Vector2i = _chunk_coord * CHUNK_SIZE + housed["origin"] + BuildingCatalog.doorstep_of(HOUSE)
 	var door := Vector2((doorstep.x + 0.5) * TerrainRenderer.TILE_SIZE, (doorstep.y + 0.5) * TerrainRenderer.TILE_SIZE)
 	assert_eq(newcomer.home_position, door, "the newcomer's home is not their own door")
+
+
+# -- and in real play the house is one already standing ------------------
+#
+# docs/concept/village_growth.md "...and nobody ever moved in": a newcomer
+# is let in because a roof stands empty, and then stands under none, since
+# a household is housed by OWNING a house and the empty one belongs to the
+# village. On every settlement step each household with nowhere to live
+# takes a standing house nobody on the roster owns, and the ground settles
+# around them the same step -- measured with the economy probe: a fisher
+# who arrived at 750 s worked no water for the rest of the run while two
+# empty houses stood.
+
+func _census() -> Dictionary:
+	return manager._village_census_for(_chunk_coord, manager._households_in_settlement(_settlement_id))
+
+
+func _spare_house_stands() -> bool:
+	return int(_census()["spare_house_capacity"]) > 0
+
+
+## A house the village raised for nobody in particular -- the ladder's
+## lowest rung, owned by the settlement -- completed the way the labour
+## tick completes it. What lets a newcomer in, and what they move into.
+func _raise_a_roof_for_nobody() -> Vector2i:
+	var origin = manager._growth_site_for(_chunk_coord, HOUSE)
+	assert_not_null(origin, "precondition: the village has a plot for a roof")
+	var store = manager.construction_project_store()
+	var project = store.start_project(_chunk_coord, origin, HOUSE, _settlement_id)
+	assert_true(store.complete_project(project.id, manager.household_store()))
+	manager._place_completed_construction_project(project)
+	return origin
+
+
+func test_the_premise_a_roof_raised_for_nobody_stands_spare():
+	_raise_a_roof_for_nobody()
+	assert_true(_spare_house_stands(), "a roof the village raised for nobody counts as room")
+
+
+func test_a_household_with_nowhere_to_live_takes_a_spare_house_on_the_settlement_step():
+	_raise_a_roof_for_nobody()
+	var household_id := _admit_the_newcomer()
+	assert_true(_spare_house_stands(), "precondition: a roof stands empty")
+	assert_null(manager.house_origin_for_villager(_chunk_coord, _newcomer.seed_value), "precondition: they own nothing yet")
+	manager._house_the_waiting(_chunk_coord)
+	assert_not_null(manager.house_origin_for_villager(_chunk_coord, _newcomer.seed_value), "the newcomer still owns no house")
+	assert_false(_census()["unhoused_household_ids"].has(household_id), "the census still counts them unhoused")
+
+
+func test_the_immigration_step_houses_the_waiting():
+	_raise_a_roof_for_nobody()
+	var household_id := _admit_the_newcomer()
+	manager._step_village_immigration(
+		_settlement_id, manager.market_store().market_for(_settlement_id),
+		manager._households_in_settlement(_settlement_id)
+	)
+	assert_false(_census()["unhoused_household_ids"].has(household_id), "the step left them without a roof")
+
+
+func test_the_house_they_move_into_gets_them_their_pond_the_same_step():
+	_raise_a_roof_for_nobody()
+	_admit_the_newcomer()
+	manager._house_the_waiting(_chunk_coord)
+	var origin = manager.house_origin_for_villager(_chunk_coord, _newcomer.seed_value)
+	assert_not_null(origin, "precondition: they moved in")
+	var record := _record_at(origin)
+	assert_eq(String(record.get("occupation", "")), FISHER, "the house does not say a fisher lives there")
+	assert_true(
+		manager._village_renderer._has_pond_already(_chunk_coord, CHUNK_SIZE, manager, origin, String(record.get("id", HOUSE))),
+		"no pond within reach of the house they moved into"
+	)
+	var newcomer = _marker_of(_newcomer.seed_value)
+	assert_not_null(newcomer)
+	assert_false(newcomer.pond_cells.is_empty(), "the newcomer works no water")
+
+
+func test_one_household_to_a_roof():
+	# Two arrivals, one spare roof: the second waits rather than sharing.
+	_raise_a_roof_for_nobody()
+	var first := _admit_the_newcomer()
+	var second: String = manager.admit_household(_chunk_coord)
+	assert_ne(second, "", "precondition: a second household arrived")
+	var spare_before := int(_census()["spare_house_capacity"])
+	manager._house_the_waiting(_chunk_coord)
+	var housed := 0
+	for household_id in [first, second]:
+		if not _census()["unhoused_household_ids"].has(household_id):
+			housed += 1
+	assert_eq(housed, mini(2, spare_before), "roofs were shared or left empty")
