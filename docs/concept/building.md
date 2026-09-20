@@ -455,6 +455,27 @@ hardest case there is, ringed by the square on one side and the second
 street on the other -- and it shows the farmhouse and its yard standing on
 grass with the village's paving running past it.
 
+**The plot is staked before the walls go up.** Reported live: *"The
+construction phase places the cottage at a different position than the
+finished cottage ... please align it so it doesn't jump that much"*.
+
+The house itself never moved, and that was measured before anything was
+changed. `tools/probe_construction_alignment.gd`: every construction stage
+and the finished sheet are bottom-anchored on the plot line and centred on
+it — content bottom `0.0` for all of them, 21×21 world units against 21×22.
+`tools/probe_construction_jump.gd` drove a real project to completion in a
+real village: *"sites whose building landed exactly where the site stood:
+1, sites whose building MOVED: 0"*.
+
+What jumped was the **plot**. A cottage stands in one of nine drawn gardens
+inside a drawn kerb, and a construction site had neither — so the moment
+the roof went on, a whole 2×2 garden and its kerb appeared at once and the
+thing's visible extent changed shape under the player's eye. The ground a
+building stands on belongs to the plot, not to the house: it is staked out
+before the walls and does not arrive with the roof. `_add_plot_ground`
+raises the kerb and the seeded yard for both spawners from the same seed,
+so the plot a cottage is built in is the plot it ends up standing in.
+
 **The kerb is drawn, too.** `ProceduralFootprintKerbSprite` draws the
 footprint's own outline at art resolution -- a dark edge with a lighter
 inner line and a joint every few pixels, so it reads as laid kerb stones

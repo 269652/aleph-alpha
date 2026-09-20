@@ -31738,3 +31738,35 @@ this** — A/B'd against the parent commit, 36 passing and 3 failing either
 way, same names. Not this work's, and not silently absorbed.
 
 Tests: 21/21 in `test_village_crop_choice.gd` (+6).
+
+## A cottage is built in the plot it ends up standing in (`concept/building.md`, 2026-09-20)
+
+Reported live: *"The construction phase places the cottage at a different
+position than the finished cottage ... please align it so it doesn't jump
+that much"*.
+
+✅ **The house never moved, and that was established before anything was
+changed** — twice, from opposite ends. `tools/probe_construction_alignment.gd`
+(kept) measured the opaque content box of every stage and of the finished
+sheet in world units: bottom `0.0` above the plot line for all of them,
+centred, 21×21 against 21×22. `tools/probe_construction_jump.gd` (kept)
+drove a real project to completion in a real village and compared the site
+node's position with the building's: *"sites whose building landed exactly
+where the site stood: 1, sites whose building MOVED: 0"*.
+
+✅ **What jumped was the PLOT.** A cottage now stands in one of nine drawn
+gardens (`cottage_bg_overlay`) inside a drawn kerb, and a construction site
+had neither — so a whole 2×2 garden and its kerb appeared at once when the
+roof went on. `_add_plot_ground` is the one function both spawners call, from
+the same seed, so the site is built in the same garden the house ends up in.
+
+> Two false starts worth keeping. The first probe reported *"sites seen
+> while building: 0"* because it recorded sites AFTER the completion check
+> that frees them, and then because it looked only at in-progress projects
+> while the one it had started was merely planned. Both were the probe's
+> own ordering, not the game's.
+
+Tests: 98/98 across `test_earth_chunk_manager_raised_builds.gd` (+3),
+`test_earth_chunk_manager_city_hall_rising.gd`,
+`test_earth_chunk_manager_buildings.gd` and
+`test_earth_chunk_manager_structure_art.gd`.

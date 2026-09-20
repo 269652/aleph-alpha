@@ -16612,6 +16612,62 @@ func terrain_renderer() -> TerrainRenderer:
 ## part of the collision shape's own footprint rect being walked into --
 ## entry is the doorstep Enter-prompt (building_door_near), never a gap in
 ## the wall.
+## The GROUND a building stands on: the kerb round its plot and the yard
+## inside it, as children of `node` in that order (children paint in tree
+## order, so the kerb lies under the yard and both lie under the walls).
+##
+## One function rather than one copy per spawner, and that is the whole
+## point: a construction site raises exactly this too, from the same seed,
+## so the plot a cottage is built in is the plot it ends up standing in.
+## Reported live: *"The construction phase places the cottage at a different
+## position than the finished cottage ... please align it so it doesn't jump
+## that much"*. The house itself never moved -- measured both ways
+## (tools/probe_construction_alignment.gd, tools/probe_construction_jump.gd:
+## "sites whose building MOVED: 0"). What jumped was the PLOT: a cottage
+## stands in one of nine drawn gardens inside a drawn kerb, a site had
+## neither, so the whole visible extent changed shape the moment the roof
+## went on. Ground is staked out before the walls go up; it does not arrive
+## with the roof.
+##
+## See docs/concept/building.md, "The ground a building stands on, and the
+## kerb round its plot" and "A building's own yard, drawn behind it".
+func _add_plot_ground(
+	node: Node2D, building_id: String, footprint: Vector2i, seed_value: int
+) -> void:
+	var footprint_px := Vector2(footprint) * TerrainRenderer.TILE_SIZE
+	# Built from the same footprint_px the collision rect is built from --
+	# what is drawn IS the hitbox.
+	var kerb := Sprite2D.new()
+	kerb.name = "FootprintKerb"
+	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
+	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	kerb.position = Vector2(0, -footprint_px.y * 0.5)
+	node.add_child(kerb)
+
+	# Seeded from the building's own seed through BuildingCatalog's own
+	# salts, so two farmhouses in a village differ and one looks the same on
+	# every reload. A building with no yard declared grows no node at all.
+	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, seed_value)
+	if yard_sheet.is_empty():
+		return
+	# Scaled to the WHOLE plot, exactly as the kerb is, not to the narrower
+	# share the house itself is drawn at (BuildingCatalog.PLOT_MARGIN_SHARE).
+	var yard_texture := _illustrated_structure_sprite.plot_background_texture(
+		String(yard_sheet["path"]), int(yard_sheet["columns"]), int(yard_sheet["rows"]),
+		int(yard_sheet["row"]), int(yard_sheet["column"]),
+		TerrainRenderer.ART_TILE_SIZE, footprint, String(yard_sheet["grid"])
+	)
+	if yard_texture == null:
+		return
+	var yard := Sprite2D.new()
+	yard.name = "Yard"
+	yard.texture = yard_texture
+	yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	# A plot-sized picture centred on the plot's centre.
+	yard.position = Vector2(0, -footprint_px.y * 0.5)
+	node.add_child(yard)
+
+
 func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record: Dictionary) -> void:
 	var building_id: String = record["id"]
 	var footprint := BuildingCatalog.footprint_of(building_id)
@@ -16624,52 +16680,7 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	node.name = "Building"
 	node.position = bottom_centre
 
-	# The kerb first, so it lies on the ground UNDER the building rather
-	# than as a box drawn round its walls (children paint in tree order).
-	# Built from the same footprint_px the collision rect below is built
-	# from -- see docs/concept/building.md, "The ground a building stands
-	# on, and the kerb round its plot": what is drawn IS the hitbox.
-	var kerb := Sprite2D.new()
-	kerb.name = "FootprintKerb"
-	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
-	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
-	kerb.position = Vector2(0, -footprint_px.y * 0.5)
-	node.add_child(kerb)
-
-	# The yard the building stands in, between the kerb and the house: on the
-	# ground the kerb marks out, under the walls (children paint in tree
-	# order). A woodpile, a barrel, a bench, a beaten path -- none of it in
-	# the building's own sheet, which draws the house alone. See
-	# docs/concept/building.md, "A building's own yard, drawn behind it".
-	#
-	# Seeded from the building's own seed through BuildingCatalog's own
-	# salts, so two farmhouses in a village differ and one looks the same on
-	# every reload. A building with no yard declared grows no node at all.
-	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
-	if not yard_sheet.is_empty():
-		# Scaled to the WHOLE plot, exactly as the kerb above is, not to the
-		# narrower share the house itself is drawn at
-		# (BuildingCatalog.PLOT_MARGIN_SHARE). It was drawn at the house's
-		# width, and at that size it sat entirely inside the house's own
-		# silhouette: reported live as *"farm houses don't use the 3x2
-		# background image as background..."*, measured at 14.6% of the
-		# yard's opaque pixels reaching the screen
-		# (tools/probe_building_yard.gd).
-		var yard_texture := _illustrated_structure_sprite.plot_background_texture(
-			String(yard_sheet["path"]), int(yard_sheet["columns"]), int(yard_sheet["rows"]),
-			int(yard_sheet["row"]), int(yard_sheet["column"]),
-			TerrainRenderer.ART_TILE_SIZE, footprint, String(yard_sheet["grid"])
-		)
-		if yard_texture != null:
-			var yard := Sprite2D.new()
-			yard.name = "Yard"
-			yard.texture = yard_texture
-			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
-			# The plot's own rect, the same one the kerb and the collision
-			# shape are built from -- a plot-sized picture centred on the
-			# plot's centre.
-			yard.position = Vector2(0, -footprint_px.y * 0.5)
-			node.add_child(yard)
+	_add_plot_ground(node, building_id, footprint, int(record["seed"]))
 
 	var sprite := Sprite2D.new()
 	sprite.name = "Art"
@@ -19911,6 +19922,10 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 		var footprint_px := Vector2(footprint) * TerrainRenderer.TILE_SIZE
 		var top_left_px := Vector2(chunk_coord * CHUNK_SIZE + project.origin) * TerrainRenderer.TILE_SIZE
 		node.position = top_left_px + Vector2(footprint_px.x * 0.5, footprint_px.y)
+		# The plot before the walls: the same kerb and the same seeded yard
+		# the finished building gets, from the same seed, so nothing about
+		# the ground changes when the roof goes on (see _add_plot_ground).
+		_add_plot_ground(node, building_id, footprint, seed_value)
 		var sprite := Sprite2D.new()
 		sprite.name = "Stage"
 		node.add_child(sprite)

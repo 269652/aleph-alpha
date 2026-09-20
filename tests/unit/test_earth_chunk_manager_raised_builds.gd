@@ -286,3 +286,118 @@ func _first_water_cell():
 			if manager.is_water_at_global(g.x, g.y):
 				return g
 	return null
+
+
+# -- the site stands in the plot the house will stand in --------------------
+#
+# Reported live: *"The construction phase places the cottage at a different
+# position than the finished cottage ... please align it so it doesn't jump
+# that much"*.
+#
+# The house does NOT move, and that was measured before anything was
+# changed. tools/probe_construction_alignment.gd: every stage and the
+# finished sheet are bottom-anchored on the plot line and centred on it
+# (content bottom 0.0 for all of them, 21x21 world units against 21x22).
+# tools/probe_construction_jump.gd drove a real project to completion in a
+# real village: "sites whose building landed exactly where the site stood:
+# 1, sites whose building MOVED: 0".
+#
+# What jumps is the PLOT. A cottage now stands in one of nine drawn gardens
+# (BuildingCatalog._BACKGROUND_SHEETS' cottage_bg_overlay) inside a drawn
+# kerb, and a construction site had neither -- so the moment the roof went
+# on, a whole 2x2 garden and its kerb appeared at once, and the thing's
+# visible extent changed shape under the player's eye.
+#
+# The ground a building stands on belongs to the PLOT, not to the house: it
+# is staked out before the walls go up and does not arrive with the roof.
+
+
+func _site_children(node: Node2D) -> Array:
+	var names: Array = []
+	for child in node.get_children():
+		names.append(child.name)
+	return names
+
+
+func test_a_construction_site_stands_in_the_same_plot_the_house_will():
+	var project := _raise()
+	manager.advance_hired_build(project.id, 1.0, PlanRaising.HIRED_BUILDER_COUNT)
+	var site: Node2D = manager._construction_site_node_at(_chunk_coord, _origin)
+	assert_not_null(site, "precondition: a site stands while the build rises")
+
+	assert_true(
+		_site_children(site).has("FootprintKerb"),
+		"the plot is marked out from the start: %s" % str(_site_children(site))
+	)
+	assert_true(
+		_site_children(site).has("Yard"),
+		"a cottage's garden is its plot's, not its roof's: %s" % str(_site_children(site))
+	)
+
+
+## ...and the same plot, not merely a plot: the kerb and the yard sit where
+## the finished building's own do, so nothing shifts when the roof goes on.
+func test_the_sites_plot_is_where_the_finished_buildings_plot_is():
+	var project := _raise()
+	manager.advance_hired_build(project.id, 1.0, PlanRaising.HIRED_BUILDER_COUNT)
+	var site: Node2D = manager._construction_site_node_at(_chunk_coord, _origin)
+	assert_not_null(site)
+	# Read off BEFORE the build completes: completing frees the site node,
+	# and a reference held across it is a freed object, not a comparison.
+	var site_position: Vector2 = site.position
+	var site_kerb_position: Vector2 = (site.get_node("FootprintKerb") as Sprite2D).position
+	var site_kerb_size: Vector2 = (site.get_node("FootprintKerb") as Sprite2D).texture.get_size()
+	var site_yard_position: Vector2 = (site.get_node("Yard") as Sprite2D).position
+	var site_yard_size: Vector2 = (site.get_node("Yard") as Sprite2D).texture.get_size()
+
+	manager.advance_hired_build(
+		project.id, _seconds_to_finish(), PlanRaising.HIRED_BUILDER_COUNT
+	)
+	var built: Node2D = _building_node_at(_origin)
+	assert_not_null(built, "precondition: the building really stands there now")
+
+	assert_eq(built.position, site_position, "the plot itself moved")
+	var built_kerb: Sprite2D = built.get_node("FootprintKerb")
+	assert_eq(built_kerb.position, site_kerb_position, "the kerb moved")
+	assert_eq(built_kerb.texture.get_size(), site_kerb_size, "the kerb changed size")
+	var built_yard: Sprite2D = built.get_node("Yard")
+	assert_eq(built_yard.position, site_yard_position, "the yard moved")
+	assert_eq(built_yard.texture.get_size(), site_yard_size, "the yard changed size")
+
+
+## The same garden, not just the same size one -- a cottage whose garden
+## changed the moment it was finished would jump just as visibly.
+func test_the_site_and_the_finished_house_stand_in_the_same_garden():
+	var project := _raise()
+	manager.advance_hired_build(project.id, 1.0, PlanRaising.HIRED_BUILDER_COUNT)
+	var site: Node2D = manager._construction_site_node_at(_chunk_coord, _origin)
+	var site_yard: PackedByteArray = (
+		(site.get_node("Yard") as Sprite2D).texture.get_image().get_data()
+	)
+
+	manager.advance_hired_build(
+		project.id, _seconds_to_finish(), PlanRaising.HIRED_BUILDER_COUNT
+	)
+	var built: Node2D = _building_node_at(_origin)
+	var built_yard: PackedByteArray = (
+		(built.get_node("Yard") as Sprite2D).texture.get_image().get_data()
+	)
+
+	assert_true(site_yard == built_yard, "the garden changed when the roof went on")
+
+
+## The node standing for a finished building at `origin_local`, or null.
+func _building_node_at(origin_local: Vector2i) -> Node2D:
+	var g: Vector2i = _global(origin_local)
+	var expected := Vector2(g) * float(TerrainRenderer.TILE_SIZE)
+	for child in entities_parent.get_children():
+		if child.name != "Building":
+			continue
+		var footprint: Vector2i = BuildingCatalog.footprint_of(BLUEPRINT)
+		var bottom_centre := expected + Vector2(
+			float(footprint.x) * TerrainRenderer.TILE_SIZE * 0.5,
+			float(footprint.y) * TerrainRenderer.TILE_SIZE
+		)
+		if (child as Node2D).position.is_equal_approx(bottom_centre):
+			return child
+	return null
