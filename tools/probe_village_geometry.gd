@@ -156,19 +156,37 @@ func _report_hut_sites(chunk_coord: Vector2i) -> void:
 	print("    %d candidate origin(s) in reach of the water" % in_reach)
 	for why in reasons:
 		print("      %-34s x%d   e.g. %s" % [why, reasons[why], str(examples[why])])
-	# And the counterfactual the fix turns on: the fence goes in with the
-	# water and the hut goes up afterwards, so every site on the ring is
-	# lost to a rail. Raising the hut FIRST would let the frame go round it
-	# the way it already goes round a farmhouse -- so the number that
-	# matters is how many candidates ONLY the rails refuse.
-	var only_rails := 0
+	# And the counterfactual the candidate fix turns on: the fence goes in
+	# WITH the water and the hut goes up afterwards, so every site on the
+	# ring is lost to a rail before the hut pass ever looks. Raising the
+	# hut first would let the frame go round it, the way it already goes
+	# round a farmhouse standing in its field\'s ring.
+	#
+	# Recomputed rather than read off the tally above: that one reports the
+	# FIRST reason a site was refused, so a site whose first reason is a
+	# rail may still be refused by a street or a house on another of its
+	# cells. The number that decides the fix is how many sites are free
+	# once the rails, and ONLY the rails, are taken away.
+	var free_without_rails := 0
 	var example_cell = null
-	for why in reasons:
-		if String(why) == "the pond\'s own fence rail":
-			only_rails = int(reasons[why])
-			example_cell = examples[why]
-	print("    %d of them are refused by the pond\'s own rails ALONE%s" % [
-		only_rails, "" if example_cell == null else "   e.g. %s" % str(example_cell)
+	for y in range(low.y - margin, high.y + margin + 1):
+		for x in range(low.x - margin, high.x + margin + 1):
+			var origin := Vector2i(x, y)
+			var nearest := INF
+			for cell in _BuildingCatalog.footprint_cells(_VillagePond.HUT_BUILDING_ID, origin):
+				for wet in water:
+					nearest = minf(
+						nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i))
+					)
+			if nearest > float(_VillagePond.HUT_BANK_REACH_TILES):
+				continue
+			if not _free_ignoring_rails(chunk_coord, origin, doorstep, water):
+				continue
+			free_without_rails += 1
+			if example_cell == null:
+				example_cell = origin
+	print("    %d would be free if the frame went round the hut instead%s" % [
+		free_without_rails, "" if example_cell == null else "   e.g. %s" % str(example_cell)
 	])
 
 
@@ -198,3 +216,30 @@ func _why_refused(
 		if existing != "":
 			return "occupied: %s" % existing
 	return "free"
+
+
+## The same site test, with the pond\'s own rails treated as clear ground
+## and everything else left alone -- the world as it would be if the hut
+## went up before the frame.
+func _free_ignoring_rails(
+	chunk_coord: Vector2i, origin: Vector2i, doorstep: Vector2i, water: Array
+) -> bool:
+	var taken: Array = _BuildingCatalog.footprint_cells(_VillagePond.HUT_BUILDING_ID, origin)
+	taken.append(origin + doorstep)
+	for cell in taken:
+		var local: Vector2i = cell
+		if water.has(local):
+			return false
+		if local.x < 0 or local.y < 0 or local.x >= CHUNK_SIZE or local.y >= CHUNK_SIZE:
+			return false
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + local
+		if _manager.is_water_at_global(g.x, g.y):
+			return false
+		if not _manager.is_buildable_terrain_at(g.x, g.y):
+			return false
+		var existing: String = _manager.modification_at_global(g.x, g.y)
+		if _VillageFarm.is_fence_tile(existing):
+			continue  # the counterfactual: this rail would never have been laid
+		if existing != "":
+			return false
+	return true
