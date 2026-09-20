@@ -50,6 +50,25 @@ func button_stylebox(state: String) -> StyleBoxFlat:
 	return _flat(color, BUTTON_MARGIN, PANEL_BORDER, BORDER_WIDTH)
 
 
+## The background of a toggled control that is ON -- the armed slot in the
+## build palette, the open tab beside it.
+##
+## Its own stylebox rather than BUTTON_PRESSED, measured: the palette's
+## first render (tools/probe_build_palette.gd) drew the armed slot in
+## BUTTON_PRESSED, which differs from BUTTON_NORMAL by about 5% of value
+## and is simply invisible over this theme's dark card. Selection is what
+## ACCENT already means everywhere else in this UI, so it is carried in the
+## border -- thicker than an ordinary one -- over a background that LIFTS
+## out of the card rather than sinking into it. Pinned by
+## test_a_selected_control_is_marked_in_the_accent_not_by_a_shade.
+const BUTTON_SELECTED := Color(0.40, 0.34, 0.20, 1.0)
+const SELECTED_BORDER_WIDTH := 2
+
+
+func selected_button_stylebox() -> StyleBoxFlat:
+	return _flat(BUTTON_SELECTED, BUTTON_MARGIN, ACCENT, SELECTED_BORDER_WIDTH)
+
+
 ## The background for hover tooltips (e.g. InventoryWindow's item slots).
 ## Deliberately near-black rather than PANEL_BG -- a tooltip floats *above*
 ## everything else and needs to read as a distinct top layer, not blend into

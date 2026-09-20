@@ -158,3 +158,31 @@ static func detail_lines(
 		cost_text(blueprint_id, name_for_item),
 		labour_text(required_labor_hours),
 	]
+
+
+## Which tab holds this blueprint, "" for one no tab does (an unknown id,
+## and the empty selection planner mode clears to when it is left).
+##
+## The palette shows one category at a time, so a selection made anywhere
+## has to be able to open the tab that really contains it -- otherwise the
+## menu can sit showing one category while the armed slot is in another.
+## Read back off categories() rather than kept as a second id->tab table,
+## for the same reason the tabs read the catalogue's own lists.
+static func category_of(blueprint_id: String) -> String:
+	if blueprint_id == "":
+		return ""
+	for category in categories():
+		for offered in category["blueprint_ids"]:
+			if offered == blueprint_id:
+				return String(category["id"])
+	return ""
+
+
+## Which tab to open on, given whatever is armed. The tab holding it, or
+## the first tab when nothing is (or when the id belongs to no tab) -- a
+## menu showing no category at all is a menu showing nothing.
+static func category_to_show(selected_blueprint_id: String) -> String:
+	var found := category_of(selected_blueprint_id)
+	if found != "":
+		return found
+	return String(categories()[0]["id"])

@@ -213,3 +213,57 @@ func test_the_detail_opens_with_the_buildings_own_name():
 func test_an_unknown_blueprint_gets_no_card_rather_than_a_guessed_one():
 	assert_eq(BlueprintPaletteModel.detail_lines("not_a_building", 3.0), [])
 	assert_eq(BlueprintPaletteModel.slot_subtitle("not_a_building"), "")
+
+
+## Which tab a blueprint lives in. The palette shows one category at a
+## time, so a selection made anywhere -- restored from elsewhere, or set
+## before the player has touched a tab -- has to be able to open the tab
+## that actually contains it, rather than leaving the menu showing one
+## category while a slot in another is the armed one.
+func test_a_blueprint_knows_which_tab_it_lives_in():
+	assert_eq(BlueprintPaletteModel.category_of("house_medium"), BlueprintPaletteModel.CATEGORY_HOMES)
+	assert_eq(BlueprintPaletteModel.category_of("brewery"), BlueprintPaletteModel.CATEGORY_PRODUCTION)
+	assert_eq(BlueprintPaletteModel.category_of("warehouse"), BlueprintPaletteModel.CATEGORY_CIVIC)
+	assert_eq(
+		BlueprintPaletteModel.category_of(BuildPlan.PAVEMENT_BLUEPRINT_ID),
+		BlueprintPaletteModel.CATEGORY_ROADS
+	)
+
+
+func test_every_offered_blueprint_can_find_its_own_tab():
+	assert_gt(_flattened().size(), 0, "the premise: the palette offers something")
+	for blueprint_id in _flattened():
+		assert_ne(
+			BlueprintPaletteModel.category_of(blueprint_id), "",
+			"%s is offered by a tab that cannot be found again" % blueprint_id
+		)
+
+
+## Nothing selected is a real state (leaving planner mode clears the
+## selection), so it must not resolve to a tab and silently arm one.
+func test_nothing_selected_belongs_to_no_tab():
+	assert_eq(BlueprintPaletteModel.category_of(""), "")
+	assert_eq(BlueprintPaletteModel.category_of("not_a_building"), "")
+
+
+## Which tab the palette opens on. With something armed it is that
+## blueprint's own tab, so the menu never sits showing one category while
+## the armed slot is in another; with nothing armed it is the first tab,
+## because a menu showing no category at all is a menu showing nothing.
+func test_the_palette_opens_on_the_tab_holding_whatever_is_armed():
+	assert_eq(
+		BlueprintPaletteModel.category_to_show("blacksmith"),
+		BlueprintPaletteModel.CATEGORY_PRODUCTION
+	)
+	assert_eq(
+		BlueprintPaletteModel.category_to_show("city_hall"), BlueprintPaletteModel.CATEGORY_CIVIC
+	)
+
+
+func test_with_nothing_armed_the_palette_opens_on_its_first_tab():
+	var first := String(BlueprintPaletteModel.categories()[0]["id"])
+	assert_eq(BlueprintPaletteModel.category_to_show(""), first)
+	assert_eq(
+		BlueprintPaletteModel.category_to_show("not_a_building"), first,
+		"an id no tab holds falls back rather than showing nothing"
+	)

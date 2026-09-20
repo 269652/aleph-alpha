@@ -11,6 +11,7 @@ extends GutTest
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const World = preload("res://scenes/world.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
 
 
 func _source() -> String:
@@ -328,3 +329,74 @@ func test_the_wireframe_prompt_reads_both_keys_live():
 	assert_true(body.contains('keycode_for("primary_action")'))
 	assert_true(body.contains('keycode_for("secondary_action")'))
 	assert_true(body.contains("display_name_of("), "and it names what is planned there")
+
+
+# -- the build palette (docs/concept/planner_mode.md, "The build palette") --
+#
+# Asked directly, with a screenshot of ten identical text buttons in a row:
+# "Make the Planner / Building HUD more professional and more like Anno
+# 1806. Add Icons not only text".
+#
+# The menu's own behaviour -- tabs, icons, the armed slot, the footer -- is
+# BlueprintPaletteView's, driven for real in test_blueprint_palette_view.gd
+# rather than read out of World's source. What is pinned here is only what
+# is genuinely World's: that it builds that view rather than a menu of its
+# own, and that the two numbers the view is not allowed to invent arrive
+# from the same places the raising path reads them from.
+
+
+func test_the_palette_is_the_shared_view_not_a_menu_built_here():
+	var body := _function_body("_build_blueprint_palette")
+	assert_true(body.contains("BlueprintPaletteView.new()"), body)
+	assert_false(
+		_source().contains("func _palette_blueprint_ids"),
+		"the old flat list of text buttons is deleted rather than left beside it"
+	)
+	assert_false(
+		_source().contains("func _make_blueprint_slot"),
+		"and World builds no slots of its own"
+	)
+
+
+## The two numbers on a card come from the same calls the RAISING path
+## makes -- the real item catalog for material names, and the ledger's own
+## labour requirement -- so the menu cannot quote a price or a job size the
+## site then disagrees with.
+func test_the_card_quotes_the_same_cost_and_hours_the_site_will():
+	var body := _function_body("_build_blueprint_palette")
+	assert_true(body.contains("_item_catalog.display_name_of"), body)
+	assert_true(
+		body.contains("_chunk_manager.build_labor_hours_for("),
+		"the same requirement PlanRaising.is_laid_by_hand is asked about: %s" % body
+	)
+
+
+## hud.md's pillar 1: the palette carries meaning, so it wears the one
+## shared themed card rather than a look of its own.
+func test_the_palette_wears_the_shared_theme():
+	assert_true(_function_body("_build_blueprint_palette").contains("_ui_theme"))
+
+
+## Arming a blueprint is the player's choice reaching the cursor, so the
+## view announces and World decides -- the view never plans anything
+## itself (pillar 1).
+func test_arming_a_slot_reaches_the_rest_of_planner_mode():
+	var body := _function_body("_build_blueprint_palette")
+	assert_true(body.contains("blueprint_selected.connect(_on_blueprint_selected)"), body)
+	assert_true(
+		_function_body("_on_blueprint_selected").contains("_update_plan_cursor()"),
+		"and the cursor follows it"
+	)
+
+
+## Leaving planner mode clears the selection (_apply_view_mode's own rule),
+## so the palette has to be told, or a slot is left looking stuck down over
+## an unarmed cursor.
+func test_what_the_palette_says_is_armed_clears_with_the_selection():
+	var body := _function_body("_apply_view_mode")
+	assert_true(body.contains('_selected_blueprint = ""'), "the premise: it still clears")
+	assert_true(body.contains("_update_palette_selection()"), body)
+	assert_true(
+		_function_body("_update_palette_selection").contains("set_selected(_selected_blueprint)"),
+		"and it is told the state the rest of the mode acts on, not a second one"
+	)

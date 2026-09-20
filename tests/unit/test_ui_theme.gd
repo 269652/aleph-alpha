@@ -78,3 +78,48 @@ func test_build_theme_styles_tooltips_to_match_the_rest_of_the_ui():
 	assert_true(tooltip_sb is StyleBoxFlat)
 	assert_lt(tooltip_sb.bg_color.v, 0.35, "tooltip background should be dark, matching the rest of the UI")
 	assert_eq(theme.get_color("font_color", "TooltipLabel"), UiTheme.TEXT)
+
+
+## A toggled control that is ON must read as on at a glance.
+##
+## Measured, not assumed: the build palette's first render
+## (tools/probe_build_palette.gd) showed the armed slot and the open tab
+## drawn in BUTTON_PRESSED, which differs from BUTTON_NORMAL by about 5% of
+## value -- invisible over the card's own dark background. A menu whose
+## selection cannot be seen is a menu with no selection.
+##
+## So "selected" gets its own stylebox rather than a slightly darker fill:
+## the gold ACCENT the rest of this theme already uses for "this one",
+## carried as a thicker border, over a background that is LIGHTER than the
+## unselected one rather than darker.
+func test_a_selected_control_is_marked_in_the_accent_not_by_a_shade():
+	var selected := ui.selected_button_stylebox()
+	var normal := ui.button_stylebox("normal")
+	assert_eq(selected.border_color, UiTheme.ACCENT, "selection is the accent's job")
+	assert_gt(
+		selected.border_width_top, normal.border_width_top,
+		"and it is drawn thicker than an ordinary border"
+	)
+	assert_gt(
+		selected.bg_color.v, normal.bg_color.v,
+		"a selected control lifts out of the card rather than sinking into it"
+	)
+
+
+## The whole point of the change: selected must be further from normal than
+## pressed ever was, or it is the same invisible difference with a new name.
+func test_selected_is_further_from_normal_than_the_old_pressed_shade_was():
+	var normal := ui.button_stylebox("normal")
+	var selected := ui.selected_button_stylebox()
+	var pressed := ui.button_stylebox("pressed")
+	assert_gt(
+		absf(selected.bg_color.v - normal.bg_color.v),
+		absf(pressed.bg_color.v - normal.bg_color.v),
+		"the measured 5% that could not be seen is the floor to beat"
+	)
+
+
+func test_a_selected_control_keeps_the_rest_of_the_themes_shape():
+	var selected := ui.selected_button_stylebox()
+	assert_eq(selected.corner_radius_top_left, UiTheme.CORNER_RADIUS)
+	assert_eq(selected.content_margin_left, UiTheme.BUTTON_MARGIN)
