@@ -21,6 +21,11 @@ const LON := 12.7
 const OUT_DIR := "res://tools/construction_stage_renders"
 const VIEW := Vector2i(900, 360)
 const STAGES: Array[float] = [0.0, 0.25, 0.5, 0.75, 0.99]
+## ...and one more slot, holding the FINISHED house, so "does it jump when
+## it completes" can be read off the same strip rather than argued about.
+## Reported live: "The construction phase places the cottage at a different
+## position than the finished cottage".
+const FINISHED_SLOT := true
 const BUILDING_ID := "house_small"
 
 const Player = preload("res://scenes/player.gd")
@@ -66,9 +71,10 @@ func _init() -> void:
 		floori(float(tile.x) / CHUNK_SIZE), floori(float(tile.y) / CHUNK_SIZE)
 	)
 	var footprint := BuildingCatalog.footprint_of(BUILDING_ID)
-	var row := _a_clear_row(manager, chunk_coord, footprint, STAGES.size())
+	var slots: int = STAGES.size() + (1 if FINISHED_SLOT else 0)
+	var row := _a_clear_row(manager, chunk_coord, footprint, slots)
 	if row.is_empty():
-		print("no clear row of %d sites in this chunk" % STAGES.size())
+		print("no clear row of %d sites in this chunk" % slots)
 		quit()
 		return
 
@@ -83,6 +89,14 @@ func _init() -> void:
 		# of one -- what a settlement with a single spare hand really has.
 		manager._sync_construction_worker(chunk_coord, project, 1.0)
 		print("stage %.2f at %s" % [STAGES[i], origin])
+	if FINISHED_SLOT:
+		var finished_origin: Vector2i = row[row.size() - 1]
+		var finished_tile: Vector2i = chunk_coord * CHUNK_SIZE + finished_origin
+		manager.place_building(
+			chunk_coord, finished_origin, BUILDING_ID, Vector2i(0, 1),
+			manager._house_site_seed(chunk_coord, finished_tile, BUILDING_ID), "", "", 0
+		)
+		print("FINISHED at %s" % finished_origin)
 	await process_frame
 
 	var first: Vector2i = chunk_coord * CHUNK_SIZE + row[0]
@@ -150,4 +164,17 @@ func _report_sizes(manager, chunk_coord: Vector2i, row: Array) -> void:
 			STAGES[i], sprite.texture.get_width() * sprite.scale.x,
 			sprite.texture.get_height() * sprite.scale.y,
 			BuildingCatalog.footprint_of(BUILDING_ID).x * TerrainRenderer.TILE_SIZE,
+		])
+	# ...and the FINISHED house beside them, which is the comparison the
+	# report is actually about.
+	var finished_origin: Vector2i = row[row.size() - 1]
+	for child in manager._entities_parent.get_children():
+		if child.name != "Building":
+			continue
+		var art = child.get_node_or_null("Art")
+		if art == null:
+			continue
+		print("  FINISHED   drawn %.1f x %.1f world units at node y=%.1f, art offset y=%.1f" % [
+			art.texture.get_width() * art.scale.x, art.texture.get_height() * art.scale.y,
+			child.position.y, art.position.y
 		])
