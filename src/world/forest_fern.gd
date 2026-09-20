@@ -61,6 +61,13 @@ const SPREAD_PER_TICK := 1
 ## three use sites, because "which ground is a fern's" is one decision.
 const HOME_BIOME := "forest"
 
+## Growth at or above which a clump is a full stand: tall enough to hide a
+## small creature (see is_shelter). Maturity ITSELF rather than a second
+## number kept in step with it -- a separate threshold would be one more
+## thing that could drift away from what "mature" means everywhere else in
+## this file.
+const SHELTER_GROWTH := 1.0
+
 var _width: int
 var _height: int
 var _biome: PackedStringArray
@@ -120,6 +127,23 @@ func has_fern(cell: Vector2i) -> bool:
 
 func get_growth(cell: Vector2i) -> float:
 	return _patches.get(cell, 0.0)
+
+
+## Whether this cell is COVER -- the one question the creature code asks, so
+## nothing in the ethogram needs to know what a fern is (docs/concept/
+## ferns.md, "Bracken is cover"). A prey animal crossing open forest floor
+## is exposed; the same animal in a full stand is not.
+##
+## Only a MATURE clump shelters. A frond that has not unrolled hides
+## nothing, and tying cover to growth is what makes the understorey a layer
+## that establishes over time rather than a flag set at worldgen -- the same
+## reason _step_spread starts a new clump at 0.0 rather than at 1.0.
+##
+## Reads straight off the growth map, so everything that already takes a
+## fern away -- graze, block_cells -- takes its cover with it for free,
+## rather than through a second thing to keep in step.
+func is_shelter(cell: Vector2i) -> bool:
+	return _patches.get(cell, 0.0) >= SHELTER_GROWTH
 
 
 ## Marks `cells` as built on: whatever fern stood there is gone, and

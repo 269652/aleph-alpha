@@ -155,6 +155,32 @@ moved to the module that owns keying so there is one of it rather than two.
   which is the only evidence that the bend is really live rather than
   merely wired.
 
+### Bracken is cover
+
+Asked for directly, choosing between a fern that is only decoration, one
+that is ground cover, and one that also shelters: *"Ground cover + shelter
+for wildlife"*.
+
+This is the half that makes bracken worth simulating rather than drawing. A
+prey animal crossing open forest floor is exposed; the same animal in a full
+stand is not. `ForestFern.is_shelter(cell)` is the single question the
+creature code asks, so nothing in the ethogram needs to know what a fern is
+— only that a cell shelters or does not.
+
+Two decisions inside that one question:
+
+- **Only a MATURE clump shelters.** A frond that has not unrolled hides
+  nothing, and tying cover to growth is what makes the understorey a layer
+  that establishes over time rather than a flag set at worldgen — the same
+  reason the spread step starts a new clump at `0.0` rather than at `1.0`.
+- **It reads straight off the growth map**, so everything that already takes
+  a fern away — `graze`, `block_cells` — takes its cover with it for free.
+  A second structure tracking "which cells are cover" would be one more
+  thing that could drift out of step with what is actually growing there.
+
+`SHELTER_GROWTH` is maturity itself rather than a second number kept beside
+it, for the same reason.
+
 ### Honest gaps
 
 - **A closed wood is all crown.** Measured in the same render: the frame a
