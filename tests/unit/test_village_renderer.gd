@@ -762,8 +762,21 @@ func test_landmarks_are_rendered_as_sprites_at_their_positions():
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	# Against the GROUNDED landmarks every villager reads, not the
+	# generator's raw plan. The renderer moves a landmark onto real ground
+	# before anything sees it (_grounded_landmarks), and now that the well
+	# stands on its 2x2's centre rather than on one cell's, plan and ground
+	# genuinely differ -- comparing to the plan only ever passed by
+	# coincidence. "At their positions" means the sprite stands where the
+	# settlement itself thinks the landmark is.
+	var known: Dictionary = {}
+	for node in spawned:
+		if node is NpcMarker:
+			known = node.landmarks
+			break
+	assert_false(known.is_empty(), "precondition: somebody knows where the landmarks are")
 	var drawn := _drawn_landmark_ids()
-	for landmark_id in settlement.landmarks:
+	for landmark_id in known:
 		if landmark_id == "stall":
 			continue
 		if not drawn.has(landmark_id):
@@ -771,7 +784,7 @@ func test_landmarks_are_rendered_as_sprites_at_their_positions():
 		var found := false
 		for node in spawned:
 			if node.get_meta("landmark_id", "") == landmark_id and node is Sprite2D:
-				if node.position == settlement.landmarks[landmark_id]:
+				if node.position == known[landmark_id]:
 					found = true
 		assert_true(found, landmark_id)
 
@@ -808,13 +821,20 @@ func test_spawned_npc_markers_know_the_settlements_shared_landmarks():
 		if node is NpcMarker and node.market_stand != null:
 			stands[node.market_stand.position] = true
 	var checked := 0
+	# One settlement, one answer -- compared BETWEEN villagers rather than
+	# against the generator's ungrounded plan, which the renderer moves a
+	# landmark off on purpose (_grounded_landmarks).
+	var shared: Dictionary = {}
 	for node in spawned:
 		if not (node is NpcMarker):
 			continue
 		checked += 1
 		for landmark_id in ["well", "gate"]:
+			if not shared.has(landmark_id):
+				shared[landmark_id] = node.landmarks.get(landmark_id)
+			assert_not_null(shared[landmark_id], "%s is known at all" % landmark_id)
 			assert_eq(
-				node.landmarks.get(landmark_id), settlement.landmarks[landmark_id],
+				node.landmarks.get(landmark_id), shared[landmark_id],
 				"%s is the whole settlement's" % landmark_id
 			)
 		assert_true(node.landmarks.has("stall"), "everybody knows where to trade")
@@ -3523,3 +3543,41 @@ func test_siting_and_derivation_never_disagree_about_an_origin():
 				"siting said %s at %s, derivation handed over %d cells"
 					% [str(sited), str(origin), derived.size()]
 			)
+
+
+## Reported live with the well in shot: *"The well is still placed partly on
+## streets ... it should be placed on a free 2x2 grass patch"*.
+##
+## "Still", because c2b78947 already sited it off the road -- and it really
+## does, with allow_road false and the whole 2x2 checked. What undid it is
+## ORDER. `_close_short_street_gaps` runs AFTER the landmarks are grounded
+## and paves every one- and two-tile hole it finds in a street row; a well
+## standing in such a hole is not `_is_occupied_local` to it, because a
+## landmark is a prop node and not a building or a modification. So the
+## village sites its well on clean grass and then paves it over.
+##
+## Measured with tools/_probe_well.gd before the fix: of the wells found in
+## real villages, one stood with TWO of its four cells turned to road, the
+## other with none -- which is exactly the signature of a hole that
+## happened to be under one well and not the other.
+func test_a_village_never_paves_over_its_own_well():
+	var paved_over: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		for node in spawned:
+			if not node.has_meta("landmark_id") or String(node.get_meta("landmark_id")) != "well":
+				continue
+			checked += 1
+			# The renderer's own answer for which cells it stands on --
+			# one source of truth, so this can never drift into checking a
+			# different 2x2 than the well occupies (which it did).
+			for cell in VillageRenderer.landmark_block_at(node.position, TILE_SIZE, "well"):
+				var mod: String = world.modification_at_global(cell.x, cell.y)
+				if mod != "" and TerrainRenderer.is_road_tile(mod):
+					paved_over.append("%s: well cell %s is %s" % [str(coord), str(cell), mod])
+	assert_gt(checked, 0, "precondition: real villages really raised a well")
+	assert_eq(paved_over.size(), 0, "%s" % str(paved_over.slice(0, 8)))
