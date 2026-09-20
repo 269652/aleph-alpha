@@ -93,13 +93,19 @@ and what is paid, and never mutates its inputs:
 
 - Only ids on the **buy list** are considered, worst-price-last so a
   merchant fills his cart with the valuable goods first.
-- He carries a finite `CART_CAPACITY` in whole units — a village with an
-  enormous surplus sells what fits, and the rest waits for the next visit.
-  This is what keeps a hoard from turning into a windfall.
-- Price per unit is the item's **farm-gate** price: deliberately *below*
-  what the same item sells for at a player-facing shop (`Shop.CATALOG`),
-  because the merchant's margin is his reason to exist. Test-pinned
-  against that catalog so the two can never invert.
+- He carries at least `CART_CAPACITY` in whole units, and what it takes to
+  pay the village its labour value
+  ([village_economy_balance.md](village_economy_balance.md) mechanism 2):
+  the fixed cart is a *floor* on a visit, not a ceiling on a village's
+  income, and a hoard still cannot become a windfall — what a hoard earns
+  above the labour value is its base value.
+- The **base** price per unit is the item's **farm-gate** price:
+  deliberately *below* what the same item sells for at a player-facing
+  shop (`Shop.CATALOG`). Test-pinned against that catalog so the two can
+  never invert. The *level* a village is paid at is that base times its
+  own labour index — `2 × wage ÷ per-capita output`, floored at the farm
+  gate — so a beam is still six logs whatever the index, and a village that
+  exports what it makes earns twice its wage bill.
 
 The settlement's market loses exactly the goods bought; its purse gains
 exactly the gold paid.
@@ -299,13 +305,28 @@ thing a village cannot do without:
 > cart comes again**.
 
 `SettlementSurplus.larder_reserve` holds that back across whatever food the
-village really has. The demand is `EstateConsumption.demand_for(census,
-cover_days, season)` — what this settlement's actual estates eat, in this
-actual season — and the cover is **derived, not picked**: he calls at most
-`VISITS_PER_DAY` times a day when a village is barely worth the detour, so
-`1 ÷ VISITS_PER_DAY` days is exactly the longest a village may have to wait
-between sales. Retuning how often he comes retunes what a village keeps, by
+village really has. The amount is the village's **minimum stock**
+(`SettlementSurplus.minimum_stock_for`,
+[village_economy_balance.md](village_economy_balance.md) mechanism 3): the
+granary's own real per-assessment draw over the cover, and the cover is
+**derived, not picked**: he calls at most `VISITS_PER_DAY` times a day when
+a village is barely worth the detour, so `cover_seconds()` — one visit's
+worth of his own day — is exactly the longest a village may have to wait
+between sales, and `cover_assessments()` is that on the clock the eating is
+measured on. Retuning how often he comes retunes what a village keeps, by
 itself.
+
+The first larder was `EstateConsumption.demand_for(census, 2.5 days,
+season)` — a basket priced on the 3600-second economy day handed a cover
+measured in 60-second lived days. Measured (`tools/probe_village_economy.gd`)
+it kept 25 units for ten households, two assessments of food, and the cart
+sold the shelves down to exactly that — 23, 25, 25 — every visit.
+
+The same reserve keeps the **woodpile** (`SettlementSurplus.
+minimum_fuel_for`): what the estates burn over the cover plus one whole
+unit, because `wood` is both the fuel every hearth burns and a good on
+this buy list, and a cart that carries the whole surplus otherwise strips
+it every visit.
 
 A flat per-household figure was tried on a parallel branch and is **not**
 what shipped: it shrinks as the village dies, which is a death spiral
@@ -484,9 +505,21 @@ built:
   herbalist's and a farmer's crops sellable — which they must be, or those
   trades earn the village nothing — put a village's own food on the cart.
   `SettlementSurplus.larder_reserve` holds back what this settlement's real
-  estates eat in this real season (`EstateConsumption.demand_for`) over a
-  cover of `1 ÷ VISITS_PER_DAY` days — the longest a village may wait
-  between sales, derived rather than picked.
+  estates eat over a cover of `1 ÷ VISITS_PER_DAY` days — the longest a
+  village may wait between sales, derived rather than picked. **Re-based
+  2026-09-20** on the granary's own draw over the cover in assessments
+  (`SettlementSurplus.minimum_stock_for`): the estate basket it first used
+  was priced on the 3600-second economy day, and kept two assessments of
+  food. See [village_economy_balance.md](village_economy_balance.md).
+- ✅ **The cart pays labour value** (2026-09-20). Asked for directly:
+  *"the price for goods when selling to the travel merchant needs to be
+  based on per capita work output... double the income through export
+  goods than it costs to pay all workers."* `MerchantVisit.price_index` is
+  the labour value (twice the wage bill since his last call) over the
+  surplus's base value, floored at the farm gate, and the cart carries
+  what it takes to pay it. Measured before: 20 gold a visit, drained the
+  same tick. Spec and measurement in
+  [village_economy_balance.md](village_economy_balance.md).
 - 🚧 **The faucet is open and the famine is not closed.** Measured: gold
   really flows now, where every sample used to read 0.0. A village can
   still die, and the remaining cause is the gap
@@ -495,8 +528,11 @@ built:
 - 🚧 **Food income is still not conditional on a sale.** A producer's take
   reaches the village as GOODS and is paid for only when a cart buys it,
   which is the honest loop — but a village still has to survive the gap
-  between visits, and the granary/purse depth that makes a bad week
-  survivable is not designed yet.
+  between visits. The granary depth is designed now (the minimum stock,
+  above) and so is the purse's other end (the living wage,
+  [village_economy_balance.md](village_economy_balance.md) mechanism 1);
+  a purse that runs dry between visits still pays nobody, and that is the
+  bad week this leaves in.
 - ⬜ Everything else in this doc is specified here first and implemented in
   the slices that follow; each entry moves to ✅/🚧 as it lands, and
   [progress.md](../progress.md) carries the ledger.

@@ -325,16 +325,38 @@ func test_the_needs_are_weighted_in_their_own_listed_order():
 
 const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 
 
-## One number, one meaning: a household reads its larder as full when the
-## village holds, per household, the food it never sells below.
-func test_a_full_larder_is_the_minimum_stock_per_household():
+## A household reads its larder as full with a DAY's meals in store: the
+## measured draw over the assessments in the day the village lives on --
+## the same sixty seconds its schedule, its ecosystem step, its settlement
+## step and its cart all run on. The card's own "feeds N of M" line reads
+## the same draw, so a village that feeds all its households with a day in
+## hand reads 100% here too.
+##
+## Deliberately NOT the cart's whole cover (the minimum stock, 2.5 days):
+## measured with the target at that (tools/probe_village_economy.gd), a
+## village holding a day or two of food read its households below the
+## subsistence floor and lost four of ten to the estate ladder's exodus
+## while every belly in it was full.
+func test_a_full_larder_is_a_lived_day_of_the_measured_draw():
 	assert_almost_eq(
 		HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET,
-		SettlementState.FOOD_PER_HOUSEHOLD * float(SettlementSurplus.cover_assessments()),
+		SettlementState.FOOD_PER_HOUSEHOLD * MerchantVisit.SECONDS_PER_DAY / SettlementState.ASSESSMENT_SECONDS,
 		0.0001
 	)
+
+
+## And a village that keeps its minimum stock reads full, with more than a
+## day in hand -- the two horizons agree in the direction that matters.
+func test_a_village_at_its_minimum_stock_reads_full():
+	for households in [1, 4, 10, 37]:
+		var per_household := float(SettlementSurplus.minimum_stock_for(households)) / float(households)
+		assert_true(
+			per_household >= HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET,
+			"%d households at their minimum stock read short" % households
+		)
 
 
 ## And it is several meals, not one: a household with one meal in store is

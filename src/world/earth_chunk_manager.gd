@@ -5109,7 +5109,30 @@ func _merchant_reserve_for(settlement_id: String, views: Array) -> Dictionary:
 		var larder := SettlementSurplus.larder_reserve(views, _merchant_food_ids(), minimum)
 		for item_id in larder:
 			reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
+	# And the woodpile: `wood` is the fuel every hearth burns AND a good on
+	# the buy list, so a cart that carries the whole surplus stripped it
+	# every visit (fuel 0.00, roster 10 -> 6, measured). The minimum stock
+	# is the whole subsistence basket, not food alone.
+	var fuel := SettlementSurplus.minimum_fuel_for(_fuel_burn_over_cover_for(settlement_id))
+	if fuel > 0:
+		reserved[VillageEstates.FUEL_ITEM_ID] = int(reserved.get(VillageEstates.FUEL_ITEM_ID, 0)) + fuel
 	return reserved
+
+
+## What this settlement's estates burn as firewood over the cart's cover
+## (MerchantVisit.cover_seconds), in this season -- the basket's own fuel
+## term on the economy day it is priced in. 0.0 for a settlement nobody
+## founded.
+func _fuel_burn_over_cover_for(settlement_id: String) -> float:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return 0.0
+	var demand := EstateConsumption.demand_for(
+		_household_store.estate_census(household_ids),
+		MerchantVisit.cover_seconds() / ConstructionCatchup.SECONDS_PER_DAY,
+		_season_cycle.season_at(_world_age_seconds)
+	)
+	return float(demand.get(VillageEstates.FUEL_ITEM_ID, 0.0))
 
 
 ## The food on the merchant's own buy list, in the order he would take it.

@@ -183,7 +183,8 @@ the level.
 
 **The cart carries what it takes.** When the index is above the floor,
 paying the village its labour value means taking the whole surplus, and
-he does. When the surplus is worth more than that at base, he takes enough
+he does — the whole surplus above the *minimum stock*, food and fuel
+alike (mechanism 3), which is why that stock had to cover the woodpile. When the surplus is worth more than that at base, he takes enough
 units to cover the labour value and never fewer than `CART_CAPACITY` — so
 the fixed cart is a floor on a visit, not a ceiling on a village's income,
 and a hoard still cannot become a windfall: what a hoard earns above the
@@ -221,7 +222,21 @@ comes again" — with the eating finally measured on the clock the cover is
 measured on. `SettlementSurplus.larder_reserve` spreads it across whatever
 food the village really has, unchanged.
 
-## Mechanism 4 — A full larder is the minimum stock, per household
+**And the woodpile.** The minimum stock is the whole *subsistence* basket,
+not food alone. `wood` is the fuel every hearth burns
+([village_estates.md](village_estates.md), mechanism 1) *and* a good on
+the buy list, and once the cart carried a village's whole surplus
+(mechanism 2) it stripped the pile every visit — measured: fuel
+satisfaction 0.00 at three of eight samples, and the roster fell from ten
+households to six through the estate ladder's exodus.
+`SettlementSurplus.minimum_fuel_for` keeps what the households burn over
+the cover (`EstateConsumption.demand_for` over the cover on the economy
+day it is priced in, in this season) rounded up, **plus one whole unit of
+shelf granularity**: the estate draw takes whole units off the pile, so a
+pile holding exactly the burn reads empty the moment its unit is taken.
+Ten cottagers burn a fifth of a log over a round and keep two.
+
+## Mechanism 4 — A full larder is a day's meals in store
 
 `HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET` was 4.0: one
 assessment's draw, from when the draw was 4. The draw is 1.2 now
@@ -229,14 +244,27 @@ assessment's draw, from when the draw was 4. The draw is 1.2 now
 target was never revisited, so "full larder" meant three and a third
 assessments of food for no reason anybody could state.
 
-It is **the minimum stock per household**: `FOOD_PER_HOUSEHOLD × 5` = 6.0,
-pinned to that derivation. One number, one meaning: a household reads its
-larder as full when the village holds the food it never sells below, and
-the same reading feeds the estate layer's food satisfaction, the
-wellbeing's food need, hunger's drag on productivity and the immigration
-gate. A village that keeps mechanism 3's reserve therefore reads 100%
-and stays there; a village eating faster than it grows reads below it,
-which is the truth.
+It is **a day's meals per household**: the measured draw over the two
+assessments in the day the village lives on — the same sixty seconds its
+schedule, its ecosystem step, its settlement step and its cart all run on
+— `FOOD_PER_HOUSEHOLD × 2` = 2.4, pinned to that derivation. The card's
+own "feeds N of M" line reads the same draw, so a village that feeds all
+its households with a day in hand reads 100% here too, and the same
+reading feeds the estate layer's food satisfaction, the wellbeing's food
+need, hunger's drag on productivity and the immigration gate.
+
+**Deliberately not the cart's whole cover.** The first cut made the target
+the minimum stock per household (mechanism 3, 6.0), on the appeal of one
+number with one meaning — and measured on the real village it was wrong:
+a village holding a day or two of food read its households below
+`EstateAscension`'s subsistence floor, and lost four of ten to the
+ladder's exodus while every belly in it was full. The estate layer reads
+food's satisfaction off *stock*, not off the flow of meals
+([village_estates.md](village_estates.md), known gaps), and a stock target
+that only a village at its full reserve can meet turns that known gap into
+an exodus. A day's meals is the horizon the village's own day gives it; a
+village that keeps its minimum stock still reads full, with more than a
+day in hand (test-pinned in both directions).
 
 ## Mechanism 5 — Households draw from the whole larder
 

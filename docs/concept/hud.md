@@ -501,8 +501,8 @@ tracked for the card's benefit:
 | population | households in the settlement, and how many are housed (`VillageCensus`) |
 | happiness | `HouseholdWellbeing.mean_productivity`, the same number `settlement_productivity` already scales build rates by |
 | worst need | the lowest of `HouseholdWellbeing`'s five real needs — food, shelter, work, income, community |
-| gold | the settlement's own guild chest (`guild_for_settlement`) |
-| food | village market stock against `FOOD_STOCK_PER_HOUSEHOLD_TARGET` |
+| gold | the settlement purse (`NpcEconomy.purse_of` on the live market) — the one the cart pays into and wages come out of ([village_economy_balance.md](village_economy_balance.md)) |
+| food | the settlement's food per household against `FOOD_STOCK_PER_HOUSEHOLD_TARGET`, a day's meals on the measured draw ([village_economy_balance.md](village_economy_balance.md) mechanism 4) |
 | building | what the growth ladder says this settlement owes itself next |
 
 **Happiness is shown with the reason beside it.** One blended percentage

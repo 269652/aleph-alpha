@@ -217,3 +217,22 @@ func test_the_minimum_stock_feeds_the_village_until_the_cart_comes_again():
 		var result: Dictionary = SettlementGranary.catchup({}, {}, stock, households)
 		stock["fish"] = int(stock["fish"]) + int(result["stock_delta"].get("fish", 0))
 	assert_eq(int(stock["fish"]), 0, "the cover is exactly the food, no more")
+
+
+## The minimum stock is the whole SUBSISTENCE basket, not food alone: the
+## fuel the households burn over the cover is held back too, plus ONE whole
+## unit -- the granularity of a shelf. The estate draw takes whole units off
+## the pile, so a pile holding exactly the burn reads empty the moment the
+## draw takes its unit, and a village is cold until spare hands cut more.
+## MEASURED without this (tools/probe_village_economy.gd, after the cart
+## began carrying a village's whole surplus): fuel satisfaction 0.00 at
+## three of eight samples, and the roster fell from ten households to six.
+func test_the_minimum_fuel_is_the_burn_over_the_cover_plus_one_whole_unit():
+	assert_eq(SettlementSurplus.minimum_fuel_for(0.21), 2)
+	assert_eq(SettlementSurplus.minimum_fuel_for(2.0), 3)
+	assert_eq(SettlementSurplus.minimum_fuel_for(2.4), 4)
+
+
+func test_a_village_that_burns_nothing_keeps_no_fuel():
+	assert_eq(SettlementSurplus.minimum_fuel_for(0.0), 0)
+	assert_eq(SettlementSurplus.minimum_fuel_for(-1.0), 0)

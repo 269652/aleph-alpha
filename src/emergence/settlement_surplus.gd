@@ -51,6 +51,31 @@ static func minimum_stock_for(household_count: int) -> int:
 	return SettlementGranary.subsistence_draw(household_count) * cover_assessments()
 
 
+## The granularity of a shelf: the estate draw takes WHOLE units off the
+## pile (EarthChunkManager._take_from_settlement_stock), so a pile holding
+## exactly what will be burned reads empty the moment the unit is taken.
+const SHELF_UNIT := 1
+
+
+## The other half of the minimum stock (docs/concept/village_economy_balance
+## .md mechanism 3): the FUEL a village keeps until the cart comes again --
+## what its households burn over the cover, rounded up, plus one whole unit
+## of shelf granularity. The burn itself is the caller's to read off the
+## real estate census (EstateConsumption.demand_for over the cover on the
+## economy day), because only the caller knows the season.
+##
+## MEASURED without it (tools/probe_village_economy.gd, once the cart began
+## carrying a village's whole surplus): `wood` is both the fuel every hearth
+## burns and a good on the buy list, so the cart stripped the pile every
+## visit, fuel satisfaction read 0.00 at three of eight samples, and the
+## roster fell from ten households to six through the estate ladder's
+## exodus. A village that burns nothing keeps nothing.
+static func minimum_fuel_for(burn_over_cover: float) -> int:
+	if burn_over_cover <= 0.0:
+		return 0
+	return int(ceil(burn_over_cover - 0.000001)) + SHELF_UNIT
+
+
 ## Every view added up, item_id -> units, for something that needs to price
 ## a settlement's whole holding.
 ##

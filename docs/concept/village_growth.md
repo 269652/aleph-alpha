@@ -342,9 +342,9 @@ pure, from real state passed in.
 
 | need | satisfied by | real source |
 |---|---|---|
-| `food` | the resident's own hunger, and the settlement's food stock per household | `NpcNeeds.hunger`, `SettlementFood` / `VillageMarket.stock` |
+| `food` | the resident's own hunger, and the settlement's food stock per household against `FOOD_STOCK_PER_HOUSEHOLD_TARGET` — the village's minimum stock per household ([village_economy_balance.md](village_economy_balance.md) mechanism 4) | `NpcNeeds.hunger`, `SettlementFood` / `VillageMarket.stock` |
 | `shelter` | having a house at all, and its capacity vs. household size | `BuildingCatalog.capacity_of` |
-| `income` | wallet balance against the local price of a meal | `Household.wallet`, `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` |
+| `income` | wallet balance against the local price of a meal — funded by the living wage every assessment ([village_economy_balance.md](village_economy_balance.md) mechanism 1) | `Household.wallet`, `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` |
 | `community` | how many civic/production rungs actually stand in the village | the ladder above, `_present_structure_ids_for_settlement_chunk` |
 | `work` | whether there is a post in this village for the household's own labour class | `VillageLabor.employment_for` ([village_estates.md](village_estates.md) mechanism 4) |
 

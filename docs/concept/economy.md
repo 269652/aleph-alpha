@@ -162,6 +162,25 @@ economy actually buys, and where a settlement's money comes from.
 Still open on this doc's own list: real values for raw materials, so the
 rest of what a player gathers can be sold.
 
+### Wages, and exports priced by labour — ✅ built (2026-09-20)
+
+[village_economy_balance.md](village_economy_balance.md) closes the loop
+the section above opened, from the report *"the city makes not enough
+money to pay each worker's income"*:
+
+- **Every household is paid a living wage** out of the settlement purse
+  every assessment — its keep (the measured draw at the local meal price)
+  and as much again to put by — whole coins, poorest first, no arrears.
+- **The merchant pays labour value.** His unit price is the farm-gate base
+  times `2 × wage ÷ per-capita output`, floored at the farm gate, so a
+  village that exports what it makes earns twice its wage bill; the cart
+  carries what that takes.
+- **A village keeps its minimum stock** — the real draw until the cart
+  comes again — and a household's larder reads full at exactly that.
+
+That answers, for the settlement side, this doc's last open question on
+wages. The price/exchange-rate design for *hiring* wages is still open.
+
 ### Open questions
 
 - Should premium currency ever be tradeable for regular currency between

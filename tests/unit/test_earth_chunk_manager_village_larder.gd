@@ -12,6 +12,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
 
 const CHUNK := Vector2i(4444, 4444)
 
@@ -97,3 +98,37 @@ func test_the_cart_never_takes_the_village_below_its_minimum_stock():
 				]
 			)
 	assert_true(visited, "the premise: a village with four hundred fish drew a cart")
+
+
+# -- and the fuel: the minimum stock is the whole subsistence basket ---------
+
+## The reserve the cart is handed holds back the fuel the households burn
+## over the cover, plus the one whole unit a shelf's granularity costs.
+func test_the_cart_is_handed_the_fuel_the_village_burns_as_its_reserve():
+	_found(10)
+	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 100)
+	var reserved: Dictionary = manager._merchant_reserve_for(_settlement_id, [_market().stock])
+	var burn: float = manager._fuel_burn_over_cover_for(_settlement_id)
+	assert_gt(burn, 0.0, "the premise: ten households burn something over a round")
+	assert_eq(int(reserved.get(VillageEstates.FUEL_ITEM_ID, 0)), SettlementSurplus.minimum_fuel_for(burn))
+
+
+## Through the step: the assessment the cart comes, the woodpile it leaves
+## is at least that.
+func test_the_cart_never_strips_the_woodpile():
+	_found(10)
+	_market().add_stock("bread", 9000)
+	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 100)
+	var visited := false
+	for _i in 12:
+		var purse_before: float = NpcEconomy.purse_of(_market())
+		_step()
+		if NpcEconomy.purse_of(_market()) > purse_before:
+			visited = true
+			assert_true(
+				_market().stock_of(VillageEstates.FUEL_ITEM_ID)
+					>= SettlementSurplus.minimum_fuel_for(manager._fuel_burn_over_cover_for(_settlement_id)),
+				"the cart left %d wood" % _market().stock_of(VillageEstates.FUEL_ITEM_ID)
+			)
+			break
+	assert_true(visited, "the premise: a village with a hundred wood drew a cart")
