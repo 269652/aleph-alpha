@@ -198,3 +198,69 @@ func test_normalize_frames_completes_quickly_for_one_real_band_of_frames():
 	slicer.normalize_frames(image, frames, Vector2i(64, 64), 60)
 	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
 	assert_lt(elapsed_ms, 200.0, "normalize_frames took %.0fms for one real band of frames" % elapsed_ms)
+
+
+# -- detect_rows: the horizontal counterpart of detect_frames ---------------
+#
+# detect_frames cuts a BAND of rows into frames by scanning for empty
+# columns. A sheet laid out as a real grid -- the apple sapling sheet is 5
+# growth stages down by 5 canopy frames across (see docs/concept/flora.md's
+# "Sapling phase") -- needs the other axis first: which bands of rows a
+# drawing occupies at all. The rows are NOT evenly spaced on that sheet (the
+# bands measure 122, 173, 215, 250 and 302 pixels tall, because the tree
+# gets bigger every stage), so they have to be found rather than assumed.
+
+func _banded_image(bands: Array, width: int, height: int) -> Image:
+	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	for band in bands:
+		for y in range(band[0], band[1]):
+			for x in range(width):
+				image.set_pixel(x, y, Color(0.2, 0.5, 0.2, 1.0))
+	return image
+
+
+func test_detect_rows_finds_the_bands_a_drawing_occupies():
+	var image := _banded_image([[2, 10], [16, 30], [40, 44]], 12, 50)
+	var rows := _slicer().detect_rows(image, 0, 12, 3)
+	assert_eq(rows.size(), 3, "three separated bands should be three rows")
+	assert_eq(rows[0], Rect2i(0, 2, 12, 8))
+	assert_eq(rows[1], Rect2i(0, 16, 12, 14))
+	assert_eq(rows[2], Rect2i(0, 40, 12, 4))
+
+
+## A stray mark thinner than a real row is not a row -- the same contract
+## min_frame_width gives detect_frames, on the other axis.
+func test_detect_rows_ignores_a_band_thinner_than_the_minimum():
+	var image := _banded_image([[2, 4], [16, 30]], 12, 40)
+	var rows := _slicer().detect_rows(image, 0, 12, 5)
+	assert_eq(rows.size(), 1, "a two-pixel stray is not a growth stage")
+	assert_eq(rows[0].position.y, 16)
+
+
+## Only the given columns are scanned, so one column of a grid can be read
+## on its own -- exactly what detect_frames' own top_y/bottom_y band does.
+func test_detect_rows_only_looks_inside_the_given_columns():
+	var image := Image.create(20, 20, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	for y in range(4, 8):
+		image.set_pixel(15, y, Color(0.2, 0.5, 0.2, 1.0))
+	assert_eq(_slicer().detect_rows(image, 0, 10, 2).size(), 0, "content outside the columns")
+	var rows := _slicer().detect_rows(image, 10, 20, 2)
+	assert_eq(rows.size(), 1)
+	assert_eq(rows[0], Rect2i(10, 4, 10, 4))
+
+
+## A pale, unsaturated divider counts as empty, the same way detect_frames
+## reads one -- which is what lets a row band be found on a sheet whose
+## background is still the delivered CHECKERBOARD, before any keying has
+## happened and while every pixel is opaque.
+func test_detect_rows_reads_a_pale_divider_as_empty():
+	var image := Image.create(8, 12, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.992, 0.992, 0.992, 1.0))  # the checker's light tone
+	for y in range(5, 9):
+		for x in range(8):
+			image.set_pixel(x, y, Color(0.2, 0.5, 0.2, 1.0))
+	var rows := _slicer().detect_rows(image, 0, 8, 2)
+	assert_eq(rows.size(), 1, "an opaque pale background is still background")
+	assert_eq(rows[0], Rect2i(0, 5, 8, 4))

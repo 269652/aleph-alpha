@@ -1822,9 +1822,9 @@ young apple in October wore the same green shoot as one in May, right up to
 the height where it handed over to a mature canopy that has worn all four
 seasons since the day it was drawn. A per-species sheet fixes both halves of
 that at once. `assets/sprites/trees/composite_apple_sapling.png` is the first:
-a 5 × 5 grid on an EVEN split of a 1254 × 1254 sheet, rows running smallest
-growth stage at the top to largest at the bottom, and columns running in
-exactly the order `IllustratedTree`'s mature canopy strip already runs --
+a 5 × 5 grid on a 1254 × 1254 sheet, rows running smallest growth stage at
+the top to largest at the bottom, and columns running in exactly the order
+`IllustratedTree`'s mature canopy strip already runs --
 `CANOPY_BARE`, `CANOPY_BLOSSOM`, `CANOPY_LEAF`, `CANOPY_TURNING`,
 `CANOPY_SNOW`. That is measured, not assumed: the mean colour of the bottom
 row's five cells reads (97, 75, 36) bare brown, (91, 104, 26) blossom, (54,
@@ -1835,12 +1835,27 @@ bottom). Reusing the canopy's own column constants rather than inventing a
 second season order is the point: a sapling and the mature tree it becomes
 pick their picture through the SAME index, so they cannot drift apart.
 
-**The grid is sliced per cell, not per sheet.** Every cell is cut on the even
-split and keyed on its OWN edges (`SpriteSheetSlicer.checkerboard_keyed` —
+**The grid is FOUND, not assumed — an even split would cut through four of
+the five stages.** The rows really are different heights, because the tree
+really does get bigger every stage: measured at 122, 173, 215, 250 and 302
+pixels, with gutters between them, against an even fifth of 250.8. So
+`SpriteSheetSlicer.detect_rows` finds the row bands first and `detect_frames`
+finds each row's columns within it — the same "the drawings are FOUND rather
+than assumed" principle `CompositeSheetSlicer` already applies to the mature
+sheets, and the reason a row detector exists at all now. Detection runs on the
+RAW sheet, before any keying, because the delivered checkerboard is pale and
+unsaturated, which is exactly what both detectors already read as background.
+A sheet whose rows do not all hold the same number of columns is not a grid
+and falls back to the shared strip rather than guessing which cell is missing.
+
+**Keying is per cell, and the cells are normalized together.** Each detected
+cell is cut and keyed on its own (`SpriteSheetSlicer.checkerboard_keyed` —
 the same delivered-checkerboard convention as the farmhouse yard overlay, at
-the same measured 253/213 tones), because a single flood over the whole sheet
-would stop dead at the first drawing and leave every interior cell's
-background standing. The 25 keyed cells are then normalized together, through
+the same measured 253/213 tones). Per cell rather than per sheet purely for
+the work saved: the flood seeds from the checker's darker tone anywhere, not
+only from an edge, so a single sheet-wide flood reaches every interior cell
+and gives the identical answer — it just walks a third more sheet to get
+there. The 25 keyed cells are then normalized TOGETHER, through
 `SpriteSheetSlicer.normalize_frames` at the same canvas and baseline the
 shared strip already uses, so ONE scale covers the whole grid: a stage-0 shoot
 really does come out smaller than a stage-4 sapling instead of every stage

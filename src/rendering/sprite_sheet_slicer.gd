@@ -215,6 +215,89 @@ func detect_frames(
 	return frames
 
 
+## The bands of rows that hold a drawing at all, between `left_x` and
+## `right_x`.
+##
+## detect_frames' own axis, turned ninety degrees: a row with nothing but
+## background in it is a gutter, and the runs of rows between gutters are the
+## bands. A sheet laid out as a real GRID needs this first -- run it over the
+## whole sheet to find the rows, then detect_frames within each one to find
+## that row's frames.
+##
+## Rows found rather than assumed, for the same reason detect_frames finds
+## columns: the apple sapling sheet's five growth stages measure 122, 173,
+## 215, 250 and 302 pixels tall, because the tree really does get bigger
+## every stage (see docs/concept/flora.md's "Sapling phase"). An even split
+## would cut through four of the five drawings.
+func detect_rows(
+	image: Image,
+	left_x: int,
+	right_x: int,
+	min_band_height: int = DEFAULT_MIN_FRAME_WIDTH,
+	min_gutter_height: int = DEFAULT_MIN_DIVIDER_WIDTH,
+	alpha_threshold: float = DEFAULT_ALPHA_THRESHOLD,
+	divider_gray_min: float = DEFAULT_DIVIDER_GRAY_MIN
+) -> Array[Rect2i]:
+	var bands: Array[Rect2i] = []
+	if image == null:
+		return bands
+	var left: int = clampi(left_x, 0, image.get_width())
+	var right: int = clampi(right_x, left, image.get_width())
+	if right <= left:
+		return bands
+
+	# Byte-array pass with the check inlined, exactly as detect_frames does
+	# it -- see that function, and chroma_keyed's own performance comment,
+	# for why.
+	var img: Image = image
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var width := img.get_width()
+	var height := img.get_height()
+	var data := img.get_data()
+	var alpha_threshold_byte := alpha_threshold * 255.0
+	var divider_gray_min_byte := divider_gray_min * 255.0
+
+	var start := -1
+	var empty_run := 0
+	for y in height:
+		var row_is_empty := true
+		for x in range(left, right):
+			var idx := (y * width + x) * 4
+			if float(data[idx + 3]) < alpha_threshold_byte:
+				continue  # transparent -- still empty, keep scanning the row
+			var r := data[idx]
+			var g := data[idx + 1]
+			var b := data[idx + 2]
+			if r < divider_gray_min_byte or g < divider_gray_min_byte or b < divider_gray_min_byte:
+				row_is_empty = false
+				break
+			var mx := maxi(maxi(r, g), b)
+			if mx == 0:
+				continue  # opaque black -- matches is_empty()'s own zero-max case
+			var mn := mini(mini(r, g), b)
+			if float(mx - mn) / float(mx) > DIVIDER_MAX_SATURATION:
+				row_is_empty = false
+				break
+		if row_is_empty:
+			empty_run += 1
+			continue
+		if start >= 0 and empty_run >= min_gutter_height:
+			var band_height := y - empty_run - start
+			if band_height >= min_band_height:
+				bands.append(Rect2i(left, start, right - left, band_height))
+			start = -1
+		empty_run = 0
+		if start < 0:
+			start = y
+	if start >= 0:
+		var last_height := height - empty_run - start
+		if last_height >= min_band_height:
+			bands.append(Rect2i(left, start, right - left, last_height))
+	return bands
+
+
 ## Each frame cropped to its drawing, scaled to fit `canvas_size`, and stood
 ## with its feet on `baseline_y`.
 ##
