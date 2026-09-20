@@ -2147,8 +2147,20 @@ func _a_producer_with_a_store(door: Vector2) -> NpcMarker:
 ## full. A producer only gathers during WORK blocks (NpcEconomy.step's own
 ## `is_working` gate) and CARRY_LIMIT is several whole units, so this is
 ## days of simulated time, not seconds.
+##
+## Their HUNGER is answered for them, for the same reason _stand_at_the_door
+## answers thirst and rest: a villager eats out of their own hands when they
+## are carrying food and not working (NpcEconomy._eat_from_the_load), and
+## this fixture's producer is seed 1, a HUNTER, whose take is meat. Measured:
+## a hunter's regional rate here is 0.0094 units/second while a hunger cycle
+## is 50 seconds, so they eat what they carry faster than they can catch it
+## and their hands never fill. That is correct behaviour -- it is the whole
+## of "a villager does not starve carrying food" -- and it is a fact about
+## a lone hunter standing still in a stub world, not about hauling, which is
+## what this test is for. The running-village probe measures the other half.
 func _work_until_full(stood: Vector2, steps: int = 4000) -> void:
 	for i in steps:
+		marker.economy.needs.satisfy(Ethogram.DRIVE_HUNGER)
 		marker.position = stood
 		marker._process(0.5)
 		if marker.economy.burden() > 0.0:
@@ -2180,6 +2192,26 @@ func _village_stock() -> float:
 	for item_id in marker.economy.market.stock:
 		total += float(marker.economy.market.stock[item_id])
 	return total
+
+
+## The fixture note on _work_until_full, as a measured fact rather than a
+## comment: this producer really does eat faster than they catch, so
+## answering their hunger is what makes the haul test about hauling.
+##
+## Stated as the RELATIONSHIP rather than the two numbers, so retuning
+## either the regional yield or the hunger cycle re-answers it honestly
+## instead of leaving a stale comment behind.
+func test_a_lone_hunter_in_this_stub_world_eats_faster_than_they_gather():
+	var world := StubWorld.new()
+	_a_producer_with_a_store(marker.home_position + Vector2(4000, 0))
+	var per_second: float = NpcProduction.new().yield_per_second(
+		marker.identity.occupation, world, marker.position
+	)
+	assert_gt(per_second, 0.0, "precondition: this region really does yield something")
+	assert_lt(
+		per_second * Starvation.hunger_cycle_seconds(), VillageMarket.FOOD_UNITS_PER_MEAL,
+		"one hunger cycle's catch must be less than one meal, or the fixture is lying"
+	)
 
 
 func test_a_villager_with_a_store_to_carry_to_actually_carries():
