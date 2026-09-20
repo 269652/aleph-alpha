@@ -464,3 +464,202 @@ func test_the_sequencer_runs_at_the_sheets_own_frame_rate():
 		IntroSplashSequencer.duration_seconds(), 5.0, 0.001,
 		"the last caption is 4.90s, so the run is five seconds"
 	)
+
+
+# -- the earth holds still where the sheet changes row ----------------------
+#
+# Reported live, after every earlier stabilisation pass had shipped: *"Can
+# you properly stabilize the intro animation? The earth should be scaled and
+# stabilised so there is no jitter and zooming"*.
+#
+# Measured before changing anything (tools/probe_intro_stability.gd): the
+# jitter is not spread through the sequence at all. Registering every
+# consecutive pair of frames, the 45 transitions INSIDE a contact-sheet row
+# move the picture by at most 1px and rescale it by at most 0.5%, while the
+# four transitions that CROSS a row boundary move it 4.5-9px and rescale it
+# by up to 5.5%. The earth shrinks about 4% per sheet row: relative to row
+# 1 it is drawn at 0.99, 0.95 and 0.89 in rows 2, 3 and 4.
+#
+# The art is a 10x5 contact sheet drawn by an image model, not a rendered
+# video cut into cells, and nothing made it draw the earth at one size
+# across all five rows. That is why no amount of fixing the crop WINDOW
+# (passes eight through twelve) ever removed this: the wobble is in the
+# picture, not in where it was cut.
+
+
+## The share of the brightest row's total light a row must carry to count as
+## part of the picture rather than as space around it.
+##
+## A brightness PROFILE rather than a limb scan, because a limb scan is what
+## went blind here. _globe_right_limb takes the rightmost pixel above 0.02
+## luminance anywhere in the frame -- and on this sheet the glow and the
+## light streak reach the frame's own right edge in essentially every frame,
+## so it returns the last column, saturated, whatever the art does. Its
+## companion mutation test passes (a blitted frame really does read as
+## moved) while the ruler cannot see the real art move at all: a ruler that
+## survives its own mutation test can still be blind on the data it is
+## pointed at.
+##
+## 0.15 measured against what it has to separate: the earth's own limb rows
+## carry 20-60% of the brightest row and space carries under 5%, so the
+## threshold sits in a wide gap rather than on a cliff.
+const _LIT_ROW_SHARE := 0.15
+
+## How many frames either side of a transition count as its neighbourhood.
+const _NEIGHBOURHOOD := 3
+
+## How much more a boundary transition may move the picture than its own
+## neighbourhood does, in pixels of top-plus-bottom edge movement.
+##
+## Three, not zero: the rows either side of a boundary are separate
+## drawings, so their limbs land on slightly different pixels however well
+## the two are matched, and the ruler quantises to whole rows at both edges.
+## Measured after the correction, the worst boundary clears its own
+## neighbourhood by 2; before it, the three that matter exceeded theirs by
+## 8, 12 and 10, so this is a long way from blunting the assertion.
+const _BOUNDARY_TOLERANCE := 3
+
+
+## The picture's own vertical extent: the first and last row carrying a real
+## share of the frame's light. Both edges, because the two answer different
+## questions -- they move together when the picture is displaced and apart
+## when it is rescaled, and this art does both.
+func _lit_band(texture: Texture2D) -> Vector2i:
+	var image := texture.get_image()
+	var rows := PackedFloat32Array()
+	rows.resize(image.get_height())
+	var brightest := 0.0
+	for y in image.get_height():
+		var total := 0.0
+		for x in image.get_width():
+			total += image.get_pixel(x, y).get_luminance()
+		rows[y] = total
+		brightest = maxf(brightest, total)
+	var threshold := brightest * _LIT_ROW_SHARE
+	var top := -1
+	var bottom := -1
+	for y in rows.size():
+		if rows[y] > threshold:
+			if top < 0:
+				top = y
+			bottom = y
+	return Vector2i(top, bottom)
+
+
+## How far the picture's two edges move across one transition.
+func _edge_movement(before: Vector2i, after: Vector2i) -> int:
+	return absi(after.x - before.x) + absi(after.y - before.y)
+
+
+## Whether the frame AFTER this transition begins a new row of the contact
+## sheet -- read off the sheet's own grid, not counted out by hand, so a
+## re-cut sheet moves these with it.
+func _crosses_a_sheet_row(transition: int) -> bool:
+	return (transition + 1) % IntroSplashSheet._COLUMN_LEFTS.size() == 0
+
+
+## The real assertion, and deliberately a LOCAL one: a transition that
+## crosses a row of the contact sheet may not move the picture more than the
+## transitions around it already do.
+##
+## Local rather than absolute because the earth genuinely moves in this
+## animation -- it approaches through the whole first second, so an absolute
+## "nothing may move more than 1px" would either fail on the approach or
+## have to be told where the approach ends, which is a fact about the art
+## that would go stale on the next swap. Comparing a boundary against its own
+## neighbours needs to know nothing about the art: during the approach the
+## neighbours move too, and during the long hold they do not.
+func test_the_picture_does_not_jump_where_the_sheet_changes_row():
+	var frames := sheet.generate_textures()
+	var bands: Array[Vector2i] = []
+	for frame in frames:
+		bands.append(_lit_band(frame))
+	var moves := PackedInt32Array()
+	for i in range(frames.size() - 1):
+		moves.append(_edge_movement(bands[i], bands[i + 1]))
+	var boundaries := 0
+	for i in moves.size():
+		if not _crosses_a_sheet_row(i):
+			continue
+		boundaries += 1
+		var local := 0
+		for j in range(i - _NEIGHBOURHOOD, i + _NEIGHBOURHOOD + 1):
+			if j < 0 or j >= moves.size() or j == i or _crosses_a_sheet_row(j):
+				continue
+			local = maxi(local, moves[j])
+		assert_lte(
+			moves[i], local + _BOUNDARY_TOLERANCE,
+			"frames %d->%d cross a sheet row and move the picture %dpx, against %dpx for the transitions around them" % [
+				i, i + 1, moves[i], local
+			]
+		)
+	assert_gt(boundaries, 0, "precondition: the sheet really has more than one row")
+
+
+## ...and the same ruler says the picture is not RESIZED there either.
+##
+## The test above compares where the picture's two edges ARE; this one
+## compares how far APART they are, which is the quantity a zoom moves and
+## a pan does not. Both are needed: the sheet's rows differ in both at once
+## (the earth is drawn about 4% smaller per row AND a few pixels higher),
+## and a correction that fixed only the height would leave a step in the
+## other.
+##
+## Local for the same reason, and for one more that is specific to this art:
+## the last three frames bloom into gold sparkles that fill the frame, so
+## the lit band genuinely grows by 15px there with nothing moving at all. An
+## absolute "the picture is always the same size" reading cannot tell that
+## from a zoom -- measured, it puts the spread over the second half at 19px
+## when 7 of those are the bloom. Comparing a boundary with its own
+## neighbours costs nothing there: the bloom is in the neighbours too.
+func test_the_picture_is_not_resized_where_the_sheet_changes_row():
+	var frames := sheet.generate_textures()
+	var heights := PackedInt32Array()
+	for frame in frames:
+		var band := _lit_band(frame)
+		heights.append(band.y - band.x)
+	var changes := PackedInt32Array()
+	for i in range(frames.size() - 1):
+		changes.append(absi(heights[i + 1] - heights[i]))
+	for i in changes.size():
+		if not _crosses_a_sheet_row(i):
+			continue
+		var local := 0
+		for j in range(i - _NEIGHBOURHOOD, i + _NEIGHBOURHOOD + 1):
+			if j < 0 or j >= changes.size() or j == i or _crosses_a_sheet_row(j):
+				continue
+			local = maxi(local, changes[j])
+		assert_lte(
+			changes[i], local + _BOUNDARY_TOLERANCE,
+			"frames %d->%d cross a sheet row and resize the picture by %dpx, against %dpx for the transitions around them" % [
+				i, i + 1, changes[i], local
+			]
+		)
+
+
+## And the ruler really would notice, on the REAL frames rather than on a
+## synthetic one: the same frame scaled down by a tenth must read as a
+## shorter band. Worth its own test precisely because this file already
+## carries a ruler that passes a mutation test and is blind anyway (see
+## _LIT_ROW_SHARE).
+func test_the_band_ruler_notices_a_frame_that_was_rescaled():
+	var frames := sheet.generate_textures()
+	var original := frames[frames.size() - 1].get_image()
+	var shrunk := Image.create(
+		original.get_width(), original.get_height(), false, original.get_format()
+	)
+	shrunk.fill(Color(0.0, 0.0, 0.0, 1.0))
+	var inner := original.duplicate() as Image
+	inner.resize(
+		int(original.get_width() * 0.9), int(original.get_height() * 0.9), Image.INTERPOLATE_BILINEAR
+	)
+	shrunk.blit_rect(
+		inner, Rect2i(Vector2i.ZERO, inner.get_size()),
+		Vector2i((original.get_width() - inner.get_width()) / 2, (original.get_height() - inner.get_height()) / 2)
+	)
+	var before := _lit_band(frames[frames.size() - 1])
+	var after := _lit_band(ImageTexture.create_from_image(shrunk))
+	assert_lt(
+		after.y - after.x, before.y - before.x,
+		"a frame drawn a tenth smaller must read as a shorter band, or the ruler cannot see zoom"
+	)
