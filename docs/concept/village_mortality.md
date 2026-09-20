@@ -156,6 +156,24 @@ as pillar 3 asks**: the worst-off villager reached 189 of 200 — eleven
 seconds from death — and then fell back to 102 as food arrived. That
 fallback IS the mechanic: the cart of grain saving somebody.
 
+Run four windows long, the famine actually closes, and the village
+survives it:
+
+```
+  seconds   roster   standing  hungriest market food  starved/win
+     1200       12         12       1.00          0    174/200
+     1500        7          7       1.00          0    117/200
+     1800        9          9       1.00          0    181/200
+     2400       13         13       1.00          0    181/200
+```
+
+Five villagers starve between 1200 and 1500 — the whole loop, end to end:
+they die, the roster drops, the village takes new households in, and the
+newcomers appear on the street. `standing` equals `roster` at **every
+single sample** across both runs, through five deaths and six arrivals,
+which is the strongest form of the claim mechanism 4 makes. The village
+ends larger than it started.
+
 A first, unfaithful cut of that probe stepped only the settlements and
 the villagers, so nothing in the village could ever GROW food, and it
 reported a total wipe-out. Recorded here because the number was wrong in
@@ -179,6 +197,17 @@ was fine.
   asked for.
 - ⬜ **An unloaded village neither starves nor buries.** The same honest
   limitation immigration already carries, for the same reason.
+- 🚧 **A village in permanent famine is still judged attractive.** Seen in
+  the same run and NOT introduced by this doc's work: `market food` sits
+  at 0 and `hungriest` at 1.00 from t=600 onward, while
+  `VillageImmigration` keeps admitting households — its gate reads
+  `_food_per_household`, which counts stock the villagers themselves
+  cannot eat. So a village can starve its people and draw more of them at
+  the same time. That is a food-chain question
+  ([village_warehouse.md](village_warehouse.md), where a related
+  "counted as food but unreachable" split was already fixed), not a
+  mortality one, and it is recorded here because this is where it was
+  measured.
 
 ## Interaction with other docs
 
