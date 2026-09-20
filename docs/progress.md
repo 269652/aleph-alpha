@@ -29286,6 +29286,22 @@ from a half-built project of its own.
 > described a square the game never lays. The probe asks the game's own
 > predicate now.
 
-Tests: 108/108 across `test_village_layout.gd`,
-`test_village_plaza_wiring.gd` and the new
-`test_village_square_ignores_dug_water.gd` (+9).
+✅ **A square costs a village frontage, and one test fixture was living on
+that slack.** `test_earth_chunk_manager_village_growth.gd` finds its own
+real village by scanning near Berlin for one that "laid its plaza and has
+houses". A square is eight columns of the main street no house may ever
+take, so villages that gained one lost frontage with it, and the first
+candidate moved from (674,117) to (656,117) — which has a square, has
+houses, and has room for exactly four more, while these tests grow a
+village one household at a time up to the ladder's last rung. The finder
+asks both questions now, with the margin derived from
+`BREWERY_MIN_HOUSEHOLDS` minus the founding roster rather than eyeballed,
+and `_spare_house_plots` counting purely (claiming each answer before
+asking again, nothing placed). Measured across the fourteen real settlement
+chunks the scan reaches (`tools/probe_village_frontage.gd`, kept): spare
+plots run from 1 to 15.
+
+Tests: 253/253 across `test_village_layout.gd`,
+`test_village_plaza_wiring.gd`, `test_village_renderer.gd` and the new
+`test_village_square_ignores_dug_water.gd` (+11); 33/33 in
+`test_earth_chunk_manager_village_growth.gd`.
