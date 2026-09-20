@@ -2107,3 +2107,120 @@ func test_a_producer_who_feeds_itself_from_its_work_does_not_starve():
 func test_a_villager_with_no_economy_never_starves():
 	marker._process(0.1)
 	assert_false(marker.is_queued_for_deletion())
+
+
+# -- hauling: the take reaches the village at the STORE DOOR ----------------
+#
+# docs/concept/village_warehouse.md mechanism 3. HAULING_CARRY_LIMIT was
+# 0.0 -- wired but switched off -- with its own note saying so: "Raising
+# this to NpcEconomy.CARRY_LIMIT is the whole of switching hauling back
+# on, once delivery is proven to complete in a running village rather than
+# in a unit test."
+#
+# This is the unit-test half of that proof. The running-village half is
+# tools/probe_village_famine.gd, which watches a real village's market and
+# its people's hunger.
+#
+# It could not have been caught before: "every marker built by a test sets
+# no warehouse_position, so carry_limit stayed 0 and every existing
+# assertion passed".
+
+const NpcProduction = preload("res://src/world/npc_production.gd")
+
+
+## A producer with a real store to carry to, standing far from its door.
+func _a_producer_with_a_store(door: Vector2) -> NpcMarker:
+	marker.identity = NpcIdentity.new(1)
+	assert_true(
+		NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(marker.identity.occupation),
+		"precondition: somebody who actually produces"
+	)
+	# Before setup_economy, which reads it to decide whether this villager
+	# carries at all.
+	marker.warehouse_position = door
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.setup_economy(VillageMarket.new())
+	return marker
+
+
+## Stands them still and lets them work whole days until their hands are
+## full. A producer only gathers during WORK blocks (NpcEconomy.step's own
+## `is_working` gate) and CARRY_LIMIT is several whole units, so this is
+## days of simulated time, not seconds.
+func _work_until_full(stood: Vector2, steps: int = 4000) -> void:
+	for i in steps:
+		marker.position = stood
+		marker._process(0.5)
+		if marker.economy.burden() > 0.0:
+			return
+
+
+## Stands them at the store door until the load goes down. More than one
+## frame: the behaviour kernel has to choose HAUL and the marker has to
+## register the arrival that answers it.
+func _stand_at_the_door(door: Vector2, steps: int = 200) -> void:
+	for i in steps:
+		# Their OTHER drives are answered for them, so the load is the
+		# pressing one. A villager standing still for days in a fixture
+		# with no well gets thirsty, and thirst rightly outranks a full
+		# pair of hands -- measured: the kernel chose `drink` every frame
+		# with the warehouse published and burden at 1.00. That is correct
+		# behaviour, and it is a fact about this fixture rather than about
+		# hauling, which is what the running-village probe is for.
+		marker.economy.needs.satisfy(Ethogram.DRIVE_THIRST)
+		marker.economy.needs.satisfy(Ethogram.DRIVE_REST)
+		marker.position = door
+		marker._process(0.1)
+		if marker.economy.carried_total() == 0.0:
+			return
+
+
+func _village_stock() -> float:
+	var total := 0.0
+	for item_id in marker.economy.market.stock:
+		total += float(marker.economy.market.stock[item_id])
+	return total
+
+
+func test_a_villager_with_a_store_to_carry_to_actually_carries():
+	_a_producer_with_a_store(marker.home_position + Vector2(400, 0))
+	assert_gt(marker.economy.carry_limit, 0.0, "hauling is still switched off")
+
+
+## The whole point of a warehouse: what a producer takes goes into their
+## HANDS, and reaches the village only when they walk it to the door.
+func test_a_producers_take_reaches_the_village_only_at_the_store_door():
+	var door := marker.home_position + Vector2(4000, 0)  # far out of reach
+	_a_producer_with_a_store(door)
+	var stood := marker.position
+	_work_until_full(stood)
+	assert_gt(marker.economy.carried_total(), 0.0, "their hands stayed empty")
+	assert_eq(_village_stock(), 0.0, "the take reached the market without ever being carried")
+
+	# ...and reaching the door is what puts it down.
+	_stand_at_the_door(door)
+	assert_gt(_village_stock(), 0.0, "they stood at the store door holding the load")
+	assert_eq(marker.economy.carried_total(), 0.0, "they kept hold of it")
+
+
+## The failure mode the switch-off note names: "producers that GATHER are
+## worse: _gather takes nothing more once the hands are full, so they stop
+## dead". Delivering has to let them work again.
+func test_a_producer_goes_back_to_work_after_delivering():
+	var door := marker.home_position + Vector2(4000, 0)
+	_a_producer_with_a_store(door)
+	var stood := marker.position
+	_work_until_full(stood)
+	assert_gt(marker.economy.burden(), 0.0, "precondition: their hands filled")
+
+	_stand_at_the_door(door)
+	assert_eq(marker.economy.burden(), 0.0, "precondition: they put it down")
+
+	var delivered := _village_stock()
+	for i in 4000:
+		marker.position = stood
+		marker._process(0.5)
+		if marker.economy.carried_total() > 0.0:
+			break
+	assert_gt(marker.economy.carried_total(), 0.0, "a producer who delivered never worked again")
+	assert_eq(_village_stock(), delivered, "the second load teleported in")

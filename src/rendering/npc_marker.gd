@@ -490,12 +490,18 @@ func setup_economy(market, household_wallet = null) -> void:
 ## every marker built by a test sets no warehouse_position, so carry_limit
 ## stayed 0 and every existing assertion passed.
 ##
-## The channel, the drive, the wiring, the carried load and all of their
-## tests stay exactly as they are. What is switched off is only the caller
-## that opts a REAL villager in. Raising this to NpcEconomy.CARRY_LIMIT is
-## the whole of switching hauling back on, once delivery is proven to
-## complete in a running village rather than in a unit test.
-const HAULING_CARRY_LIMIT := 0.0
+## **Switched on, 2026-09-20**, against the condition this note set for
+## itself: delivery is proven to complete, in a unit test (the round trip
+## and the return to work are pinned in test_npc_marker.gd's "hauling"
+## block) AND in a running village (tools/probe_village_famine.gd watches
+## a real market and its people's hunger).
+##
+## Why it had to be switched on: with it at 0.0 a harvest accumulated on
+## the farmhouse shelf and reached nobody. Measured on a real village --
+## 234 units of food across three farmhouses, hunger pinned at 1.00, the
+## worst-off villager 174 of 200 through the starvation window, and a
+## market holding nothing. The village was starving beside its own crop.
+const HAULING_CARRY_LIMIT := NpcEconomy.CARRY_LIMIT
 
 
 ## A villager with a store to carry to holds their take until they reach it;
