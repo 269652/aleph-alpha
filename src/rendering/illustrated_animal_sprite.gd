@@ -281,6 +281,81 @@ func faces_left(species: String) -> bool:
 	return _SHEETS[species].get("faces_left", false)
 
 
+## Actions whose row plays THROUGH once and then ends, rather than cycling
+## for as long as the creature keeps doing the thing. Every other action --
+## walk, eat, swim, drink, idle, and attack too -- is a STATE the creature
+## stays in, so its row loops; a flinch and a collapse are EVENTS, and a
+## looping flinch would leave a creature juddering for as long as it was
+## standing near whatever hit it.
+##
+## Declared here, on the art side, because being one-shot is a property of
+## the ROW, not of any one species' sheet: the day a wolf sheet grows a
+## hurt row it plays once for the same reason a boar's would.
+##
+## Neither has any FALLBACK (unlike swim -> walk, drink -> idle, idle ->
+## eat/walk frame 0 -- see has_action's own doc comment), and that is
+## deliberate rather than an oversight to fill in later. A flinch borrowed
+## from the walk cycle reads as a stumble, not as a hit landing; and a
+## death borrowed from a cycling row would never END, so the body would
+## never settle and the carcass that replaces it (see CreatureMarker._die)
+## would never land. Absent beats approximated for both: CreatureMarker
+## only enters these states when the art really exists, so a species
+## without them behaves exactly as it did before this path was wired.
+const ONE_SHOT_ACTIONS := ["hurt", "death"]
+
+## ...and of those, the ones that leave the body where the final frame put
+## it instead of running off the end. A flinch returns the creature to
+## whatever it was doing; a corpse stays down until the carcass replaces
+## it. Must be a subset of ONE_SHOT_ACTIONS -- a row that cycles has no
+## "last" frame to hold (pinned by
+## test_every_held_row_is_also_a_one_shot_row).
+const HOLDS_LAST_FRAME_ACTIONS := ["death"]
+
+
+## Every registered species, sorted. The registry IS the list: a sweep over
+## "every illustrated species" typed out by hand goes stale the moment a
+## sheet is added, which is the single most recurring source of silent
+## holes in this codebase.
+static func species_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for species in _SHEETS.keys():
+		ids.append(String(species))
+	ids.sort()
+	return ids
+
+
+## Which rows `species` REALLY has art for, read straight off its sheet's
+## own "<action>_bands" keys -- not restated anywhere, so a sheet that
+## grows a hurt_bands/death_bands key needs no second edit to be seen.
+##
+## Narrower than has_action on purpose: has_action also says yes to every
+## action a species merely COVERS through a fallback (wolf has no idle row
+## but idles off its eat cycle's frame 0). This is the honest "what did the
+## artist actually draw" answer.
+static func declared_actions(species: String) -> Array[String]:
+	var actions: Array[String] = []
+	if not _SHEETS.has(species):
+		return actions
+	var suffix := "_bands"
+	for key in Dictionary(_SHEETS[species]).keys():
+		var name := String(key)
+		if name.ends_with(suffix):
+			actions.append(name.substr(0, name.length() - suffix.length()))
+	actions.sort()
+	return actions
+
+
+## Whether `action`'s row plays through once (see ONE_SHOT_ACTIONS).
+static func plays_once(action: String) -> bool:
+	return ONE_SHOT_ACTIONS.has(action)
+
+
+## Whether `action`'s row stops on its final frame rather than running off
+## the end (see HOLDS_LAST_FRAME_ACTIONS).
+static func holds_last_frame(action: String) -> bool:
+	return HOLDS_LAST_FRAME_ACTIONS.has(action)
+
+
 ## Data-driven on whichever "<action>_bands" keys the species' sheet
 ## actually defines (see _SHEETS) -- a species can register any subset
 ## (horse currently has idle_bands + walk_bands but no eat_bands; deer/boar

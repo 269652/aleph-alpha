@@ -727,3 +727,111 @@ func test_apply_chroma_key_completes_quickly_at_real_sheet_resolution():
 		)
 	)
 
+
+
+# -- One-shot rows: hurt and death (docs/concept/monsters.md) ---------------
+#
+# The band lookup itself was already generic -- has_action and
+# _build_textures both key off "<action>_bands", so a sheet that declares
+# hurt_bands or death_bands slices with no new code at all. What a one-shot
+# row needs beyond that is the two things a CYCLE does not: it plays
+# THROUGH once rather than looping for as long as the creature keeps doing
+# it, and a death row HOLDS its final frame rather than snapping the body
+# back upright at frame 0. Both are declared here, on the art side, because
+# they are properties of the ROW, not of any one species' sheet.
+
+
+## The registry is the list. A sweep over "every illustrated species" that
+## is typed out by hand goes stale the moment a sheet is added -- the exact
+## recurring root cause this codebase keeps rediscovering -- so the sweeps
+## below ask the registry itself.
+func test_species_ids_reports_the_registry_not_a_hand_kept_list():
+	var ids := IllustratedAnimalSprite.species_ids()
+	for species in ids:
+		assert_true(sprite.has_species(species), "%s is listed but has_species rejects it" % species)
+	for species in ["horse", "deer", "boar", "sheep", "wolf", "alpaca"] + GERMANY_BOSS_SPECIES:
+		assert_true(ids.has(species), "%s is registered but species_ids omits it" % species)
+
+
+## Which rows a species' sheet REALLY declares, read off its own
+## "<action>_bands" keys rather than restated anywhere. This is what makes
+## the "every declared row slices" sweep below cover hurt/death
+## automatically the day an artist delivers them.
+func test_declared_actions_is_read_off_the_sheets_own_band_keys():
+	assert_eq(IllustratedAnimalSprite.declared_actions("horse"), ["eat", "idle", "walk"])
+	# Sheep/wolf declare no idle row of their own -- their idle is
+	# synthesized from the eat cycle's frame 0 (see has_action's fallback
+	# chain), which is exactly the difference between "declared" and
+	# "covered": has_action says yes to wolf/idle, this says no.
+	assert_eq(IllustratedAnimalSprite.declared_actions("wolf"), ["eat", "walk"])
+	assert_true(sprite.has_action("wolf", "idle"), "covered by fallback, just not declared")
+	# A boss sheet is walk-only; everything else it shows is a fallback.
+	assert_eq(IllustratedAnimalSprite.declared_actions("krampus"), ["walk"])
+	assert_eq(IllustratedAnimalSprite.declared_actions("nonexistent_species"), [])
+
+
+## Declaring a row is the WHOLE integration: no per-action branch exists or
+## is needed. Swept over the real registry so a hurt_bands/death_bands key
+## added later is covered by this test without anyone touching it.
+func test_every_declared_row_is_covered_and_slices_to_real_frames():
+	for species in IllustratedAnimalSprite.species_ids():
+		for action in IllustratedAnimalSprite.declared_actions(species):
+			assert_true(sprite.has_action(species, action), "%s/%s declared but not covered" % [species, action])
+			assert_gt(
+				sprite.generate_textures(species, action).size(),
+				0,
+				"%s/%s declared but sliced to nothing" % [species, action]
+			)
+
+
+## No species has hurt or death art yet -- and crucially, neither may
+## quietly BORROW another row the way swim/drink/idle do. A flinch built
+## from the walk cycle reads as a stumble rather than a hit, and a death
+## built from any cycling row would never end, so the body would never
+## settle. Both are better absent than approximated: CreatureMarker only
+## enters those states when the art really exists (see _begin_one_shot), so
+## this is also what keeps every creature in the game behaving exactly as
+## it did before the one-shot path was wired.
+func test_hurt_and_death_never_borrow_another_species_row():
+	for species in IllustratedAnimalSprite.species_ids():
+		assert_false(sprite.has_action(species, "hurt"), "%s must not borrow a hurt row" % species)
+		assert_false(sprite.has_action(species, "death"), "%s must not borrow a death row" % species)
+
+
+func test_a_missing_one_shot_row_slices_to_nothing_rather_than_a_wrong_one():
+	assert_eq(sprite.generate_textures("boar", "hurt"), [] as Array[ImageTexture])
+	assert_eq(sprite.generate_textures("boar", "death"), [] as Array[ImageTexture])
+
+
+## Exactly the two rows that play through once. Every other action is a
+## state the creature stays in for as long as it keeps doing the thing, so
+## its row cycles -- including "attack", which repeats for as long as the
+## fight lasts rather than being a single lunge.
+func test_only_hurt_and_death_play_once():
+	assert_true(IllustratedAnimalSprite.plays_once("hurt"))
+	assert_true(IllustratedAnimalSprite.plays_once("death"))
+	for action in ["walk", "idle", "eat", "swim", "drink", "attack"]:
+		assert_false(IllustratedAnimalSprite.plays_once(action), action)
+
+
+## And of those two, only death leaves the body where the last frame put
+## it. A flinch returns the creature to whatever it was doing; a corpse
+## stays down until the carcass replaces it (see CreatureMarker._die).
+func test_only_death_holds_its_last_frame():
+	assert_true(IllustratedAnimalSprite.holds_last_frame("death"))
+	assert_false(IllustratedAnimalSprite.holds_last_frame("hurt"))
+	for action in ["walk", "idle", "eat", "swim", "drink", "attack"]:
+		assert_false(IllustratedAnimalSprite.holds_last_frame(action), action)
+
+
+## Anything that holds its last frame must also be one-shot: a row that
+## cycles cannot have a "last" frame to hold. Pinned as a relationship
+## between the two lists rather than as two independently-typed sets, so
+## adding a row to HOLDS_LAST_FRAME_ACTIONS alone fails here instead of
+## silently producing a cycling action that clamps.
+func test_every_held_row_is_also_a_one_shot_row():
+	for action in IllustratedAnimalSprite.HOLDS_LAST_FRAME_ACTIONS:
+		assert_true(
+			IllustratedAnimalSprite.ONE_SHOT_ACTIONS.has(action),
+			"%s holds its last frame but is not declared one-shot" % action
+		)
