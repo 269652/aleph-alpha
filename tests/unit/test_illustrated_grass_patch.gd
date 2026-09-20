@@ -1902,3 +1902,73 @@ func test_different_seasons_still_get_different_atlas_textures():
 	assert_not_null(summer)
 	assert_not_null(winter)
 	assert_ne(summer, winter, "each season keeps its own sliced atlas")
+
+
+# -- how far a plant gives, per plant ----------------------------------------
+#
+# Asked for with brambles in mind: *"they should bend slightly when walked
+# over from the side"*. A cane is woody; a blade is not. The bend itself
+# stays ONE implementation (docs/concept/ferns.md's own pillar) and gains a
+# scale instead, so a caller that wants less gets less and everything else
+# is untouched.
+#
+# wind_strength could not do this: it deliberately does NOT scale the
+# walker's push (see its own uniform comment -- parting is the walker's
+# reaction, not the weather's), and "bend slightly when walked over" is
+# exactly the push.
+
+
+func test_the_bend_scale_defaults_to_no_change_at_all():
+	for uv in [Vector2(0.5, 1.0), Vector2(0.2, 0.6), Vector2(0.9, 0.3)]:
+		assert_almost_eq(
+			IllustratedGrassPatch.bend_offset(uv, 1.1, 0.4, 1.0, 1.0),
+			IllustratedGrassPatch.bend_offset(uv, 1.1, 0.4, 1.0),
+			0.000001, "grass must render byte-identically: %s" % str(uv)
+		)
+
+
+func test_a_smaller_scale_bends_less_everywhere():
+	for uv in [Vector2(0.5, 1.0), Vector2(0.2, 0.6), Vector2(0.9, 0.3)]:
+		var full: float = IllustratedGrassPatch.bend_offset(uv, 1.1, 0.4, 1.0, 1.0)
+		var quarter: float = IllustratedGrassPatch.bend_offset(uv, 1.1, 0.4, 1.0, 0.25)
+		assert_almost_eq(quarter, full * 0.25, 0.000001, str(uv))
+
+
+## It scales the WHOLE offset -- the wind and the walker's push together --
+## because a woody cane resists both. Checked with the wind alone and with
+## the push alone, so a scale that only reached one of them fails here.
+func test_it_scales_the_wind_and_the_push_alike():
+	var uv := Vector2(0.5, 1.0)
+	var wind_only: float = IllustratedGrassPatch.bend_offset(uv, 1.1, 0.0, 1.0, 0.25)
+	assert_almost_eq(wind_only, IllustratedGrassPatch.bend_offset(uv, 1.1, 0.0, 1.0, 1.0) * 0.25, 0.000001)
+	var push_only: float = IllustratedGrassPatch.bend_offset(uv, 0.0, 0.4, 0.0, 0.25)
+	assert_almost_eq(push_only, IllustratedGrassPatch.bend_offset(uv, 0.0, 0.4, 0.0, 1.0) * 0.25, 0.000001)
+
+
+## A root never moves, whatever the scale -- the one invariant the whole
+## bend is built on.
+func test_a_root_stays_put_at_any_scale():
+	for scale in [0.0, 0.25, 1.0]:
+		assert_almost_eq(
+			IllustratedGrassPatch.bend_offset(Vector2(0.5, 0.0), 1.1, 0.4, 1.0, scale),
+			0.0, 0.000001, "scale %s" % str(scale)
+		)
+
+
+## And the mesh half carries the same scale, or the geometry and the
+## per-pixel remainder would stop adding up to one curve.
+func test_the_mesh_half_carries_the_scale_too():
+	var uv := Vector2(0.5, 0.75)
+	assert_almost_eq(
+		IllustratedGrassPatch.mesh_bend_offset(uv, 1.1, 0.4, 1.0, 0.25),
+		IllustratedGrassPatch.mesh_bend_offset(uv, 1.1, 0.4, 1.0, 1.0) * 0.25,
+		0.000001
+	)
+
+
+## The shader has to have the knob too, or only the CPU mirror would obey it.
+func test_the_shader_declares_the_scale():
+	assert_true(
+		IllustratedGrassPatch.SHADER_CODE.contains("uniform float bend_scale"),
+		"the mirror cannot be honest about a uniform the shader does not have"
+	)

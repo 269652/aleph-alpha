@@ -45,6 +45,45 @@
    12-deep field -- `CARD_COUNT` trades a little volumetric density for
    headroom there (pinned by test, see Mechanism/History).
 
+## A plant is not rubber (2026-09-20)
+
+Reported live, for every plant at once: *"it bounces back too fast and
+also bending too fast giving the impression of rubber instead of natural
+plant"*, then *"for all plants"*.
+
+There was no TIME in the model at all. The shader's push term is a pure
+function of the walker's CURRENT distance, so a blade reached full lean
+the frame they came into range and stood upright again the frame they
+left — tracking them exactly, with no inertia and no settling. Zero
+damping is what rubber looks like.
+
+`PlantSway` puts real time into it, and asymmetric time: **0.18s to give,
+0.55s to come back**. That ratio is the decision rather than two tuning
+numbers — a stem is pushed over by a force and returns on its own
+stiffness alone, so it always returns more slowly than it went.
+
+- **Exponential, not linear**, so the response is frame-rate independent:
+  the fraction covered depends on how much TIME passed, not how many
+  frames it took. A linear step bends faster on a faster machine, which is
+  the kind of bug that only shows up on somebody else's computer.
+- **Clamped**, so a stalled frame lands ON the walker instead of swinging
+  through them and back.
+- **One eased point, every plant.** Grass, ferns, wheat and brambles all
+  read the same lagged position, pushed from `EarthChunkManager`. Two
+  plants leaning toward different places would be worse than both
+  snapping.
+- **The first placement snaps**, because there is nothing to ease from.
+  Found by a test rather than by inspection: easing in from the "no
+  walker" sentinel would take several seconds to cross a hundred thousand
+  units, leaving the opening seconds of a fresh session with no parting at
+  all.
+
+**The honest limit**: one point cannot express a plant still settling
+while the walker presses a DIFFERENT one. That needs a real spring per
+card, and per-card state is exactly what the banded MultiMesh design
+exists to avoid. What this buys is the timing; what it does not buy is
+independence.
+
 ## Mechanism
 
 `IllustratedGrassPatch` selects a tile from the delivered 10×10 illustrated

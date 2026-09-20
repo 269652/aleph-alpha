@@ -7051,7 +7051,7 @@ func _process(delta: float) -> void:
 	# nearby grass to part around their own view, not just the simulation
 	# owner's.
 	if focus_player != null:
-		_chunk_manager.set_grass_walker_position(focus_player.position)
+		_chunk_manager.set_grass_walker_position(focus_player.position, delta)
 	if _owns_ecosystem_simulation():
 		# The CALENDAR first, at the rate actually asked for: seasons, fruit
 		# ripening and tree growth all read the clock, and they are what

@@ -31613,3 +31613,87 @@ Tested: `test_construction_haul.gd` (10, new),
 `test_procedural_builder_sprite.gd` (15, was 6),
 `test_earth_chunk_manager_city_hall_rising.gd` (+3).
 
+
+## A plant is not rubber, and a bramble fights back (`concept/long_grass.md`, `concept/brambles.md`, 2026-09-20)
+
+Two reports in one turn: *"Black berrys have no bend mechanism.. they
+should bend slightly when walked over from the side but when walked
+through in the middle it should slow down movement to 10% and inflict
+minor damage... still should animate walking in the middle using path
+tracing"*, and then *"it bounces back too fast and also bending too fast
+giving the impression of rubber instead of natural plant"* — *"for all
+plants"*.
+
+### The rubber, which was every plant
+
+There was no TIME in the bend model at all. The shader's push term is a
+pure function of the walker's CURRENT distance, so a blade reached full
+lean the frame they came into range and stood upright the frame they left,
+tracking them exactly with no inertia and no settling. Zero damping is
+what rubber looks like.
+
+`PlantSway` gives it **0.18s to yield and 0.55s to come back**, and that
+ratio is the decision rather than two tuning numbers: a stem is pushed
+over by a force and returns on its own stiffness alone, so it always
+returns more slowly than it went. Exponential so the response is
+frame-rate independent (a linear step bends faster on a faster machine),
+clamped so a stalled frame lands ON the walker instead of swinging
+through, and ONE eased point shared by grass, ferns, wheat and brambles —
+two plants leaning toward different places would be worse than both
+snapping.
+
+A test found the edge case rather than inspection: the first placement has
+to SNAP, because easing in from the "no walker" sentinel would take
+several seconds to cross a hundred thousand units and leave the opening
+seconds of a fresh session with no parting at all.
+
+### The bramble
+
+A plain `Sprite2D` cannot carry the bend — the shared shader reads
+`INSTANCE_CUSTOM` and the instance origin, and neither exists outside a
+MultiMesh — so a thicket is drawn the way a fern is, reaching into the
+grass for one bend rather than growing a second. That **reverses this
+system's own recorded reasoning** ("brambles are sparse and woody, they do
+not sway"), and the doc says so rather than leaving it beside code that
+contradicts it.
+
+"Slightly" needed a knob that did not exist: `wind_strength` deliberately
+does not scale the walker's push, and that push IS "bend when walked over".
+`bend_scale` multiplies the whole offset, defaults to 1.0 so grass and
+ferns render byte-identically, and is 0.25 for a cane.
+
+The MIDDLE is the thicket's own cell — the question every other
+ground-cover rule already asks, with no radius to tune. Speed drops to a
+tenth and the thorns draw blood while you are in there, with the path
+tracing still running because you are still moving, just slowly. The
+damage is derived rather than picked: four seconds to cross a tile at a
+tenth of base speed, and a crossing costs the smallest damage this world
+already names as real (`BossAggro`'s 2% of max health), so half a point a
+second — as a function of those inputs, with a test multiplying them back.
+
+### Three test premises were wrong, and all three are corrected in place
+
+The delivered bramble sheet's corner is not exactly transparent (2/255 of
+compression noise in real alpha, a fact about the file). The bramble
+fixture never placed a viewer, which an empty wood revealed the moment
+drawing became view-filtered like every other cover. And the probe
+re-synced the ferns after moving the camera but not the brambles, so a
+frame came back with the thickets missing and 2 stale bands — the picture
+being wrong is what caught it.
+
+Rendered and measured: **17 cards drawn** on a real Harz chunk, and a
+frame centred on a thicket shows two of them correctly beside the bracken.
+
+Tested, red first throughout: `test_plant_sway.gd` 8/8 and
+`test_plant_sway_wiring.gd` 5/5 (both new),
+`test_illustrated_bramble_patch.gd` 12/12 (new), plus 200/201 across all
+eight plant suites — the one failure being the pre-existing spring row 7
+bleed already confirmed by A/B as not this work's.
+
+**Gaps named rather than implied:** one lagged point cannot express a
+plant still settling while the walker presses a different one (that needs
+per-card state, which the banded design exists to avoid); nothing but the
+player feels a thicket, so a boar pushes through bramble untouched; and
+the drawn clump is wider than its tile while the penalty is not, so a
+player can be visually waist-deep in canes from the next tile over and
+walk at full speed.
