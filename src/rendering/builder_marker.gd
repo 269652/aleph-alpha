@@ -75,6 +75,7 @@ extends Node2D
 ## via `target_roof_pieces` above.
 
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const WalkGate = preload("res://src/gameplay/walk_gate.gd")
 const BuildingPlacement = preload("res://src/gameplay/building_placement.gd")
 const BuilderBehavior = preload("res://src/gameplay/builder_behavior.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
@@ -203,7 +204,14 @@ func _step_withdrawing(delta: float) -> void:
 		if to_storage.length() <= ARRIVE_DISTANCE_PX:
 			_arrived_at_storage = true
 		else:
-			position += to_storage.normalized() * WALK_SPEED * delta
+			# Through the shared gate (see WalkGate): a worker is a Sprite2D
+			# assigning position, so no StaticBody2D in the world has ever
+			# stopped one -- reported live, "Creatures and NPCs also walk
+			# through houses". A brushed wall slides instead of freezing.
+			position = WalkGate.slide(
+				earth, position, position + to_storage.normalized() * WALK_SPEED * delta,
+				float(TerrainRenderer.TILE_SIZE)
+			)
 			return
 	if not _behavior.advance_withdraw(delta):
 		return
@@ -219,7 +227,14 @@ func _step_carrying(delta: float) -> void:
 	if to_site.length() <= ARRIVE_DISTANCE_PX:
 		_behavior.arrive_at_site()
 		return
-	position += to_site.normalized() * WALK_SPEED * delta
+	# Through the shared gate (see WalkGate): a worker is a Sprite2D
+	# assigning position, so no StaticBody2D in the world has ever
+	# stopped one -- reported live, "Creatures and NPCs also walk
+	# through houses". A brushed wall slides instead of freezing.
+	position = WalkGate.slide(
+		earth, position, position + to_site.normalized() * WALK_SPEED * delta,
+		float(TerrainRenderer.TILE_SIZE)
+	)
 
 
 func _step_placing(delta: float) -> void:

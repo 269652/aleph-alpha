@@ -25,6 +25,7 @@ extends Node2D
 ## houses itself.
 
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+const WalkGate = preload("res://src/gameplay/walk_gate.gd")
 const ProceduralLumberjackSprite = preload("res://src/rendering/procedural_lumberjack_sprite.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
@@ -150,7 +151,14 @@ func _tile_for(pixel_position: Vector2) -> Vector2i:
 func _step_seeking(delta: float) -> void:
 	var to_home := home - position
 	if to_home.length() > WANDER_RADIUS_PX:
-		position += to_home.normalized() * WALK_SPEED * WANDER_SPEED_FRACTION * delta
+		# Through the shared gate (see WalkGate): a worker is a Sprite2D
+		# assigning position, so no StaticBody2D in the world has ever
+		# stopped one -- reported live, "Creatures and NPCs also walk
+		# through houses". A brushed wall slides instead of freezing.
+		position = WalkGate.slide(
+			earth, position, position + to_home.normalized() * WALK_SPEED * WANDER_SPEED_FRACTION * delta,
+			float(TerrainRenderer.TILE_SIZE)
+		)
 	_behavior.advance(delta)  # no-op outside FELLING/DEPOSIT, just ticks the rehunt clock
 	if _behavior.can_commit():
 		var found := _nearest_workable_tree()
@@ -199,7 +207,14 @@ func _step_approaching(delta: float) -> void:
 	if to_target.length() <= ARRIVE_DISTANCE_PX:
 		_behavior.arrive()
 		return
-	position += to_target.normalized() * WALK_SPEED * delta
+	# Through the shared gate (see WalkGate): a worker is a Sprite2D
+	# assigning position, so no StaticBody2D in the world has ever
+	# stopped one -- reported live, "Creatures and NPCs also walk
+	# through houses". A brushed wall slides instead of freezing.
+	position = WalkGate.slide(
+		earth, position, position + to_target.normalized() * WALK_SPEED * delta,
+		float(TerrainRenderer.TILE_SIZE)
+	)
 
 
 ## Swings at the tree exactly like Player._chop_step does -- the same staging
@@ -242,7 +257,14 @@ func _step_carrying(delta: float) -> void:
 	if to_home.length() <= ARRIVE_DISTANCE_PX:
 		_behavior.arrive_home()
 		return
-	position += to_home.normalized() * WALK_SPEED * delta
+	# Through the shared gate (see WalkGate): a worker is a Sprite2D
+	# assigning position, so no StaticBody2D in the world has ever
+	# stopped one -- reported live, "Creatures and NPCs also walk
+	# through houses". A brushed wall slides instead of freezing.
+	position = WalkGate.slide(
+		earth, position, position + to_home.normalized() * WALK_SPEED * delta,
+		float(TerrainRenderer.TILE_SIZE)
+	)
 
 
 func _step_deposit(delta: float) -> void:
