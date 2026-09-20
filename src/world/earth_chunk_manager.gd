@@ -4626,7 +4626,8 @@ func _construction_reserve_for(settlement_id: String) -> Dictionary:
 	var census := _village_census_for(chunk_coord, household_ids)
 	var next_building: String = VillageGrowth.next_building(
 		household_ids.size(), int(census["housed_count"]),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
+		_present_structure_ids_for_settlement_chunk(chunk_coord),
+		int(census["spare_house_capacity"])
 	)
 	if next_building == "":
 		return {}
@@ -4654,11 +4655,14 @@ func _step_village_immigration(settlement_id: String, market, household_ids: Arr
 		return
 
 	var census := _village_census_for(chunk_coord, household_ids)
+	# No frontage term any more: a household moves into a house that really
+	# stands, never onto the promise of one (see VillageImmigration.arrivals
+	# -- the old allowance was granted again on every step, so households
+	# piled up under no roof at all). Making the room is the LADDER's job.
 	var result: Dictionary = VillageImmigration.arrivals(
 		SETTLEMENT_STEP_INTERVAL,
 		_food_per_household(settlement_id, market, household_ids.size()),
 		int(census["spare_house_capacity"]),
-		_growth_site_for(chunk_coord, BuildingCatalog.BUILDING_IDS[0]) != null,
 		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
 		float(_settlement_immigration_carry.get(settlement_id, 0.0))
 	)

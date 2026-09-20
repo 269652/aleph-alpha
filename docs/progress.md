@@ -28116,3 +28116,61 @@ construction; catching one in the act still wants a real-terrain probe.
 
 Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
 132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
+
+---
+
+## 2026-09-20 — Room is made first, and moved into after
+
+Reported live with the town panel in shot — *"Population 21 (10 housed)"* —
+*"The population is rising but no new houses are built.. NPCs should only
+move in when a new unoccupied house exists for them... also despite showing
+20 population only 10 NPCs are there"*.
+
+**The concept doc already specified what was asked for.**
+`village_growth.md`'s mechanism 3: *"Gated on room: `free_capacity <= 0` ⇒
+no arrivals. A village with no spare roof takes nobody in, however rich."*
+The code had drifted: `arrivals` capped at `spare_house_capacity + 1 if the
+village still had FRONTAGE`. That allowance was written as a cap and behaves
+as a standing invitation — it is granted again on **every settlement step**,
+whether or not the house the last one promised was ever raised, and frontage
+is nearly always available. Hence eleven of twenty-one households under no
+roof at all.
+
+✅ **Arrivals need a real empty house.** `room = spare_house_capacity`; the
+frontage term is deleted rather than reduced, so there is no dial left to
+reopen it. Whatever the draw produced beyond the cap is still lost rather
+than banked.
+
+✅ **The ladder builds a house when no spare roof stands.** Necessary, not
+decorative: priority 1 only fires for a household already here with nowhere
+to live, so with the gate alone a village whose people are all housed would
+owe itself nothing, build nothing, and never have the roof an arrival needs
+— it would stop growing for good the moment it caught up with itself.
+`next_building` gains a lowest rung (a house for nobody in particular, when
+`spare_house_capacity <= 0`), **below** the civic and production rungs: a
+village finishes what it owes itself before making room for strangers. The
+new parameter defaults to 1 ("there is already room"), so a caller that does
+not pass it gets exactly the ladder it always got — pinned by its own test.
+
+The resulting shape: build the entitled rungs → no spare roof → raise a
+house → somebody moves in → no spare roof again. Population advances one
+household per house actually built.
+
+**Two tests pinned the old behaviour and were rewritten, not deleted** —
+*"room to build is room enough"* became *"an empty house is room enough"*,
+and *"room for one plot is one household, however long the absence"* became
+a pair: no empty house admits nobody however long the absence, one empty
+roof admits one.
+
+⬜ **The third symptom is bounded, not fixed.** *"Despite showing 20
+population only 10 NPCs are there"*: `spawn_village` runs only from
+`_load_chunk`, so the villager roster is fixed at load time while
+`admit_household` keeps adding to the abstract household count — an arrival
+is invisible until the chunk reloads. The gate above bounds how far the two
+can drift (one household per house built, instead of one per step for ever)
+but does not close it. Spawning a villager into a village already on screen
+is its own piece of work, and is named here rather than quietly folded in.
+
+Tests: `test_village_immigration.gd` 20/20 (4 new, 2 rewritten),
+`test_village_growth.gd` 23/23 (5 new), `test_village_census.gd` 9/9,
+`test_village_assembly.gd` 39/39.

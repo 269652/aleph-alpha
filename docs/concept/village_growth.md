@@ -239,7 +239,9 @@ carry-the-fraction, whole-units-out shape `SettlementGathering` and
 `SettlementGranary` already use.
 
 - **Gated on room**: `free_capacity <= 0` ⇒ no arrivals. A village with no
-  spare roof takes nobody in, however rich.
+  spare roof takes nobody in, however rich. **Room means a house that
+  really stands with a place free in it — never frontage to build one on**
+  (corrected 2026-09-20; see "Room is made first, moved into after" below).
 - **Gated on food**: `food_per_household` below `FED_THRESHOLD` ⇒ no
   arrivals. A hungry village does not attract anyone.
 - **Rate**: `BASE_ARRIVALS_PER_DAY` scaled by how far above the fed
@@ -256,6 +258,54 @@ event `record_settlement_founded_if_new` already uses — so
 `SettlementTier` and the ladder all see it with no new plumbing. The
 villager themself is a deterministic `NpcIdentity` at the next index, so a
 reload regenerates exactly the same person.
+
+### Room is made first, moved into after (2026-09-20)
+
+Reported live with the town panel in shot — *"Population 21 (10 housed)"* —
+*"The population is rising but no new houses are built.. NPCs should only
+move in when a new unoccupied house exists for them"*.
+
+The gate above had drifted from what this document says. `arrivals` capped
+at `spare_house_capacity + 1 if the village still had FRONTAGE`, on the
+reading that somewhere to build is somewhere to live. It is not: that
+allowance is granted again on **every settlement step**, whether or not the
+house the last one promised was ever raised. Frontage is nearly always
+available, so households piled up under no roof at all — eleven of
+twenty-one in the report.
+
+Two halves, and neither works without the other:
+
+1. **Arrivals need a real empty house.** `room = spare_house_capacity`, and
+   the frontage term is gone rather than reduced, so there is no dial left
+   to reopen it. Whatever the draw produced beyond the cap is lost, not
+   banked, exactly as before.
+2. **The ladder builds a house when no spare roof stands.** Priority 1 only
+   ever fires for a household that is ALREADY here with nowhere to live, so
+   with (1) alone a village whose people are all housed would owe itself
+   nothing, build nothing, and never have the roof an arrival needs — it
+   would stop growing for good the moment it caught up with itself. So
+   `next_building` gains a lowest rung: a house for nobody in particular,
+   when `spare_house_capacity <= 0`.
+
+That rung sits **below** the civic and production rungs deliberately — a
+village finishes what it already owes itself before it makes room for
+strangers — and `next_building`'s new parameter defaults to 1 ("there is
+already room"), so a caller that does not know its spare capacity gets
+exactly the ladder it always got.
+
+The shape this gives a growing village: build the rungs it is entitled to →
+find itself with no spare roof → raise a house → somebody moves into it →
+no spare roof again. Population now advances one household per house
+actually built, which is the pace the report asked for.
+
+⬜ **A household admitted while you are standing there does not appear until
+the chunk reloads.** `spawn_village` runs only from `_load_chunk`, so the
+villager roster is fixed at load time while `admit_household` keeps adding
+to the abstract count — which is the rest of the same report, *"despite
+showing 20 population only 10 NPCs are there"*. The gate above bounds how
+far the two can drift (one household per house built, rather than one per
+step for ever) but does not close it. Spawning a villager into a village
+that is already on screen is its own piece of work and is not done.
 
 ## Mechanism 4 — Wellbeing: needs, happiness, productivity
 

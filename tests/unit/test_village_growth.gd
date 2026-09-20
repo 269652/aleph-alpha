@@ -189,3 +189,69 @@ func test_a_founded_village_still_has_trades_to_grow_into():
 		VillageGrowth.next_building(founding, founding, standing), "",
 		"a freshly founded village owes itself nothing more until it grows"
 	)
+
+
+# -- a village keeps a roof standing empty for the next arrival -------------
+#
+# The other half of "NPCs should only move in when a new unoccupied house
+# exists for them" (see test_village_immigration.gd). Once arrivals need a
+# REAL empty house, something has to build one -- and priority 1 only ever
+# fires for a household that is already here with nowhere to live. A village
+# whose people are all housed would otherwise owe itself nothing, build
+# nothing, and so never have the spare roof an arrival needs: it would stop
+# growing for good the moment it caught up with itself.
+#
+# So the lowest rung of the ladder is a house for nobody in particular. It
+# sits BELOW the civic and production rungs on purpose -- a village finishes
+# what it already owes itself before it makes room for strangers -- and
+# above nothing at all.
+
+
+func _every_rung() -> Array:
+	var built: Array = []
+	for building_id in VillageGrowth.LADDER_BUILDING_IDS:
+		built.append(building_id)
+	return built
+
+
+func test_a_village_with_every_rung_standing_and_no_spare_roof_builds_a_house():
+	assert_eq(
+		VillageGrowth.next_building(10, 10, _every_rung(), 0),
+		BuildingCatalog.BUILDING_IDS[0],
+		"a village with nowhere for anyone to move into builds somewhere"
+	)
+
+
+func test_a_village_that_already_has_a_spare_roof_owes_itself_nothing_more():
+	assert_eq(
+		VillageGrowth.next_building(10, 10, _every_rung(), 1), "",
+		"an empty house already stands -- building a second is hoarding, not growth"
+	)
+
+
+## Below the rungs, not above them: a village owed a sawmill builds the
+## sawmill first, and makes room for newcomers after.
+func test_the_rungs_a_village_is_owed_still_come_before_room_for_strangers():
+	var nothing_built: Array = []
+	assert_eq(
+		VillageGrowth.next_building(50, 50, nothing_built, 0),
+		VillageGrowth.LADDER_BUILDING_IDS[0],
+		"a village with no sawmill builds the sawmill before a spare cottage"
+	)
+
+
+## And above nothing: a household with no roof of its own still outranks
+## everything, which is what lets a village that has already overfilled
+## itself dig out rather than stall.
+func test_a_household_with_no_roof_still_outranks_the_spare_one():
+	assert_eq(
+		VillageGrowth.next_building(21, 10, _every_rung(), 0),
+		BuildingCatalog.BUILDING_IDS[0]
+	)
+
+
+## A caller that does not know its spare capacity gets exactly the ladder it
+## always got -- the new rung stays silent rather than making every such
+## caller build houses for ever.
+func test_a_caller_that_does_not_pass_spare_capacity_gets_the_old_ladder():
+	assert_eq(VillageGrowth.next_building(10, 10, _every_rung()), "")
