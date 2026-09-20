@@ -28788,17 +28788,54 @@ into `hydrology.md`'s aquifer); and the player has no tank of their own.
 
 | | baseline | billed 4x too much | shipped |
 |---|---|---|---|
-| wheat harvested | 164 | 24 | 125 |
-| farmer 1, on-field ticks of 6000 | 2750 | 1441 | 2379 |
-| herbalist, on-field ticks of 6000 | 2750 | 68 | 2081 |
+| wheat harvested | 164 | 24 | **183** |
+| farmer 1, on-field ticks of 6000 | 2750 | 1441 | 2515 |
+| herbalist, on-field ticks of 6000 | 2750 | 68 | 2190 |
+| well trips completed | — | 0 | **5 each, one every 2.0 days** |
+| ticks with the beds dry | — | 5110+ | **0** |
 
 The remaining gap to baseline is the errand's real cost — a villager
 walking to the well is a villager not farming, which is the feature.
 
-Routing then changed the picture again, in both directions at once: the
-farmer that had never produced anything (`0` wheat across every run above,
-a pre-existing failure this feature did not cause) started working and
-brought in 56, while the time-budget patience rule broke every well trip
-until it was rewritten to measure progress. The numbers above are from
-before that merge; the post-merge run is what the concept doc's Status
-section now carries.
+Routing then changed the picture again, in both directions at once. The
+farmer that had never produced anything — `0` wheat on the baseline too,
+a pre-existing failure this feature did not cause — started working and
+brought in 62. And **every well trip stopped completing**, which took two
+more rounds of measurement to explain: the time-budget patience rule was
+one cause and was rewritten to measure progress, but the real one was a
+rail. See "A farmer's own rail shut them in", below.
+
+The shipped column is the state after both: the village harvests **more
+than its own pre-water baseline**, and two of its three field workers make
+five well trips each without a single tick of dry beds.
+
+### 🚧 A farmer's own rail shut them in, and an empty chunk crashed the router
+
+Neither of these is in the water code; both were found by
+`tools/probe_farm_water.gd` asking *why* nobody could reach the well.
+
+The rail exemption in `NpcMarker._blocked_step` was **one-directional**.
+`field_cells.has(tile)` exempts a step INTO a bed you work — the fix for
+*"The farmer doesn't farm anymore"* — but stepping back OUT crosses the
+same rail and was refused. A farmer could walk into their own field and
+never leave it. Measured: three field workers set out for the well 8, 2
+and 8 times and were refused at their **very first step**, 0 px along,
+by `farm_fence_west` / `farm_fence_north`. Not one came within 105 px of
+a well whose arrival reach is 6 px. The rails keep animals out and read
+as an enclosure; they were never meant to shut the worker out of their
+beds, and they are just as clearly not meant to shut them in.
+
+`EarthChunkManager.biome_at_global` guarded a chunk that is not loaded
+but not one that is **present and empty** — a bare `Chunk.new()`, which
+is what a fixture builds when it only needs somewhere to hang
+modifications. Nothing asked it about arbitrary tiles until routing did.
+**A/B'd in a clean `origin/main` worktree: `test_earth_chunk_manager_
+village_farm_loop` fails 4/4 there with 17,376 out-of-bounds errors in a
+single run** — pre-existing, not from this branch. The fix is the size
+check `Chunk.blocks_ground_cover` already documents a few files away, and
+that suite now passes 4/4 with zero errors.
+
+⬜ One field worker still makes no trip: its straight way to the well runs
+through its NEIGHBOUR's fenced field, a refusal that is correct, and
+routing did not find a way round inside `ROUTE_NODE_BUDGET`. Widening the
+exemption would "fix" it by breaking the enclosure.

@@ -276,6 +276,12 @@ table stops saying it.
   (`tools/probe_farm_water.gd`, 5.7–6.1 visits a simulated day), after the
   first cut — pinned to a reasoned one — cut the same village's harvest
   from 164 wheat to 24.
+- ✅ **Villagers actually reach the well.** Measured end to end on the
+  probe village: two of three field workers make **5 trips each, one every
+  2.0 simulated days**, arriving exactly (0 px from the landmark) and
+  leaving their beds with **nothing dry for any of 6000 ticks**. The
+  village's harvest is 183 wheat against a 164 baseline taken before any
+  of this existed.
 - ✅ **The bucket is in their hand.** `ProceduralItemSprite` draws the
   pail, empty and full (the same pail; water standing at the brim is the
   only difference), and `NpcMarker._sync_carried_item` puts it in the
@@ -292,9 +298,15 @@ table stops saying it.
   is a villager mechanism only.
 - 🚧 **A trip that cannot be made still fails, it just fails politely.**
   Routing ([navigation.md](navigation.md)) plans round what it can see and
-  `ERRAND_DETOUR_PX` stops a blocked trip lasting forever, but a household
-  with no route at all gives up daily and its tank keeps falling. Nothing
-  here notices that and does anything else about it.
+  `ERRAND_DETOUR_PX` stops a blocked trip lasting forever, but a villager
+  with no route gives up daily and its tank keeps falling. Measured: the
+  third of the probe village's three field workers makes **zero** trips,
+  because its straight way to the well runs through its NEIGHBOUR's fenced
+  field — a refusal that is correct (a neighbour's rail must stop you) and
+  that routing did not find a way around inside `ROUTE_NODE_BUDGET`. Its
+  own tank nearly keeps up regardless (43 tendings, 422 dry ticks of
+  6000). Widening the rail exemption would "fix" this by breaking the
+  enclosure; the real fix is on routing's side, not here.
 
 ## Interaction with other docs
 
