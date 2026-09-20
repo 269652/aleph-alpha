@@ -1739,3 +1739,27 @@ func _ten_houses() -> Array:
 	for _i in range(10):
 		ids.append("house_small")
 	return ids
+
+
+## The founding layout sites its square by `is_dry` when it is given one --
+## the same split skeleton() and next_street_plot already draw, and for the
+## same reason: a dug pond refuses a BUILDING but it is not the water a
+## square is sited by (see test_village_square_ignores_dug_water.gd).
+func test_the_founding_layout_sites_its_square_by_is_dry_not_by_what_it_can_build_on():
+	var by_dry: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, 7, _always_buildable)["plaza"]
+	# A dug pond down the square's own west column: real enough to refuse a
+	# house, not the water the square slides for.
+	var wet_column: int = by_dry.position.x
+	var is_buildable := func(cell: Vector2i) -> bool:
+		return cell.x != wet_column
+
+	var slid: int = VillageLayout.plaza_x0_for(CHUNK_SIZE, 16, 2, 29, is_buildable)
+	assert_ne(slid, by_dry.position.x, "the premise: that column really would move the square")
+
+	var result := layout.layout(
+		_ten_houses(), CHUNK_SIZE, 7, is_buildable, _never_occupied, _always_buildable
+	)
+	assert_eq(
+		(result["plaza"] as Rect2i).position.x, by_dry.position.x,
+		"the square slid for a pond -- it must only ever slide for the generated world"
+	)

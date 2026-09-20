@@ -14842,16 +14842,33 @@ func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 ## against the overlay's own decision over the real Berlin radius).
 func is_water_at_global(global_x: int, global_y: int) -> bool:
 	# A dug pond is water the moment it is dug, and is the ONLY water the
-	# generator knows nothing about -- everything below asks the generated
-	# world (docs/concept/village_ponds.md, "Built water"). Answering it
-	# here is what gives a pond the whole stack for free: creatures refuse
-	# it, the surface paints it, and is_river_at_global above carries its
-	# flow to anything that floats.
+	# generator knows nothing about -- is_generated_water_at_global below
+	# asks the generated world (docs/concept/village_ponds.md, "Built
+	# water"). Answering it here is what gives a pond the whole stack for
+	# free: creatures refuse it, the surface paints it, and
+	# is_river_at_global carries its flow to anything that floats.
 	if is_pond_at_global(global_x, global_y):
 		return true
+	return is_generated_water_at_global(global_x, global_y)
+
+
+## Water the GENERATOR put there -- everything is_water_at_global knows
+## except the ponds people dig. The split exists for one caller and one
+## invariant: the village square's own rectangle (VillageLayout.plaza_x0_
+## for, _is_dry_local) has to be re-derivable by every consumer with
+## nothing persisted, which only holds while its input never changes once
+## the world is seeded. A dug pond changes chunk.modifications, so asking
+## is_water_at_global for it made the square MOVE under its own village --
+## measured at x0=12 before a pond row was dug through it and x0=4 after
+## (test_village_square_ignores_dug_water.gd). Rivers do not move; a
+## fisher's pond does.
+func is_generated_water_at_global(global_x: int, global_y: int) -> bool:
 	if biome_at_global(global_x, global_y) == "ocean":
 		return true
-	if is_river_at_global(global_x, global_y):
+	# The GENERATOR's river, not this class's is_river_at_global -- that one
+	# answers a dug pond too (a pond's flow is what carries what floats in
+	# it), which is exactly the built water this function exists to exclude.
+	if generator.is_river_at_global(global_x, global_y):
 		return true
 	if is_still_water_probe(generator.hydrology_at_global(global_x, global_y)):
 		return true
@@ -18375,7 +18392,7 @@ func _village_census_for(chunk_coord: Vector2i, household_ids: Array) -> Diction
 func _is_dry_local(chunk_coord: Vector2i) -> Callable:
 	return func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
-		return not is_water_at_global(g.x, g.y)
+		return not is_generated_water_at_global(g.x, g.y)
 
 
 ## The civic plot's LOCAL origin (VillageLayout.skeleton -- re-derived from

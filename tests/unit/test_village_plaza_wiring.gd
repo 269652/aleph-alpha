@@ -71,3 +71,43 @@ func test_a_village_that_lost_its_square_can_gain_it_back():
 		body.contains('["civic_plot"]'),
 		"the civic plot's own cell is never read as a short-circuit: %s" % body
 	)
+
+
+# -- the square is sited by water that never moves --------------------------
+#
+# VillageLayout.plaza_x0_for and EarthChunkManager._is_dry_local both say it
+# outright: every consumer of the square has to re-derive the SAME rectangle
+# with nothing persisted, so its input must be the one thing that never
+# changes once the world is seeded. Ponds broke that -- a fisher digs one
+# beside their door (docs/concept/village_ponds.md) and it is a chunk
+# MODIFICATION, which is_water_at_global answers first. Measured: digging a
+# row of pond through a square moved it from x0=12 to x0=4
+# (test_village_square_ignores_dug_water.gd).
+#
+# The renderer derives the square in five places and founds a village in a
+# sixth. All six must ask the generated world.
+
+
+func test_every_square_the_renderer_derives_is_sited_by_water_that_never_moves():
+	var source := FileAccess.get_file_as_string("res://src/rendering/village_renderer.gd")
+	var at := source.find("VillageLayout.skeleton(")
+	var seen := 0
+	while at > -1:
+		seen += 1
+		var call_text := source.substr(at, 200)
+		assert_true(
+			call_text.contains("_is_dry_local("),
+			"a square sited by ground that MOVES: %s" % call_text
+		)
+		at = source.find("VillageLayout.skeleton(", at + 1)
+	assert_gt(seen, 0, "the premise: the renderer still derives squares")
+
+
+## ...and the founding layout, which derives its own square inside
+## VillageLayout, is handed the same rule rather than its buildability test.
+func test_the_founding_layout_is_handed_the_same_water_rule():
+	var body := _body("_place_new_village")
+	assert_true(
+		body.contains("_is_dry_local("),
+		"founding sites its square by whatever it can BUILD on: %s" % body
+	)

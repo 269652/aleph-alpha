@@ -422,18 +422,26 @@ static func market_stand_cells(skeleton: Dictionary, count: int) -> Array:
 ## gets both; a cramped one houses its people and goes without. See
 ## docs/concept/village_warehouse.md's own pillar 1 for the honest caveat
 ## this puts on "always".
+## `is_dry` is the square's own siting predicate (see plaza_x0_for and
+## next_street_plot, which already draw the same split): the GENERATED
+## world's water, never whatever wider ground rule this caller builds
+## against. A fisher's dug pond refuses a house but must not move a square
+## -- see test_the_founding_layout_sites_its_square_by_is_dry_not_by_what_
+## it_can_build_on. Omitted, `is_buildable` answers it, which is what a
+## caller with no finer rule of its own has always meant.
 func layout(
-	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
+	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
+	is_dry := Callable()
 ) -> Dictionary:
-	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true)
+	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true, is_dry)
 	if houses_everyone(planned, building_ids):
 		return planned
-	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false)
+	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false, is_dry)
 
 
 func _layout_once(
 	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
-	reserve_warehouse: bool
+	reserve_warehouse: bool, is_dry := Callable()
 ) -> Dictionary:
 	if building_ids.is_empty():
 		var no_roads: Array[Vector2i] = []
@@ -443,7 +451,7 @@ func _layout_once(
 	# VillageRenderer._is_buildable_local: a village fells the trees it
 	# needs, so water is the only ground it refuses), which is exactly what
 	# the square's siting wants -- see plaza_x0_for.
-	var bones := skeleton(chunk_size, seed_value, is_buildable)
+	var bones := skeleton(chunk_size, seed_value, is_dry if is_dry.is_valid() else is_buildable)
 	var street_y: int = bones["street_y"]
 	var street_x0: int = bones["street_x0"]
 	var street_x1: int = bones["street_x1"]
