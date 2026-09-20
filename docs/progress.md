@@ -29738,3 +29738,74 @@ and the first anybody would know is a screenshot.
 
 Tested: `test_building_catalog.gd` (+3),
 `test_earth_chunk_manager_buildings.gd` (+2).
+
+
+## Nothing grows in a pond, and a pond keeps its fish (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live with the water in shot: *"Now there's a pond, but grass grows
+in it and no fish are in it"*. Two independent faults; neither was visible
+from anything that doc's status list claimed, and one of them was measured
+before a line was changed.
+
+**Grass in the water.** `TallGrass` seeds off the chunk's BIOME array, and a
+dug pond is deliberately NOT a biome — it is a chunk modification, so its
+cells still read as the grassland they were cut out of. This world has
+answered that exact report once already, for rivers (*"grass grows in
+rivers"*, answered by `TallGrass._is_river_at`), because a river does not
+change the biome array either. A river is GENERATED, so its answer lives in
+the sim; a pond is BUILT, so its answer is the seam every other built thing
+already uses: `EarthChunkManager._is_built_surface`, the one predicate
+`build_at_global`, `destroy_at_global` and `_built_local_cells` share for
+ground cover.
+
+Worth stating, because a half-fix here would have looked like a whole one:
+the chunk-LOAD path already kept grass out, through
+`_ground_cover_blockers`, which reads `is_water_at_global` and has always
+seen a pond. What it never covered is the visit that DIGS one — the sim is
+built when the chunk loads and the village digs later in that same load —
+nor `TallGrass.plant`, which checks the biome and the block set but not the
+water. Both go through `block_cells` now, and filling a pond in gives the
+ground back exactly as pulling out a fence rail does.
+
+**No fish in it.** Measured first, on two real streamed villages
+(`tools/probe_pond_and_farmhouse.gd`, added here): both held a dug, fenced
+pond, and both reported a stock of **0.00** with nothing swimming.
+
+The water survives a reload because it is a persisted modification, and so
+does the fence. The FISH were an in-memory dictionary keyed by chunk, and
+the village pass that stocks a pond only ever runs on the visit that DIGS
+one — `_dig_fisher_ponds_if_missing` returns early on a pond that is
+already there, which is correct, since a fisher stocks a pond once. So a
+pond was a fishery for one visit and a hole for the rest of the game. Even
+in-session it came back wrong: `_free_pond_fish_markers` empties the water
+on unload and nothing re-synced it on load.
+
+`POND_FISH_DIR` persists the stock per chunk, keyed by the pond's own
+anchor — saved on unload, merged back on load with the in-session record
+winning, the same precedence the region's aggregate fish population already
+uses. **Persistence rather than re-stocking on reload**, and the difference
+is the point: a pond the village has fished out must stay fished out until
+it breeds back, and a reload that quietly refilled it would make the stock
+decorative. `test_a_pond_fished_out_is_still_fished_out_after_a_reload`
+pins that.
+
+Re-measured after the fix on the same transect, first visit AND walking
+back: **6 of 6 ponds** clear of grass, **6 of 6** holding 2.00 fish with 2
+markers swimming, on the revisit as well as the founding visit.
+
+Tested: `test_earth_chunk_manager_ground_cover.gd` 11/11 (+3 new),
+`test_earth_chunk_manager_ponds.gd` (+3 new, whole `_a_pond` selection
+11/11). Red first in both: grass left standing in the water, flowers
+plantable in it, the ground not given back; nothing swimming after a
+reload, and stock 0.0 to a manager that never dug the pond.
+
+### Still open, named rather than implied
+
+- **Reeds.** A real fishpond has vegetation in it, and this world has a sim
+  for that (`AquaticVegetation`, which seeds on water as an INCLUSION
+  filter). A dug pond is not in the mask it reads, so a pond grows nothing
+  at all today. Clean water rather than wrong water, and *land* grass in a
+  pond was the report.
+- **A hut on 4 of 6 banks.** The same sweep found two ponds with no
+  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Under
+  investigation; recorded here so the number is not lost.

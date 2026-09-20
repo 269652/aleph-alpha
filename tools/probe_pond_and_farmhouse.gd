@@ -22,7 +22,7 @@ extends SceneTree
 ## nothing while it runs, and a village founding is slow).
 
 const CHUNK_SIZE := 32
-const STEPS := 14
+const STEPS := 26
 
 var _manager
 var _origin: Vector2i
@@ -30,6 +30,8 @@ var _step := -1
 var _seen: Dictionary = {}
 
 var _villages := 0
+var _unstamped := 0
+var _revisiting := false
 var _ponds := 0
 var _ponds_with_grass := 0
 var _ponds_without_fish := 0
@@ -39,6 +41,7 @@ var _villages_wanting_a_farmhouse := 0
 var _VillagePond
 var _VillageFarm
 var _VillageAssembly
+var _BuildingCatalog
 
 
 func _initialize() -> void:
@@ -56,6 +59,7 @@ func _process(_delta: float) -> bool:
 		_VillagePond = load("res://src/gameplay/village_pond.gd")
 		_VillageFarm = load("res://src/gameplay/village_farm.gd")
 		_VillageAssembly = load("res://src/emergence/village_assembly.gd")
+		_BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
 		var EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
 		var tile_map_layer := TileMapLayer.new()
 		var entities := Node2D.new()
@@ -73,12 +77,28 @@ func _process(_delta: float) -> bool:
 		_step += 1
 		return false
 
+	# ...and then WALK BACK. Everything a village keeps between visits is
+	# only tested by a second visit: the water is a persisted modification
+	# and comes back for free, and the question this probe exists to answer
+	# is what comes back WITH it.
+	if _step < STEPS * 2:
+		if _step == STEPS:
+			print("")
+			print("######## walking back: every village below is a REVISIT ########")
+			_seen.clear()
+			_revisiting = true
+		_manager.update(_origin + Vector2i((STEPS * 2 - 1 - _step) * CHUNK_SIZE, 0))
+		_survey()
+		_step += 1
+		return false
+
 	print("")
 	print("== TOTALS over %d villages, %d ponds ==" % [_villages, _ponds])
 	print("  ponds with grass growing in them : %d" % _ponds_with_grass)
 	print("  ponds holding no fish            : %d" % _ponds_without_fish)
 	print("  ponds with no hut on their bank  : %d" % _ponds_without_hut)
 	print("  villages wanting a farmhouse     : %d" % _villages_wanting_a_farmhouse)
+	print("  chunks registered but not stamped: %d" % _unstamped)
 	return true
 
 
@@ -87,13 +107,23 @@ func _survey() -> void:
 		if _seen.has(chunk_coord):
 			continue
 		_seen[chunk_coord] = true
+		# A chunk registered as a village but carrying nothing at all was
+		# never STAMPED -- _loaded_villages holds a node list, not a
+		# promise that the ground was built on. Counting those as villages
+		# is how the first version of this probe reported 90 of them with
+		# 0 buildings each.
+		if _manager.buildings_in_chunk(chunk_coord).is_empty():
+			_unstamped += 1
+			continue
 		_villages += 1
 		_report(chunk_coord)
 
 
 func _report(chunk_coord: Vector2i) -> void:
 	print("")
-	print("== village at chunk %s ==" % str(chunk_coord))
+	print("== village at chunk %s%s ==" % [
+		str(chunk_coord), "  (REVISIT)" if _revisiting else "  (first visit)"
+	])
 	var records: Array = _manager.buildings_in_chunk(chunk_coord)
 	_report_farm(chunk_coord, records)
 	_report_ponds(chunk_coord, records)
@@ -178,15 +208,23 @@ func _report_pond(chunk_coord: Vector2i, body: Array, huts: Array) -> void:
 			grassy.append(cell)
 	var stock: float = _manager.pond_fish_at(first.x, first.y)
 	var markers: int = _manager.pond_fish_marker_count_at(first.x, first.y)
+	# From the hut's whole FOOTPRINT, not its origin: VillagePond.hut_origin
+	# sites the hut by _hut_distance_to, which is footprint-to-water. The
+	# first run of this probe measured origin-to-water and reported a hut
+	# correctly standing on the bank as "4.1 tiles away, NO HUT".
+
 	var nearest_hut := INF
 	for hut in huts:
-		for cell in body:
-			nearest_hut = minf(nearest_hut, Vector2(hut as Vector2i).distance_to(Vector2(cell as Vector2i)))
+		for cell in _BuildingCatalog.footprint_cells(_VillagePond.HUT_BUILDING_ID, hut as Vector2i):
+			for wet in body:
+				nearest_hut = minf(
+					nearest_hut, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i))
+				)
 	if not grassy.is_empty():
 		_ponds_with_grass += 1
 	if stock <= 0.0:
 		_ponds_without_fish += 1
-	if nearest_hut > float(_VillagePond.HUT_BANK_REACH_TILES) + 2.0:
+	if nearest_hut > float(_VillagePond.HUT_BANK_REACH_TILES):
 		_ponds_without_hut += 1
 	print("  POND  %d cell(s) at %s" % [body.size(), str(body[0])])
 	print("        GRASS %d of %d cell(s) carry a grass patch%s" % [
@@ -198,5 +236,5 @@ func _report_pond(chunk_coord: Vector2i, body: Array, huts: Array) -> void:
 	print("        HUT   %d in chunk, nearest %s tiles from the water%s" % [
 		huts.size(),
 		"none" if nearest_hut == INF else "%.1f" % nearest_hut,
-		"   <-- NO HUT" if nearest_hut > float(_VillagePond.HUT_BANK_REACH_TILES) + 2.0 else "",
+		"   <-- NO HUT ON THE BANK" if nearest_hut > float(_VillagePond.HUT_BANK_REACH_TILES) else "",
 	])
