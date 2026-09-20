@@ -17,6 +17,52 @@ extends RefCounted
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+
+## The fisher's own works, the building a farmer's farmhouse is to their
+## beds. Reported live with a screenshot of a dug, fenced, EMPTY enclosure:
+## "it's missing a fisher hut (use farmhouse sprite until illustration
+## exists)" -- the half of "the same shape as a field" that was never
+## built.
+const HUT_BUILDING_ID := "fisher_hut"
+
+## How far from its own water a hut may stand, in tiles, measured from the
+## nearest cell of each. Two, not one: the water is fenced (VillageFarm's
+## own rails, on the ring), so a hut demanding to touch the water could
+## only ever stand on the rails themselves, and there would be no hut at
+## all. Two clears the ring and still reads as a building AT the pond
+## rather than one that happens to be near it.
+const HUT_BANK_REACH_TILES := 2
+
+## Where the water's own edge is, as the surface overlay reads it.
+##
+## Every kind of water in this world rides one overlay (docs/concept/
+## hydrology.md, "ONE WATER SURFACE") over an ACROSS field: |across| below
+## 1 is water, 1 is the waterline, and the shader reconstructs that field
+## by interpolating between cell centres. A pond is not a channel -- it is
+## a flat-bottomed hole -- so its own cells carry WATER_ACROSS, open water
+## throughout, and the ring of dry cells round it carries BANK_ACROSS.
+##
+## Those two numbers are one decision, not two: interpolating from 0 at a
+## water cell's centre to 2 at the bank's centre crosses 1 exactly halfway
+## between them, which is the water cell's own edge -- the edge of the
+## hole. waterline_offset_tiles states it and
+## test_a_ponds_waterline_lands_on_its_own_edge pins it, so a change to
+## either number that moved the waterline off the pond's edge fails there.
+##
+## Measured before: the pond wrote 0.75 on its own cells and left the ring
+## carrying whatever the nearest river had (tens of tiles' worth), so the
+## contour crossed 1 a few pixels out from each centre and a 3x2 pond read
+## as a puddle -- 10.4% of its own area was water on a real render
+## (tools/probe_fisher_pond_render.gd).
+const WATER_ACROSS := 0.0
+const BANK_ACROSS := 2.0
+
+
+## How far from a water cell's own centre the waterline falls, in tiles,
+## given those two. Half a tile IS that cell's edge.
+static func waterline_offset_tiles() -> float:
+	return (1.0 - WATER_ACROSS) / (BANK_ACROSS - WATER_ACROSS)
 
 ## What a dug pond cell persists as. An ordinary chunk modification, exactly
 ## like a rail -- the id is the only thing stored about it, which is what
@@ -112,3 +158,81 @@ static func carrying_capacity(water_cells: int, temperature: float) -> float:
 ## stays zero out -- a pond nobody stocked grows nothing.
 static func step(population: float, water_cells: int, temperature: float, delta_days: float) -> float:
 	return _fish.step(population, carrying_capacity(water_cells, temperature), delta_days)
+
+
+## Where a fisher's hut stands: the free site nearest their own water,
+## within HUT_BANK_REACH_TILES of it. Null when nothing fits, which is the
+## honest answer a pond with no room already gives rather than a hut
+## squeezed onto the rails.
+##
+## `is_free` answers for ONE cell, exactly as pond_rect's does: is this
+## ground the village may build on? The water itself is refused here too,
+## and not only through `is_free` -- a caller reading the world will refuse
+## it anyway (a pond is a modification), but the rule that a hut is beside
+## the water rather than in it belongs to this function, not to its caller.
+##
+## Deterministic by construction: candidates are walked in (y, x) order and
+## only a STRICTLY nearer one displaces the site already held, so the same
+## water puts the hut in the same place on every reload -- which is what
+## stops a village growing a second hut every time it is walked past.
+static func hut_origin(water: Array, is_free: Callable):
+	if water.is_empty():
+		return null
+	var footprint := BuildingCatalog.footprint_of(HUT_BUILDING_ID)
+	var low := water[0] as Vector2i
+	var high := low
+	for cell in water:
+		low = Vector2i(mini(low.x, (cell as Vector2i).x), mini(low.y, (cell as Vector2i).y))
+		high = Vector2i(maxi(high.x, (cell as Vector2i).x), maxi(high.y, (cell as Vector2i).y))
+	var margin := HUT_BANK_REACH_TILES + maxi(footprint.x, footprint.y)
+	var best = null
+	var best_distance := INF
+	for y in range(low.y - margin, high.y + margin + 1):
+		for x in range(low.x - margin, high.x + margin + 1):
+			var origin := Vector2i(x, y)
+			var distance := _hut_distance_to(origin, footprint, water)
+			if distance > float(HUT_BANK_REACH_TILES) or distance >= best_distance:
+				continue
+			if not _hut_site_is_free(origin, footprint, water, is_free):
+				continue
+			best = origin
+			best_distance = distance
+	return best
+
+
+## Whether one of `hut_origins` already stands on this water's own bank --
+## the idempotence question, asked of the ground rather than of a record
+## nothing persists: a village walked past twice must not grow a second hut
+## over the same pond.
+static func hut_stands_by(water: Array, hut_origins: Array) -> bool:
+	if water.is_empty():
+		return false
+	var footprint := BuildingCatalog.footprint_of(HUT_BUILDING_ID)
+	for origin in hut_origins:
+		if _hut_distance_to(origin as Vector2i, footprint, water) <= float(HUT_BANK_REACH_TILES):
+			return true
+	return false
+
+
+## How close a hut at `origin` comes to the water, nearest cell to nearest
+## cell.
+static func _hut_distance_to(origin: Vector2i, footprint: Vector2i, water: Array) -> float:
+	var nearest := INF
+	for cell in BuildingCatalog.footprint_cells(HUT_BUILDING_ID, origin):
+		for wet in water:
+			nearest = minf(nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i)))
+	return nearest
+
+
+## Every cell a hut at `origin` would take -- its footprint AND its
+## doorstep, which is what place_building itself requires -- free ground,
+## and none of it the pond's own water.
+static func _hut_site_is_free(origin: Vector2i, footprint: Vector2i, water: Array, is_free: Callable) -> bool:
+	var taken: Array = BuildingCatalog.footprint_cells(HUT_BUILDING_ID, origin)
+	taken.append(origin + BuildingCatalog.doorstep_of(HUT_BUILDING_ID))
+	for cell in taken:
+		if water.has(cell):
+			return false
+		if not is_free.call(cell as Vector2i):
+			return false
+	return true
