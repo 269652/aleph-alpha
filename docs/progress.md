@@ -30292,6 +30292,18 @@ was when gold was conjured. Both point at the same open gap
 in farmhouses and the market reads 0, so a wage buys a meal only where a
 villager can reach one.
 
+### ⬜ A pre-existing failure set, named rather than absorbed
+
+`test_earth_chunk_manager.gd`'s settlement slice runs **75 of 90**, with
+fifteen failing — among them
+`test_step_settlements_records_a_first_production_shortfall_once`,
+`test_an_unloaded_settlement_can_grow_on_its_own_gathering` and
+`test_probe_eight_household_settlement`. A clean `origin/main` worktree
+runs the identical 75/90 with the identical fifteen names, so none of it is
+this work's. Recorded because fifteen is too many to leave as an unremarked
+background hum, and because the whole file (15,371 lines) does not finish
+inside a single run here, so nobody is looking at it by accident.
+
 ### 🚧 The lesson, and it is the same one in a new costume
 
 A fix documented against one function is not a fix if the caller has moved
