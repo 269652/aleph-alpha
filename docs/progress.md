@@ -28695,3 +28695,52 @@ Tested: `test_building_ground.gd` (7, new),
 `test_procedural_footprint_kerb_sprite.gd` (9, new),
 `test_terrain_renderer.gd` (+5, beside the overlay tests they reconcile
 with), `test_earth_chunk_manager_buildings.gd` (+4).
+
+## The item panels draw the real art too (`concept/illustrated_art_addressing.md`, 2026-09-20)
+
+Reported live: *"The inventory still renders the old procedual icons and not
+the illustrated ones"*.
+
+### ✅ Documented from the start, wired for only one of its four surfaces
+
+`illustrated_art_addressing.md` has described the `icon` context as
+"inventory/hotbar/paperdoll/tooltip" since its first draft. The pass that
+finally made real art reach the screen (2026-09-19) wired **six** call sites
+— the `World` hotbar slot, `DroppedItem`, and the two equip paths — and of
+`icon`'s own four named surfaces it reached only the hotbar.
+
+So the hotbar along the bottom of the screen drew the real axe while the
+inventory slot directly above it drew the generated one. Nothing was broken;
+two windows were simply never connected.
+
+### ✅ Seven more call sites, each asking for the context that depicts it
+
+| Window | Call sites | Context |
+| --- | --- | --- |
+| `InventoryWindow` | grid slot, paperdoll frame, drag preview | `icon` |
+| `InventoryWindow` | preview character's armour / weapon | `equipped` / `held` |
+| `CraftingWindow` | card thumbnail, material row | `icon` |
+
+The preview character mattered as much as the slots. It is the **same rig**
+the world draws, so it takes the same contexts `Player.equip_armor`/
+`equip_item` ask for rather than the flat icon — a paperdoll showing a
+different axe from the one in the player's hand two panels away would be its
+own bug.
+
+A drop-in in both windows: `IllustratedItemArt` falls back to
+`ProceduralItemSprite` for a subject with no art and fits every frame to
+`ProceduralItemSprite.SIZE`, so no call site re-scales and no layout moved.
+Both files dropped their `ProceduralItemSprite` preload outright — the
+fallback lives behind `IllustratedItemArt` now, in one place.
+
+### The fallback test does not use the obvious item
+
+`test_an_item_with_no_art_still_draws_its_generated_icon` pins `"bread"`, not
+`"rock"`. Measured against the real asset tree: **104 of the catalog's 149
+ids have icon art** now and `rock` is one of them, so the first draft of that
+test asserted a no-art fallback for an item that has art and failed for the
+right reason. Bread is one of the 45 that genuinely has none. Picking a
+familiar-sounding id by hand proves nothing here.
+
+Tests: `test_inventory_window.gd` 42/42 (+5 new), `test_crafting_window.gd`
+20/20 (+1 new).
