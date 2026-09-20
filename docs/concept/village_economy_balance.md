@@ -300,15 +300,114 @@ herbs the cottagers have.
 
 ## Status
 
-- ⬜ Mechanism 1 — the living wage and its payment.
-- ⬜ Mechanism 2 — the labour-value price index and the cart that carries
-  it.
-- ⬜ Mechanism 3 — the minimum stock on the real draw.
-- ⬜ Mechanism 4 — the full-larder target pinned to the minimum stock.
-- ⬜ Mechanism 5 — the estate draw over the larder shelves.
+- ✅ **Mechanism 1 — the living wage** (2026-09-20).
+  `VillageWages.keep_per_assessment` / `living_wage_per_assessment` /
+  `assessments_to_full_purse` / `wage_bill_for` / `wage_payouts`, pure and
+  pinned by the properties they produce (`test_village_living_wage.gd`,
+  14 tests); `NpcEconomy.pay_wage_from_purse` is the one transfer out of
+  the purse and `EarthChunkManager._pay_village_wages` runs it after the
+  cart each assessment (`test_earth_chunk_manager_village_wages.gd`, 9:
+  conservation, whole coins, carried fraction, poorest first, no arrears,
+  the income need lifted off the floor, paid the same tick as the sale).
+  The one-faucet guard (`test_gold_has_one_faucet.gd`) is unchanged and
+  still passes.
+- ✅ **Mechanism 2 — the labour-value price** (2026-09-20).
+  `MerchantVisit.EXPORT_INCOME_TO_WAGE_BILL_RATIO`, `labour_value_for`,
+  `price_index`, `unit_price_of`, `surplus_value`, and
+  `purchase(stock, reserved, labour_value)` (`test_merchant_visit.gd`, 48
+  — every earlier pin holds at a labour value of 0). The manager counts
+  assessments since the last paid visit and caps the interval at the
+  round (`test_earth_chunk_manager_merchant_labour_value.gd`, 4: a first
+  call pays for one round, the next for the labour since, the cap, and a
+  village that exports what it makes earning at least twice its bill).
+- ✅ **Mechanism 3 — the minimum stock** (2026-09-20).
+  `SettlementSurplus.cover_assessments` / `minimum_stock_for` /
+  `minimum_fuel_for`, simulated against the granary's own `catchup`
+  (`test_settlement_surplus.gd`, 24); the merchant's reserve is
+  `EarthChunkManager._merchant_reserve_for`, pinned through the step
+  (`test_earth_chunk_manager_village_larder.gd`, 5: the food and the
+  fuel are handed to the cart as its reserve, and it never sells below
+  either).
+- ✅ **Mechanism 4 — a full larder is a day's meals** (2026-09-20).
+  `HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET` 2.4, pinned to the
+  derivation and to "a village at its minimum stock reads full"
+  (`test_household_wellbeing.gd`, 31).
+- ✅ **Mechanism 5 — the draw over the larder shelves** (2026-09-20).
+  `_draw_estate_basket` / `_take_from_settlement_stock(..., shelves)`
+  (`test_earth_chunk_manager_estate_larder_draw.gd`, 6: forty herbs on a
+  farmhouse shelf read 1.00 through the real step, the goods really
+  leave, stall before ledger before shelf, a sawmill is nobody's larder,
+  fractions carried, no debt).
+
+### Measured after
+
+The same probe, the same village, both fixes in (the table under "What
+was measured" is the before):
+
+| seconds | roster | herb on the shelves | herb satisfaction | fuel satisfaction | food satisfaction | food on the shelves | purse | wallets | broke | worst need |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 150 | 10 | 7 | 1.00 | 1.00 | 0.29 | 9 | 384 | 64 | 0 of 10 | food |
+| 300 | 10 | 20 | 1.00 | 1.00 | 1.00 | 22 | 624 | 210 | 0 of 10 | work |
+| 450 | 10 | 13 | 1.00 | 1.00 | 0.54 | 15 | 864 | 338 | 0 of 10 | work |
+| 600 | 10 | 26 | 1.00 | 1.00 | 1.00 | 28 | 1104 | 474 | 0 of 10 | work |
+| 750 | 10 | 24 | 1.00 | 1.00 | 1.00 | 26 | 864 | 610 | 0 of 10 | work |
+| 900 | 10 | 9 | 1.00 | 1.00 | 0.38 | 11 | 1104 | 750 | 0 of 10 | work |
+| 1050 | 10 | 5 | 1.00 | 1.00 | 0.21 | 7 | 1344 | 902 | 0 of 10 | food |
+| 1200 | 10 | 0 | 1.00 | 1.00 | 0.00 | 2 | 1584 | 1066 | 0 of 10 | food |
+
+- **Herb reads 1.00 at every sample** where it read 0.00 at seven of
+  eight: the shelf is the households' now.
+- **The purse climbs 384 → 1584 and the wallets 64 → 1066**, nobody
+  broke, where the purse read 0 → 20 → 1 and every wallet 0. "Worst:
+  income" does not appear once; happiness peaks at 0.76 against 0.64.
+- **Food reads 1.00 at three samples** where it never did, and the cart
+  never touches it — the shelves never reach the 60 units ten households
+  keep, so nothing is for sale.
+
+### Two regressions the measurement found, and closed
+
+The first cut of mechanisms 2 and 4 measured worse than the before on one
+column: the roster fell **10 → 7 → 6** and recovered only to 9.
+
+1. **The cart stripped the woodpile.** A cart that carries the whole
+   surplus took every `wood` above the construction reserve, and `wood` is
+   the fuel every hearth burns: fuel satisfaction read 0.00 at three of
+   eight samples, the cottagers' subsistence fell below the floor, and
+   the ladder's exodus fired. Mechanism 3 keeps the woodpile too.
+2. **A target the size of the whole reserve turned a stock reading into an
+   exodus.** With the full larder at 6.0 a village holding a day or two
+   of food read its households below the floor while every belly was
+   full. Mechanism 4 is a day's meals.
+
+With both closed the roster holds at 10 through the whole run.
+
+### One fault found on the way
+
+`EarthChunkManager._collect_estate_tax` looked every household up with
+`HouseholdStore.household_for`, which resolves a *member's* entity id and
+answered null for every household id — so from the day the tax became a
+transfer it had debited nobody and credited nothing, and its own test
+stayed green only because the fixture's stock drew a merchant who funded
+the purse instead. Fixed to `get_household`, pinned against the wallets
+by a direct-call test, and the old test restated as the accrual it can
+honestly show through the step.
 
 ## Known gaps, stated rather than papered over
 
+- **A fed village eats what it grows, and the food reading is a stock.**
+  The wage's first consequence is that everybody eats: in the table
+  above the food on the shelves climbs to 28 and then drains to 0 over
+  the second half, because ten villagers who can all afford a meal eat
+  more than one farmhouse and one fisher's hut grow — a deficit poverty
+  used to hide. The answer already designed for it is
+  [village_estates.md](village_estates.md) mechanism 7 (a works that
+  feeds people scales with the people); nothing here changes it. What
+  this doc does change is how hard that bites: the estate layer reads
+  food's satisfaction off stock rather than off the flow of meals (that
+  doc's own known gap), so a village growing exactly what it eats holds
+  no stock and reads short. Mechanism 4 keeps the target as low as the
+  village's own day allows; wiring the flow is the separate pass that
+  doc already names.
 - **Meal gold is a sink.** A meal bought on the stall or off a shelf
   destroys its coin; it does not return to the purse. With the wage
   bill covered twice over by exports that is affordable, and routing the
