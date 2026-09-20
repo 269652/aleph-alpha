@@ -705,18 +705,83 @@ and 0. `FIELD_YIELD_PER_WORK_BLOCK` was re-measured at **278** from 225 by
 the same test that pinned the old one — the roster had been sized against a
 field that lost beds every night.
 
-### Every field sows wheat, for now (2026-09-19)
+### Every field sows wheat, for now (2026-09-19) — superseded
 
 Asked directly, with a field of unrecognisable purple plants in shot: *"i
 don't even know what the purple crops are it plants.. atm it should plant
 only wheat which grows and gets harvested properly"*. The purple was the
 herbalist's own herb, dying overnight exactly as the wheat beside it was.
 
-`CROP_BY_OCCUPATION` now reads `{"farmer": "wheat", "herbalist": "wheat"}`.
-Deliberately a narrowing of the CROP, not of who farms: the herbalist keeps
-the farmhouse and field an earlier ask gave them (*"similar to a farmer the
-herbalist should build a farm house and plant herbs"*), and putting herbs
-back in their bed is that one entry and nothing else.
+`CROP_BY_OCCUPATION` was narrowed to `{"farmer": "wheat", "herbalist":
+"wheat"}` — deliberately a narrowing of the CROP, not of who farms.
+
+**That narrowing is withdrawn by the section below.** It was the right
+answer to "the crop dies before it ripens" and the wrong one to keep once
+the night bug was fixed: a village that sows nothing but wheat has nothing
+edible, because wheat is not food (see below), and the herbalist's own herb
+— which is — never went back in.
+
+### What a field sows follows the village's need (2026-09-20)
+
+Reported with the village's own panels open: *"they have 0 Herbs even though
+there are 3 farm houses... so deciding what to plant must be based on
+demand"*, alongside *"The warehouse shows 205 Wheat but the Villagers show
+50% food"*.
+
+Both are the same defect seen from two sides, and the second is the one that
+explains it. **Wheat is `kind = "material"`, not `kind = "food"`** —
+[milling_and_baking.md](milling_and_baking.md)'s own first pillar, "grain is
+not food until it is milled and baked". Every filter that decides whether a
+village is fed (`SettlementFood`, `VillageMarket`, `VillageEstates`'
+`kind:food` token) therefore counts a full granary of wheat as **zero
+food**. A village sowing nothing but wheat, with no mill standing, starves
+beside it. That is not a distribution failure; it is a cropping one.
+
+Two rules replace the occupation table:
+
+1. **The crop is chosen at SOWING, not at hiring.** `NpcMarker._field_crop`
+   was set once in `setup_economy` from the villager's occupation and never
+   revisited, so a village's entire cropping plan was fixed the moment its
+   villagers were built — before a single basket had ever been drawn.
+2. **It is chosen from the same satisfaction reading the needs panel
+   shows.** `VillageAssembly`'s state already carries `satisfaction` per
+   good, straight off the real `EstateConsumption.draw`
+   ([village_estates.md](village_estates.md) mechanism 8). A field sows the
+   sowable crop whose good is **least satisfied**. The panel and the plough
+   read one number, so what a village says it lacks and what it plants
+   cannot disagree.
+
+**What a crop answers**, and why each is in the list rather than a crop
+being anything with art:
+
+| Crop | Answers | Why |
+|------|---------|-----|
+| `herb` | `herb`, `kind:food` | the kossaet station good, and edible itself |
+| `carrot` | `kind:food` | real `kind = "food"`, real crop art |
+| `potato` | `kind:food` | the same |
+| `wheat` | `bread` | **only through a mill and a bakery** |
+
+Wheat's row is the rule that matters. It is offered **only where the
+village can really bake it** — a mill and a bakery standing. Everywhere
+else it answers nothing at all, so a field sows something the village can
+eat on the day it is harvested rather than a material nobody can mill.
+
+A crop is scored by the **worst-supplied** good it answers, not the mean: a
+crop that would relieve a good sitting at 0.0 is worth more than one
+relieving a good at 0.9, which is the same "a household with all the bread
+in the world and no fuel is cold" minimum rule `EstateConsumption` already
+applies one level up.
+
+**Occupation survives as a tie-break, not as the rule.** Among crops the
+village needs equally, an herbalist reaches for herbs. `VillageFarm.
+crop_for` keeps its second job untouched — three callers use it as the
+predicate *"does this occupation work a field at all"* (`VillageRenderer`
+twice, `NpcMarker.setup_economy` once), and that question is not the same as
+*"what goes in the ground today"*.
+
+**Fail-open, like every other world hook here.** A marker with no world to
+ask, or a village with no reading yet, keeps the occupation's own
+traditional crop — an isolated test sows exactly what it always did.
 
 ### Persistence
 
@@ -749,6 +814,17 @@ again.
 
 ## Status
 
+- ✅ **A field sows what the village is short of** (2026-09-20) —
+  `VillageCropChoice`, reading `VillageAssembly`'s own per-good
+  satisfaction so the needs panel and the plough share one number. Wheat is
+  offered only where a mill AND a bakery stand, because wheat is
+  `kind = "material"` and a granary of it counts as zero food — which is
+  what *"the warehouse shows 205 Wheat but the Villagers show 50% food"*
+  really was. The crop is chosen at sowing rather than frozen in
+  `setup_economy`, and the haul reads the shelf rather than one assumed id,
+  since a farmhouse may now hold a crop its villager was never built with.
+  `CROP_BY_OCCUPATION` survives as the TRADITIONAL crop — a tie-break and
+  the fallback — with the herbalist's herb restored. 15/15 + 4/4 wiring.
 - ✅ **A farmhouse is only raised where its field will really be derived**
   (2026-09-19) — see "One rule, two callers" above. Siting and derivation
   were two copies of the same question that had drifted apart, so a

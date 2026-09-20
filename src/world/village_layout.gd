@@ -95,6 +95,33 @@ const _START_JITTER_TILES := 3
 ## well and the stall). Wide enough for the town hall (4) plus a paved
 ## margin either side; the north rows are exactly the hall's depth.
 const PLAZA_WIDTH_TILES := 8
+
+## How much of the square has to be REAL paving before it is worth laying
+## at all.
+##
+## Measured, not chosen (tools/probe_village_supply.gd): of the two genuine
+## villages in a 14-chunk sweep, one had 8 of its 48 plaza cells paved --
+## exactly the single street row crossing it -- because a farm fence and a
+## warehouse stood inside the square and the paving pass abandoned the whole
+## rect on the first cell it could not take. A square laid AROUND what
+## stands in it is still a square; a handful of scattered cells is not a
+## square but stray paving, which is why there is a floor at all rather than
+## "pave whatever you can".
+##
+## A share rather than a count, so the rule does not change meaning if
+## PLAZA_WIDTH_TILES ever does. Above a half because "most of it" is what
+## makes a crossable market place, and below one because a single blocked
+## cell must not cancel a village its centre -- both test-pinned rather
+## than asserted here.
+const PLAZA_MIN_PAVED_SHARE := 0.6
+
+
+## Whether a square with `pavable_cells` of its `total_cells` really
+## takeable is worth laying.
+static func plaza_is_worth_laying(pavable_cells: int, total_cells: int) -> bool:
+	if total_cells <= 0:
+		return false
+	return float(pavable_cells) / float(total_cells) >= PLAZA_MIN_PAVED_SHARE
 const PLAZA_ROWS_NORTH := 3
 const PLAZA_ROWS_SOUTH := 2
 const CIVIC_BUILDING_ID := "city_hall"
