@@ -6,6 +6,7 @@ const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const RoofShape = preload("res://src/rendering/roof_shape.gd")
 const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
@@ -178,6 +179,49 @@ static func building_ground_tile_for(kerb_tile_ids: Array) -> String:
 		if is_road_tile(tile_id):
 			paved += 1
 	return ROAD_TILE_ID if float(paved) > float(kerb_tile_ids.size()) * PAVED_KERB_SHARE else EARTH_TILE_ID
+
+
+## Which ground every building footprint cell in `chunk` paints, as local
+## cell -> tile id. Computed once per paint() and keyed off the RECORD in
+## Chunk.buildings, not off the markers: a kerb is read around the whole
+## footprint, so every cell of one building shares one answer and one
+## reading of the ring (the doorstep road south of a house's own door
+## must not be allowed to pave the house that fronts it).
+##
+## A footprint cell no record owns -- a stale marker, or a chunk read
+## mid-load -- is simply absent here, and paint()'s own default leaves it
+## the earth yard every footprint carried before this existed.
+static func building_ground_by_cell(chunk: Chunk) -> Dictionary:
+	var ground := {}
+	for origin_local in chunk.buildings:
+		var building_id: String = chunk.buildings[origin_local].get("id", "")
+		if not BuildingCatalog.has_building(building_id):
+			continue
+		var tile_id := building_ground_tile_for(
+			_kerb_tile_ids(chunk, origin_local, BuildingCatalog.footprint_of(building_id))
+		)
+		for cell in BuildingCatalog.footprint_cells(building_id, origin_local):
+			ground[cell] = tile_id
+	return ground
+
+
+## The tile ids carried by the ring of cells immediately around the
+## footprint at `origin_local`. A cell outside the chunk is left out
+## rather than counted as open ground: a plot at the chunk's own edge has
+## neighbours this chunk genuinely cannot read, and calling them unpaved
+## would be an answer invented rather than measured.
+static func _kerb_tile_ids(chunk: Chunk, origin_local: Vector2i, footprint: Vector2i) -> Array:
+	var ids: Array = []
+	var plot := Rect2i(origin_local, footprint)
+	for y in range(origin_local.y - 1, origin_local.y + footprint.y + 1):
+		for x in range(origin_local.x - 1, origin_local.x + footprint.x + 1):
+			var cell := Vector2i(x, y)
+			if plot.has_point(cell):
+				continue
+			if cell.x < 0 or cell.y < 0 or cell.x >= chunk.width or cell.y >= chunk.height:
+				continue
+			ids.append(chunk.modifications.get(cell, ""))
+	return ids
 
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.
@@ -1410,6 +1454,11 @@ func paint(
 	origin: Vector2i = Vector2i.ZERO,
 	global_biome_lookup: Callable = Callable()
 ) -> void:
+	# A building's own footprint is not a tile of its own: it paints the
+	# GROUND the building stands on (docs/concept/building.md, "The ground
+	# a building stands on, and the kerb round its plot"), read once here
+	# per building rather than per cell.
+	var building_ground := building_ground_by_cell(chunk)
 	for y in chunk.height:
 		for x in chunk.width:
 			var local := Vector2i(x, y)
@@ -1417,6 +1466,8 @@ func paint(
 			var atlas_coords: Vector2i
 			if chunk.modifications.has(local):
 				var tile_id: String = chunk.modifications[local]
+				if BuildingCatalog.occupies(tile_id):
+					tile_id = building_ground.get(local, EARTH_TILE_ID)
 				if tile_id == EARTH_TILE_ID:
 					var variant := variant_index_for_position(global.x, global.y)
 					var neighbors := _neighbor_biomes(chunk, x, y, origin, global_biome_lookup, true)

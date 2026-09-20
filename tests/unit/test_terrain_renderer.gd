@@ -2918,3 +2918,141 @@ func test_a_notched_house_shows_a_facade_on_every_south_facing_run():
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(5, 3)), facade_wall, "the notch's own south face")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 6)), facade_wall, "the wing's south face")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 3)), renderer.atlas_coords_for_modification("wood_floor"), "the wing joins the block here: floor")
+
+
+# -- a building's own ground (docs/concept/building.md, "The ground a -------
+# -- building stands on, and the kerb round its plot") ---------------------
+#
+# Reported live with a screenshot: "the background of the houses 2x2 should
+# be variable; if the city hall is placed on the plaza it should have
+# cobblestone background so it looks seamless". A footprint's own ids (the
+# building id on the anchor, BuildingCatalog.FOOTPRINT_TILE_ID on every
+# other cell) are not tiles this painter knows, so both fell through
+# atlas_coords_for_modification's fail-safe onto one dead-flat EARTH_COLOR
+# square -- the same square whether the building was raised on open grass
+# or on the village's own paved plaza, whose paving _place_building_over_
+# roads had lifted out from under it first.
+
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+
+
+## A `size`-square all-grassland chunk carrying a 2x2 building at (1,1) --
+## its anchor id and its footprint markers -- and the real record that says
+## who owns those cells.
+func _chunk_with_a_house_at_1_1(size: int) -> Chunk:
+	var chunk := Chunk.new()
+	chunk.width = size
+	chunk.height = size
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(size * size)
+	chunk.elevation.fill(0.4)
+	chunk.biome = PackedStringArray()
+	for i in size * size:
+		chunk.biome.append("grassland")
+	var origin := Vector2i(1, 1)
+	for cell in BuildingCatalog.footprint_cells("house_small", origin):
+		chunk.modifications[cell] = "house_small" if cell == origin else BuildingCatalog.FOOTPRINT_TILE_ID
+	chunk.buildings[origin] = {"id": "house_small", "facing": Vector2i(0, 1), "seed": 1}
+	return chunk
+
+
+## The hall on the square: every cell around the footprint is the village's
+## own paving, so the footprint carries that paving too and the square runs
+## unbroken under the building standing on it.
+func test_paint_gives_a_building_ringed_by_paving_the_paving_itself():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	for y in 4:
+		for x in 4:
+			var cell := Vector2i(x, y)
+			if not chunk.modifications.has(cell):
+				chunk.modifications[cell] = TerrainRenderer.ROAD_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var road := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	for cell in BuildingCatalog.footprint_cells("house_small", Vector2i(1, 1)):
+		assert_eq(
+			tile_map_layer.get_cell_atlas_coords(cell), road,
+			"%s: a building on the square stands on the square" % cell
+		)
+
+
+## The other half of the same rule: nothing around this one is paved, so it
+## keeps its trodden yard -- and that yard dithers into the grass it was
+## cleared out of instead of cutting a hard square out of it.
+func test_paint_gives_a_building_on_open_ground_a_yard_that_dithers_into_it():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	var north_west := [Vector2i(0, -1), Vector2i(-1, 0)]
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_earth_blend("grassland", north_west, variant),
+		"the yard's own outer corner dithers toward the two sides that really border grass"
+	)
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID),
+		"a flat square is exactly what was reported"
+	)
+
+
+## The anchor cell carries the BUILDING ID, not the footprint marker, and a
+## reader that only knew about the marker would leave one corner of every
+## building painted as a flat earth square.
+func test_paint_treats_a_buildings_anchor_cell_as_its_ground_too():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	for y in 4:
+		for x in 4:
+			var cell := Vector2i(x, y)
+			if not chunk.modifications.has(cell):
+				chunk.modifications[cell] = TerrainRenderer.ROAD_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID),
+		"the anchor is ground like every other footprint cell"
+	)
+
+
+## The kerb is read around the WHOLE footprint, not around each cell: the
+## doorstep road south of a house's own door must not pave the house.
+func test_paint_does_not_pave_a_house_because_its_doorstep_is_a_road():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	var doorstep: Vector2i = Vector2i(1, 1) + BuildingCatalog.doorstep_of("house_small")
+	chunk.modifications[doorstep] = TerrainRenderer.ROAD_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var road := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	for cell in BuildingCatalog.footprint_cells("house_small", Vector2i(1, 1)):
+		assert_ne(tile_map_layer.get_cell_atlas_coords(cell), road, "%s fronts a street, it does not stand on one" % cell)
+
+
+## A footprint marker with no record owning it (a chunk mid-load, or a
+## stale marker) paints the yard rather than crashing on a lookup that
+## cannot answer -- the same fail-safe default every unknown id gets.
+func test_paint_falls_back_to_the_yard_for_a_footprint_no_record_owns():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	chunk.buildings.clear()
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var road := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	for cell in BuildingCatalog.footprint_cells("house_small", Vector2i(1, 1)):
+		assert_ne(tile_map_layer.get_cell_atlas_coords(cell), road, str(cell))
+		assert_ne(tile_map_layer.get_cell_source_id(cell), -1, "%s is still painted" % cell)

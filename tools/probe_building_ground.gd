@@ -154,7 +154,31 @@ func _painted_name(chunk_coord: Vector2i, origin_local: Vector2i) -> String:
 	for name in named:
 		if named[name] == coords:
 			return name
+	# The earth tier does not paint one tile: a worn yard dithers toward
+	# whatever real biome borders it (paint()'s own earth branch), so an
+	# unrecognised coordinate is almost always one of that family. Name
+	# which one rather than printing a bare atlas address nobody can read.
+	var BiomeClassifier = load("res://src/world/biome_classifier.gd")
+	var variant: int = renderer.variant_index_for_position(g.x, g.y)
+	for biome in BiomeClassifier.KNOWN_BIOMES:
+		for directions in _direction_subsets():
+			if renderer.atlas_coords_for_earth_blend(biome, directions, variant) == coords:
+				return "earth dithering into %s" % biome
 	return "other %s" % coords
+
+
+## Every non-empty set of cardinal directions a blend tile can be oriented
+## toward -- the 15 masks TerrainRenderer.DIRECTION_MASK_COUNT counts.
+func _direction_subsets() -> Array:
+	var cardinals := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	var subsets: Array = []
+	for mask in range(1, 16):
+		var directions: Array = []
+		for i in 4:
+			if mask & (1 << i):
+				directions.append(cardinals[i])
+		subsets.append(directions)
+	return subsets
 
 
 func _dry_in(chunk_coord: Vector2i) -> Callable:
