@@ -61,3 +61,100 @@ func test_the_market_is_drawn_from_before_the_shelves():
 ## second one would be a second treasury.
 func test_the_gold_still_lands_in_the_one_purse():
 	assert_true(_body("_step_merchant_visits").contains("deposit_to_purse("))
+
+
+# -- a larder is not a warehouse ------------------------------------------
+#
+# The fix for a village that starved next to its own full farmhouses
+# narrowed _settlement_structure_stocks to STRUCTURE_MEAL_SOURCE_IDS, which
+# is right for what a village can EAT and wrong for what a merchant can
+# BUY. They are different questions about the same shelves: a farmhouse is
+# not a place anybody eats, and it is exactly the container the carter's
+# round fills and the merchant walks the circuit for.
+#
+# Measured after that narrowing (tools/probe_village_famine.gd) on a real
+# village at t=1200 with 99 units on the stall and 117 on the shelves:
+#
+#     villagers' purse 0.0 gold | merchant's purse 0.0 gold
+#     8 of 8 villagers broke
+#
+# No gold existed anywhere in the village, because the merchant is the only
+# faucet and his view had been narrowed to the larder.
+
+const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+
+var manager: EarthChunkManager
+var tile_map_layer: TileMapLayer
+var entities_parent: Node2D
+var creatures_parent: Node2D
+var _chunk_coord := Vector2i(0, 0)
+var _store := Vector2i(10, 6)
+
+
+func before_each():
+	tile_map_layer = TileMapLayer.new()
+	entities_parent = Node2D.new()
+	creatures_parent = Node2D.new()
+	add_child(tile_map_layer)
+	add_child(entities_parent)
+	manager = EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	manager._load_chunk(_chunk_coord)
+
+
+func after_each():
+	remove_child(tile_map_layer)
+	remove_child(entities_parent)
+	manager.free()
+	tile_map_layer.free()
+	entities_parent.free()
+	creatures_parent.free()
+
+
+func _a_stocked(structure_id: String, item_id: String, count: int) -> void:
+	assert_true(
+		manager.build_at_global(_store.x, _store.y, structure_id),
+		"precondition: the %s stands" % structure_id
+	)
+	manager.deposit_to_structure_at(_store.x, _store.y, item_id, count)
+
+
+## Exactly the views _step_merchant_visits builds, added up the way it does.
+func _what_the_merchant_is_shown() -> Dictionary:
+	var settlement_id: String = manager.EntityRef.for_settlement(_chunk_coord)
+	var views: Array = []
+	for shelf in manager._settlement_structure_stocks(settlement_id):
+		views.append(shelf.stock)
+	return SettlementSurplus.combined(views)
+
+
+## The regression itself, in one line: a hide in the farmhouse is a hide
+## the merchant will pay for.
+func test_the_merchant_is_shown_the_farmhouse_the_larder_leaves_out():
+	_a_stocked("farmhouse", "hide", 12)
+	assert_eq(
+		int(_what_the_merchant_is_shown().get("hide", 0)), 12,
+		"the only gold faucet in the game cannot see the village's goods"
+	)
+
+
+## And it really turns into money: goods he cannot see are goods nobody is
+## ever paid for, which is a village with no income at all.
+func test_goods_in_a_farmhouse_are_worth_gold():
+	_a_stocked("farmhouse", "hide", 12)
+	var sale: Dictionary = MerchantVisit.purchase(_what_the_merchant_is_shown())
+	assert_eq(int(sale["paid"]), 12 * MerchantVisit.price_of("hide"))
+
+
+## The narrowing that broke it stays right where it belongs: nobody eats
+## off a farmhouse, so the village must not count it as food.
+func test_the_larder_still_leaves_the_farmhouse_out():
+	_a_stocked("farmhouse", "cooked_meat", 50)
+	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
+	var catalog = ItemCatalog.new()
+	var larder := 0
+	for stock in manager._settlement_larder_stocks(manager.EntityRef.for_settlement(_chunk_coord)):
+		for item_id in stock.stock:
+			if catalog.kind_of(String(item_id)) == "food":
+				larder += int(stock.stock[item_id])
+	assert_eq(larder, 0, "a farmhouse is where a harvest waits for the carter")

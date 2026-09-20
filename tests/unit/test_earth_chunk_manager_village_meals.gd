@@ -81,7 +81,7 @@ func test_a_villager_can_eat_from_the_village_warehouse():
 ## village starves next to its own full store.
 func test_what_the_settlement_counts_as_food_is_what_its_people_can_eat():
 	_a_stocked(VillageLayout.WAREHOUSE_BUILDING_ID, "cooked_meat", 5)
-	var stocks: Array = manager._settlement_structure_stocks(
+	var stocks: Array = manager._settlement_larder_stocks(
 		manager.EntityRef.for_settlement(_chunk_coord)
 	)
 	assert_false(stocks.is_empty(), "precondition: the settlement counts this shelf at all")
@@ -131,7 +131,7 @@ func _settlement_larder() -> int:
 	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
 	var catalog = ItemCatalog.new()
 	var total := 0
-	for stock in manager._settlement_structure_stocks(
+	for stock in manager._settlement_larder_stocks(
 		manager.EntityRef.for_settlement(_chunk_coord)
 	):
 		for item_id in stock.stock:

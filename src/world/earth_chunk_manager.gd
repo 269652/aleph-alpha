@@ -2602,25 +2602,38 @@ func _settlement_status_for(settlement_id: String) -> String:
 ## bread its Bakery bakes and its Storage holds.
 func _settlement_capacity(settlement_id: String, market, village_market) -> int:
 	return SettlementFood.carrying_capacity(
-		market, village_market, _item_catalog, _settlement_structure_stocks(settlement_id)
+		market, village_market, _item_catalog, _settlement_larder_stocks(settlement_id)
 	)
 
 
-## The settlement's own LARDER: the StructureStock of each shelf in its
-## chunk that its people can actually eat off. Keys are "%d_%d" global
-## tiles (see _structure_stock_key), so the chunk each belongs to is a
-## plain divide.
+## Every container this settlement really keeps GOODS in: the
+## StructureStock of each shelf standing in its chunk, whatever building
+## it belongs to -- the warehouse a carter fills, the farmhouse a harvest
+## waits in, the bakery's own shelf.
 ##
-## Filtered by STRUCTURE_MEAL_SOURCE_IDS, which is the contract
-## SettlementFood.food_stock states for this argument in its own words --
-## "a Storage holding hauled bread, a Bakery with loaves still on its
-## shelf". This handed it EVERY shelf in the chunk instead, and a
-## FARMHOUSE is where a harvest waits for the carter, not a place anybody
-## eats.
+## This is what a MERCHANT is shown (docs/concept/traveling_merchants.md,
+## "A merchant buys the whole village, not one of its cupboards"), and it
+## deliberately is NOT the same answer as _settlement_larder_stocks: what
+## a village can SELL and what its people can EAT are different questions
+## about the same shelves. Answering both with the narrow one closed the
+## only gold faucet the game has -- measured (tools/probe_village_purse.gd)
+## on a real village holding 99 units on the stall and 117 on its shelves,
+## with BOTH purses at 0.0 gold and 8 of 8 villagers broke.
+func _settlement_structure_stocks(settlement_id: String) -> Array:
+	return _shelves_in_settlement_chunk(settlement_id, [])
+
+
+## The settlement's own LARDER: of those shelves, the ones its people can
+## actually EAT off -- STRUCTURE_MEAL_SOURCE_IDS, which is the contract
+## SettlementFood.food_stock states for its argument in its own words, "a
+## Storage holding hauled bread, a Bakery with loaves still on its shelf".
 ##
-## Measured before the fix (tools/probe_village_famine.gd) on a real
-## village whose hunger was pinned at 1.00 and whose worst-off villager
-## was 174 of 200 through the starvation window:
+## A farmhouse is where a harvest waits for the carter, not a place anybody
+## eats, and handing every shelf to a FOOD reading is what let a village
+## judge itself richly fed while its people starved. Measured before this
+## split (tools/probe_village_famine.gd) on a real village whose hunger was
+## pinned at 1.00 and whose worst-off villager was 174 of 200 through the
+## starvation window:
 ##
 ##     settlement Market : 0
 ##     VillageMarket     : 0
@@ -2628,12 +2641,25 @@ func _settlement_capacity(settlement_id: String, market, village_market) -> int:
 ##
 ## 234 units over twelve households is 19.5 each against
 ## VillageImmigration.FED_THRESHOLD of 2.0, so the village read as richly
-## fed and kept drawing households into a famine. The same "counted as
-## food but unreachable" split STRUCTURE_MEAL_SOURCE_IDS itself had to fix
-## one layer down, and fixing it here fixes every reader at once: the
-## immigration gate, the settlement's GROWING/DECLINING status, the food
-## shortfall a build decision acts on, and the card's own "feeds N of M".
-func _settlement_structure_stocks(settlement_id: String) -> Array:
+## fed and kept drawing households into a famine.
+##
+## Kept apart from _settlement_structure_stocks because they answer
+## DIFFERENT QUESTIONS about the same shelves. Collapsing them into the one
+## narrow answer closed the merchant's eyes to the very container the
+## carter's round fills, and a merchant is the only faucet gold has: the
+## same village measured 99 units on the stall and 117 on its shelves with
+## BOTH purses at 0.0 gold and every villager broke.
+func _settlement_larder_stocks(settlement_id: String) -> Array:
+	return _shelves_in_settlement_chunk(settlement_id, STRUCTURE_MEAL_SOURCE_IDS)
+
+
+## Every StructureStock standing in this settlement's chunk, optionally
+## narrowed to a set of structure ids. `structure_ids` empty means every
+## shelf, whatever building it belongs to.
+##
+## Keys are "%d_%d" global tiles (see _structure_stock_key), so the chunk
+## each belongs to is a plain divide.
+func _shelves_in_settlement_chunk(settlement_id: String, structure_ids: Array) -> Array:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var stocks: Array = []
 	for instance_key in _structure_stocks.instance_keys():
@@ -2643,8 +2669,9 @@ func _settlement_structure_stocks(settlement_id: String) -> Array:
 		var tile := Vector2i(int(parts[0]), int(parts[1]))
 		if _chunk_coord_for_tile(tile) != chunk_coord:
 			continue
-		if not STRUCTURE_MEAL_SOURCE_IDS.has(modification_at_global(tile.x, tile.y)):
-			continue
+		if not structure_ids.is_empty():
+			if not structure_ids.has(modification_at_global(tile.x, tile.y)):
+				continue
 		stocks.append(_structure_stocks.stock_for(instance_key))
 	return stocks
 
@@ -5192,7 +5219,7 @@ func _food_per_household(settlement_id: String, market, household_count: int) ->
 		return 0.0
 	var stock := SettlementFood.food_stock(
 		market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
-		_item_catalog, _settlement_structure_stocks(settlement_id)
+		_item_catalog, _settlement_larder_stocks(settlement_id)
 	)
 	return float(stock) / float(household_count)
 
@@ -18061,7 +18088,7 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 	# bread -> bakery -> flour -> mill -> wheat -> farm with no new code.
 	var food_shortfall := SettlementFood.food_shortfall_for(
 		household_ids.size(), market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
-		_item_catalog, _settlement_structure_stocks(settlement_id)
+		_item_catalog, _settlement_larder_stocks(settlement_id)
 	)
 	if not food_shortfall.is_empty():
 		shortfalls.append(food_shortfall)
