@@ -157,6 +157,8 @@ const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
 const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
+const SpellWeaveWindow = preload("res://scenes/spell_weave_window.gd")
+const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -450,6 +452,7 @@ const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
 const QUEST_LOG_TOGGLE_ACTION := "toggle_quest_log"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
+const WEAVE_TOGGLE_ACTION := "toggle_weave"
 ## P for planner (docs/concept/planner_mode.md). The mode toggle used to be
 ## the HUD button alone, and a focused Button answers ui_accept -- which is
 ## Space, the attack key.
@@ -1239,6 +1242,7 @@ func _ready() -> void:
 	_build_quest_log_window()
 	_build_conversation_window()
 	_build_skill_window()
+	_build_weave_window()
 	_build_settings_overlay()
 	_build_hover_tooltip()
 	_build_death_label()
@@ -2067,6 +2071,73 @@ func _on_craft_requested(recipe_id: String) -> void:
 ## Builds the skill-tree spend window (see SkillTreeWindow), hidden until
 ## toggled with toggle_skills (default L). Clicking an affordable node/keystone
 ## allocates it on the local player and refreshes.
+## The spell-weave surface (docs/concept/spell_weaving.md), hidden until
+## toggled with toggle_weave (default M). The window reports what the
+## player arranged; Player.weave owns whether it is allowed.
+func _build_weave_window() -> void:
+	_weave_window = SpellWeaveWindow.new()
+	_weave_window.theme = _ui_theme
+	_weave_window.set_anchors_preset(Control.PRESET_CENTER)
+	_weave_window.offset_left = -SpellWeaveWindow.WINDOW_SIZE.x * 0.5
+	_weave_window.offset_top = -SpellWeaveWindow.WINDOW_SIZE.y * 0.5
+	_weave_window.offset_right = SpellWeaveWindow.WINDOW_SIZE.x * 0.5
+	_weave_window.offset_bottom = SpellWeaveWindow.WINDOW_SIZE.y * 0.5
+	_ui.add_child(_weave_window)
+	_weave_window.weave_requested.connect(_on_weave_requested)
+	_weave_window.socket_requested.connect(_on_weave_socket_requested)
+	_weave_window.unsocket_requested.connect(_on_weave_unsocket_requested)
+
+
+var _weave_window: SpellWeaveWindow
+
+## The arrangement being built on screen, before it is committed. Held
+## here rather than in the window because the window is a view: it is
+## rebuilt from this on every refresh and owns nothing.
+var _weave_draft: Dictionary = {}
+
+
+func _refresh_weave_window(local_player: Player) -> void:
+	if _weave_window == null or not _weave_window.visible:
+		return
+	_weave_window.refresh(local_player.motes(), _weave_draft)
+
+
+## Clicking a mote in the pouch sockets it next, up to the shared socket
+## limit. Refused past that by the same constant the validator uses.
+func _on_weave_socket_requested(atom_id: String) -> void:
+	var atoms: Array = SpellDraft.atoms_of(_weave_draft)
+	if atoms.size() >= SpellDraft.MAX_SOCKETS:
+		return
+	atoms.append(atom_id)
+	_weave_draft = SpellDraft.make(atoms, SpellDraft.delivery_of(_weave_draft))
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_refresh_weave_window(local_player)
+
+
+func _on_weave_unsocket_requested(socket_index: int) -> void:
+	var atoms: Array = SpellDraft.atoms_of(_weave_draft)
+	if socket_index < 0 or socket_index >= atoms.size():
+		return
+	atoms.remove_at(socket_index)
+	_weave_draft = SpellDraft.make(atoms, SpellDraft.delivery_of(_weave_draft))
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_refresh_weave_window(local_player)
+
+
+## Committing the arrangement. Player.weave owns both gates and writes its
+## own refusal into cast_message, which the HUD already shows -- so a
+## refused weave reads as a sentence rather than a button that did nothing.
+func _on_weave_requested(draft: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	if local_player.weave(draft):
+		_set_message_banner(_cast_banner, "Woven: %s" % SpellDraft.name_for(draft))
+	_refresh_weave_window(local_player)
+
+
 func _build_skill_window() -> void:
 	_skill_window = SkillTreeWindow.new()
 	_skill_window.theme = _ui_theme
@@ -4438,6 +4509,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if lp != null:
 			_refresh_skill_window(lp)
+	elif event.is_action_pressed(WEAVE_TOGGLE_ACTION):
+		_weave_window.toggle()
+		var weaver := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if weaver != null:
+			# Opening on what is already woven, so the window is a view of
+			# this character rather than a blank slate each time.
+			if _weave_draft.is_empty():
+				_weave_draft = weaver.woven_draft()
+			_refresh_weave_window(weaver)
 	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
 		_handle_escape()
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:

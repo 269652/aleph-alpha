@@ -287,10 +287,25 @@ holds both halves of pillar 6 at once.
   arrangement must pass the shared validator, whose refusals are
   sentences. The pouch, what has been witnessed and the weave itself all
   persist, because a spell you designed is yours.
-- ⬜ **No authoring surface yet.** A player can own and cast a weave, but
-  nothing on screen lets them arrange one: the socket row, the pouch and
-  the live name/cost/reaction header are the next slice. Until then the
-  loop is reachable only through code.
+- ✅ **The Weave, on screen** (2026-09-20). `scenes/spell_weave_window.gd`,
+  toggled with `toggle_weave` (default **M**): a socket row, the pouch of
+  what this character owns, and a header that **rewrites itself live** as
+  motes are socketed — the name those atoms in that order earn, the
+  delivery, the mana it will cost, and every reaction the order produces,
+  each phrased as whether the pair feeds or fights rather than as a
+  multiplier a player would have to do arithmetic with.
+
+  Swapping two motes visibly changes the header, which is pinned by test:
+  if the order were not legible the craft would be invisible, and the
+  whole feature would read as a form to fill in.
+
+  The window performs nothing. It reports the arrangement and
+  `Player.weave` owns both gates, writing its own refusal into
+  `cast_message` — so a refused weave reads as a sentence, not a button
+  that did nothing. The same division `ConversationWindow` keeps for the
+  give verb, for the same reason: a window that could weave would be a
+  second opinion about what a legal spell is.
+  (`test_spell_weave_window.gd`, 9.)
 - ✅ **Three phenomena really teach, in play** (2026-09-20). Being
   envenomated (`Player.apply_venom` — and the only thing that applies
   venom is the far country's snake, so that mote is a souvenir of having
