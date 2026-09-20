@@ -422,7 +422,7 @@ func test_every_placed_building_faces_south_onto_a_real_road_cell():
 		assert_eq(call["facing"], Vector2i(0, 1))
 		var doorstep: Vector2i = call["origin_local"] + BuildingCatalog.doorstep_of(call["building_id"])
 		var doorstep_global: Vector2i = coord * CHUNK_SIZE + doorstep
-		assert_true(world.built_tiles.has(doorstep_global), "doorstep %s should be a real road cell" % str(doorstep_global))
+		assert_true(world.built_tiles.has(doorstep_global), "doorstep %s of %s should be a real road cell" % [str(doorstep_global), call["building_id"]])
 
 
 ## A reload (the settlement's buildings already persisted) must not grow
@@ -2555,6 +2555,38 @@ func test_every_fishers_pond_gets_a_hut_on_its_own_bank():
 			VillagePond.hut_stands_by(pond, huts),
 			"the pond at %s has no hut on its bank" % str(pond[0])
 		)
+
+
+## And you can walk to its door. Every OTHER building a village places
+## fronts a real road cell, and the layout lays that cell as part of siting
+## the plot (test_every_placed_building_faces_south_onto_a_real_road_cell
+## pins it for the lot). A hut is deliberately sited on the BANK rather
+## than on street frontage, so nothing lays its front step unless the hut
+## pass does — which it did not. The invariant held in the fixture village
+## from the day the hut landed only because that hut happened to fall with
+## its doorstep on a rail. Moving the pond by one rectangle broke it, and
+## the lot test caught it.
+func test_a_fisher_huts_own_front_step_is_laid_for_it():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var huts := 0
+	for call in world.place_calls:
+		if call["building_id"] != VillagePond.HUT_BUILDING_ID:
+			continue
+		huts += 1
+		var doorstep: Vector2i = (
+			(call["origin_local"] as Vector2i)
+			+ BuildingCatalog.doorstep_of(VillagePond.HUT_BUILDING_ID)
+		)
+		var g: Vector2i = coord * CHUNK_SIZE + doorstep
+		assert_true(
+			world.built_tiles.has(g),
+			"the hut at %s has no front step at %s" % [str(call["origin_local"]), str(doorstep)]
+		)
+	assert_gt(huts, 0, "precondition: this village really raised a hut")
 
 
 ## One hut per pond, on every reload -- a village walked past twice must

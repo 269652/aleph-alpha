@@ -92,21 +92,43 @@ static func is_pond_tile(tile_id: String) -> bool:
 ## their own ground is behind them. Without this the search had nowhere to
 ## go but over the road, which is what put the water across the street from
 ## its owner (reported live).
-static func pond_rect(origin: Vector2i, building_id: String, is_free: Callable):
-	return VillageFarm.field_rect(origin, building_id, is_free, true)
+##
+## `accepts_water` is a further condition on the WHOLE body of water, given
+## its cells — the field's own `accepts_rect`, in the cells this module
+## speaks in. The dig uses it to refuse a rectangle whose bank could not
+## take the hut that belongs to it (see bank_takes_a_hut). Omitted, the
+## search is the one it has always done.
+static func pond_rect(
+	origin: Vector2i, building_id: String, is_free: Callable,
+	accepts_water: Callable = Callable()
+):
+	var accepts_rect := Callable()
+	if accepts_water.is_valid():
+		accepts_rect = func(rect: Rect2i) -> bool:
+			return accepts_water.call(_cells_of(rect))
+	return VillageFarm.field_rect(origin, building_id, is_free, true, accepts_rect)
+
+
+## Every cell of a rectangle, in the same (y, x) order everything else here
+## returns.
+static func _cells_of(rect: Rect2i) -> Array:
+	var cells: Array = []
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			cells.append(Vector2i(x, y))
+	return cells
 
 
 ## Those cells, in the same (y, x) order everything else here returns, or []
 ## where no pond fits.
-static func pond_cells(origin: Vector2i, building_id: String, is_free: Callable) -> Array:
-	var rect = pond_rect(origin, building_id, is_free)
+static func pond_cells(
+	origin: Vector2i, building_id: String, is_free: Callable,
+	accepts_water: Callable = Callable()
+) -> Array:
+	var rect = pond_rect(origin, building_id, is_free, accepts_water)
 	if rect == null:
 		return []
-	var cells: Array = []
-	for y in range((rect as Rect2i).position.y, (rect as Rect2i).end.y):
-		for x in range((rect as Rect2i).position.x, (rect as Rect2i).end.x):
-			cells.append(Vector2i(x, y))
-	return cells
+	return _cells_of(rect as Rect2i)
 
 
 ## The frame round that water -- the field's own ring, rails, facings and
@@ -198,6 +220,46 @@ static func hut_origin(water: Array, is_free: Callable):
 			best = origin
 			best_distance = distance
 	return best
+
+
+## Where a hut would stand on this water's bank once the pond is DUG AND
+## FENCED, or null when nowhere on it can take one.
+##
+## hut_origin itself is asked at PLACEMENT time, by which point the rails
+## are real ground and the caller's own is_free already refuses them. This
+## is the same question asked BEFORE the dig, when neither the water nor
+## its frame exists yet — so the rails have to be added by hand, or the
+## dig would happily choose a site whose only bank is the fence it is about
+## to build.
+static func hut_origin_after_fencing(
+	water: Array, house_origin: Vector2i, building_id: String, is_free: Callable
+):
+	if water.is_empty():
+		return null
+	var rails: Dictionary = {}
+	for rail in VillageFarm.fence_cells(water, house_origin, building_id):
+		rails[rail as Vector2i] = true
+	return hut_origin(water, func(cell: Vector2i) -> bool:
+		return not rails.has(cell) and is_free.call(cell)
+	)
+
+
+## Whether this water has a bank its own works could stand on — what the
+## dig asks of a candidate rectangle before it commits to it.
+##
+## Measured on three real streamed villages: one had a pond with no hut
+## anywhere, and not by a near miss. All 51 candidate origins within
+## HUT_BANK_REACH_TILES of that water were refused — 19 by the village
+## street, 21 by neighbouring houses, 5 by the pond's own rails, 6 by the
+## water itself — because the pond had been dug into the two-row strip
+## between the street and the next house row, which is exactly wide enough
+## for the water and nothing else. Two passes that never spoke: the dig
+## took the best rectangle in reach, and the hut was sited afterwards on
+## whatever bank that left.
+static func bank_takes_a_hut(
+	water: Array, house_origin: Vector2i, building_id: String, is_free: Callable
+) -> bool:
+	return hut_origin_after_fencing(water, house_origin, building_id, is_free) != null
 
 
 ## Whether one of `hut_origins` already stands on this water's own bank --

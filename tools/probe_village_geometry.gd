@@ -22,7 +22,7 @@ const CHUNK_SIZE := 32
 ## The chunks tools/probe_pond_and_farmhouse.gd found real, stamped
 ## villages in on the Berlin transect -- named here so this probe founds
 ## two villages instead of twenty-six.
-const VILLAGE_CHUNKS: Array[Vector2i] = [Vector2i(696, 128), Vector2i(678, 128)]
+const VILLAGE_CHUNKS: Array[Vector2i] = [Vector2i(678, 128), Vector2i(682, 132), Vector2i(696, 128)]
 
 var _manager
 var _step := -1
@@ -156,6 +156,51 @@ func _report_hut_sites(chunk_coord: Vector2i) -> void:
 	print("    %d candidate origin(s) in reach of the water" % in_reach)
 	for why in reasons:
 		print("      %-34s x%d   e.g. %s" % [why, reasons[why], str(examples[why])])
+	# And the counterfactual the candidate fix turns on: the fence goes in
+	# WITH the water and the hut goes up afterwards, so every site on the
+	# ring is lost to a rail before the hut pass ever looks. Raising the
+	# hut first would let the frame go round it, the way it already goes
+	# round a farmhouse standing in its field\'s ring.
+	#
+	# Recomputed rather than read off the tally above: that one reports the
+	# FIRST reason a site was refused, so a site whose first reason is a
+	# rail may still be refused by a street or a house on another of its
+	# cells. The number that decides the fix is how many sites are free
+	# once the rails, and ONLY the rails, are taken away.
+	var free_without_rails := 0
+	var example_cell = null
+	for y in range(low.y - margin, high.y + margin + 1):
+		for x in range(low.x - margin, high.x + margin + 1):
+			var origin := Vector2i(x, y)
+			var nearest := INF
+			for cell in _BuildingCatalog.footprint_cells(_VillagePond.HUT_BUILDING_ID, origin):
+				for wet in water:
+					nearest = minf(
+						nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i))
+					)
+			if nearest > float(_VillagePond.HUT_BANK_REACH_TILES):
+				continue
+			if not _free_ignoring_rails(chunk_coord, origin, doorstep, water):
+				continue
+			free_without_rails += 1
+			if example_cell == null:
+				example_cell = origin
+	print("    %d would be free if the frame went round the hut instead%s" % [
+		free_without_rails, "" if example_cell == null else "   e.g. %s" % str(example_cell)
+	])
+	# Measured 0 on both hutless villages, so the frame is NOT what is in
+	# the way -- the street grid and the neighbours are. The two remaining
+	# levers are a SMALLER works and a LONGER reach, and neither is worth
+	# arguing about when it can be counted. A fisher\'s hut borrows the
+	# farmhouse\'s 3x2 because it is drawn as one; a real fisher\'s shack is
+	# not a farmhouse.
+	for shape in [Vector2i(3, 2), Vector2i(2, 2), Vector2i(2, 1), Vector2i(1, 1)]:
+		for reach in [2, 3, 4]:
+			var fits := _sites_for(chunk_coord, water, low, high, shape, reach)
+			print("      hut %s within %d tiles: %d site(s)%s" % [
+				str(shape), reach, fits.size(),
+				"" if fits.is_empty() else "   e.g. %s" % str(fits[0]),
+			])
 
 
 ## The FIRST thing that refuses a hut at this origin, named -- "free" when
@@ -184,3 +229,83 @@ func _why_refused(
 		if existing != "":
 			return "occupied: %s" % existing
 	return "free"
+
+
+## The same site test, with the pond\'s own rails treated as clear ground
+## and everything else left alone -- the world as it would be if the hut
+## went up before the frame.
+func _free_ignoring_rails(
+	chunk_coord: Vector2i, origin: Vector2i, doorstep: Vector2i, water: Array
+) -> bool:
+	var taken: Array = _BuildingCatalog.footprint_cells(_VillagePond.HUT_BUILDING_ID, origin)
+	taken.append(origin + doorstep)
+	for cell in taken:
+		var local: Vector2i = cell
+		if water.has(local):
+			return false
+		if local.x < 0 or local.y < 0 or local.x >= CHUNK_SIZE or local.y >= CHUNK_SIZE:
+			return false
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + local
+		if _manager.is_water_at_global(g.x, g.y):
+			return false
+		if not _manager.is_buildable_terrain_at(g.x, g.y):
+			return false
+		var existing: String = _manager.modification_at_global(g.x, g.y)
+		if _VillageFarm.is_fence_tile(existing):
+			continue  # the counterfactual: this rail would never have been laid
+		if existing != "":
+			return false
+	return true
+
+
+## Every origin a works of `shape` could really stand on within `reach` of
+## this water, doorstep included -- the same site test the real one uses,
+## with the footprint and the reach as parameters rather than as the
+## catalog\'s own. Counting what a DIFFERENT hut would fit is the only
+## honest way to choose between a smaller works and a longer reach.
+func _sites_for(
+	chunk_coord: Vector2i, water: Array, low: Vector2i, high: Vector2i,
+	shape: Vector2i, reach: int
+) -> Array:
+	var sites: Array = []
+	var margin: int = reach + maxi(shape.x, shape.y)
+	for y in range(low.y - margin, high.y + margin + 1):
+		for x in range(low.x - margin, high.x + margin + 1):
+			var origin := Vector2i(x, y)
+			var cells: Array = []
+			for dy in shape.y:
+				for dx in shape.x:
+					cells.append(origin + Vector2i(dx, dy))
+			var nearest := INF
+			for cell in cells:
+				for wet in water:
+					nearest = minf(
+						nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i))
+					)
+			if nearest > float(reach):
+				continue
+			# A door on the south face, one row below the footprint --
+			# where BuildingCatalog.doorstep_of puts every village
+			# building\'s.
+			cells.append(origin + Vector2i(shape.x / 2, shape.y))
+			var free := true
+			for cell in cells:
+				var local: Vector2i = cell
+				if water.has(local) or local.x < 0 or local.y < 0 \
+						or local.x >= CHUNK_SIZE or local.y >= CHUNK_SIZE:
+					free = false
+					break
+				var g: Vector2i = chunk_coord * CHUNK_SIZE + local
+				if _manager.is_water_at_global(g.x, g.y) \
+						or not _manager.is_buildable_terrain_at(g.x, g.y):
+					free = false
+					break
+				var existing: String = _manager.modification_at_global(g.x, g.y)
+				if _VillageFarm.is_fence_tile(existing):
+					continue  # a rail the frame would route round a standing works
+				if existing != "":
+					free = false
+					break
+			if free:
+				sites.append(origin)
+	return sites

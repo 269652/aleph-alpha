@@ -1395,7 +1395,31 @@ func _dig_fisher_ponds_if_missing(
 				if renderer._is_street_row(chunk_coord, chunk_size, world, y):
 					return false
 			return true
-		var water: Array = VillagePond.pond_cells(origin, building_id, is_free_for_house)
+		# And on ground its own WORKS can stand beside. Reported live at the
+		# water: *"no Fisher Hut is near"*, and measured on three real
+		# streamed villages -- one had a pond with no hut anywhere, because
+		# all 51 candidate origins within reach of that water were refused
+		# (19 by the village street, 21 by neighbouring houses, 5 by the
+		# pond's own rails, 6 by the water). The dig had put the water in
+		# the two-row strip between the street and the next house row,
+		# which is exactly wide enough for the water and nothing else.
+		#
+		# The dig and the hut pass never spoke: the dig took the best
+		# rectangle in reach and the hut was sited afterwards on whatever
+		# bank that left. This is the same rule VillageLayout already
+		# applies to a farmhouse, which refuses a plot with no room for its
+		# field — a works with nowhere to stand is a works that should not
+		# have been sited there.
+		var takes_a_hut := func(cells: Array) -> bool:
+			return VillagePond.bank_takes_a_hut(cells, origin, building_id, is_free)
+		var water: Array = VillagePond.pond_cells(
+			origin, building_id, is_free_for_house, takes_a_hut
+		)
+		if water.is_empty():
+			# ...and dug anyway where no bank in reach can take one. A pond
+			# with no hut beats no pond at all: the fisher works the water,
+			# not the building.
+			water = VillagePond.pond_cells(origin, building_id, is_free_for_house)
 		if water.is_empty():
 			continue  # no room beside this house -- honestly, no pond
 		ponds[origin] = water
@@ -1467,6 +1491,39 @@ func _place_fisher_huts_if_missing(
 			chunk_coord, origin, VillagePond.HUT_BUILDING_ID, Vector2i(0, 1), building_seed, ""
 		):
 			standing.append(origin)
+			_lay_front_step(chunk_coord, chunk_size, world, origin)
+
+
+## The front step of a building the village raised off the street grid.
+##
+## Every other building a village places gets its doorstep paved as part of
+## siting the plot (VillageLayout lays it among the plot's own road_cells),
+## because every other building is sited ON frontage. A fisher's hut is
+## deliberately not — it belongs to the water, and the water is wherever
+## the fisher had room (docs/concept/village_ponds.md, "The hut on the
+## bank"). So nothing laid its front step, and a hut stood with its door
+## opening onto bare ground.
+##
+## True since the hut landed, and hidden by luck: the fixture village's hut
+## happened to fall with its doorstep on one of the pond's own rails, so
+## test_every_placed_building_faces_south_onto_a_real_road_cell passed for
+## the whole lot anyway. Moving the pond by one rectangle broke it, which
+## is that test doing exactly its job.
+##
+## AFTER place_building, never before: place_building refuses a plot whose
+## doorstep cell is already non-empty, so paving first would refuse the hut
+## over its own future front step — the same ordering trap
+## _place_new_village's own comment records for the houses.
+func _lay_front_step(chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i) -> void:
+	if not world.has_method("build_at_global") or not world.has_method("modification_at_global"):
+		return
+	var step: Vector2i = origin + BuildingCatalog.doorstep_of(VillagePond.HUT_BUILDING_ID)
+	if step.x < 0 or step.y < 0 or step.x >= chunk_size or step.y >= chunk_size:
+		return
+	var g: Vector2i = chunk_coord * chunk_size + step
+	if world.modification_at_global(g.x, g.y) != "":
+		return  # a rail, a road or the gate is already a front step
+	world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 ## The water already standing in this house's own reach, in the same local

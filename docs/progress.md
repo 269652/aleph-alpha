@@ -30085,5 +30085,71 @@ reload, and stock 0.0 to a manager that never dug the pond.
   at all today. Clean water rather than wrong water, and *land* grass in a
   pond was the report.
 - **A hut on 4 of 6 banks.** The same sweep found two ponds with no
-  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Under
-  investigation; recorded here so the number is not lost.
+  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Resolved
+  in the entry directly below.
+
+## A pond is dug where its hut can stand (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live, standing at the water: *"no Fisher Hut is near"*. The
+entry above records the sweep that found it; this is what it turned out
+to be.
+
+Measured on three real streamed villages (`tools/probe_village_geometry.gd`,
+added here): one of them had a pond with **no hut anywhere**, and not by a
+near miss. All **51** candidate origins within `HUT_BANK_REACH_TILES` of
+that water were refused — 19 by the village street, 21 by neighbouring
+houses, 5 by the pond's own fence rail and 6 by the water itself. The dig
+had put the pond in the two-row strip between the street and the next
+house row, which is exactly wide enough for the water and nothing else.
+
+Two passes that never spoke: the dig took the best rectangle in reach, and
+the hut was sited afterwards on whatever bank that left.
+`VillageFarm.field_rect` gains the caller's-own-condition argument
+`VillageLayout.street_plot` has had all along, for the reason that one
+already states — *a farmhouse with nowhere to farm is a farmhouse that
+should not have been raised*. A refused rectangle keeps the search going,
+so the fisher gets the next-best water that does work; and when no bank in
+reach can take a hut, a second unconditional search digs the pond anyway,
+because a pond with no hut beats no pond at all.
+
+**Asked of the ground as it WILL BE.** `hut_origin` is asked at placement
+time, when the rails are real ground the caller's `is_free` already
+refuses. Before the dig neither the water nor its frame exists, so
+`hut_origin_after_fencing` adds the rails by hand — without it the dig
+would choose a site whose only bank is the fence it is about to build. A
+test pins that case exactly.
+
+**And the hut gets a front step.** Every other building a village places
+has its doorstep paved as part of siting the plot, because every other
+building is sited on frontage; a hut belongs to the water instead, so
+nothing laid its step and it stood with its door opening onto bare ground.
+That invariant has been false since the hut landed the same day, hidden by
+luck — the fixture village's hut happened to fall with its doorstep on a
+rail — and moving the pond by one rectangle broke
+`test_every_placed_building_faces_south_onto_a_real_road_cell`, which is
+that test doing exactly its job.
+
+Red first at every step: the dig choosing the hutless strip, a bank that
+only the fence would block being taken for a bank, and a hut with no front
+step. Tested: `test_village_pond.gd` 29/29 (+5 new),
+`test_village_renderer.gd` 153/153 (+1 new),
+`test_village_pond_hut_wiring.gd` 3/3 (new file).
+
+### And the farmhouse half of the same report, which did NOT reproduce
+
+The same message said *"not a single Farmhouse even though there's plenty
+of space"*. Measured rather than assumed, on every real stamped village in
+the sweep: **every one of them has a farmhouse**, and the count tracks the
+trades — 3 farmhouses where the roster carried 2 farmers and a herbalist,
+1 where it carried a herbalist alone.
+
+Where they STAND is the answer. A farmhouse is sited on a street plot that
+has room for a 3x2 field beside it, which the middle of a village never
+has; measured from the plaza's own centre, the nearest farmhouse in the
+two villages surveyed sits at **4.0** and **6.8** tiles, while the fisher's
+own house and pond sit **11.7** tiles out at the far end of the street.
+Standing at the water — which is where the report was written from —
+there is no farmhouse in shot, and in that particular village there was
+genuinely no hut either. Nothing is changed for this half; it is recorded
+so the next reader does not go looking for a bug that is a viewing
+position.
