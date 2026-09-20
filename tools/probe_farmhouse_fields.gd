@@ -75,6 +75,7 @@ func _initialize() -> void:
 	var villages := 0
 	var farmhouses := 0
 	var without_a_field := 0
+	var siting_disagreed := 0
 	var field_sizes: Dictionary = {}
 	var offenders: Array = []
 
@@ -95,16 +96,32 @@ func _initialize() -> void:
 		root.add_child(parent)
 		var renderer = VillageRenderer.new()
 		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-		var fields: Dictionary = renderer._fenced_farm_fields(coord, CHUNK_SIZE, world)
+		# The reserved landmark cells spawn_village really passes. Without
+		# them this measures a MORE PERMISSIVE world than the game's, which
+		# is exactly how the first run of this probe reported every field
+		# intact while the report said otherwise.
+		var reserved: Dictionary = renderer._landmark_cells(settlement.landmarks, TILE_SIZE)
+		var fields: Dictionary = renderer._fenced_farm_fields(coord, CHUNK_SIZE, world, reserved)
 		for origin in fields:
 			farmhouses += 1
 			var size: int = (fields[origin] as Array).size()
 			field_sizes[size] = int(field_sizes.get(size, 0)) + 1
 			if size == 0:
 				without_a_field += 1
+				# Would the SITING rule have accepted this origin? If it
+				# would, the two disagree, which is the whole bug: a
+				# farmhouse is raised where a field "fits" and then derived
+				# against a stricter rule that leaves it nothing.
+				var is_buildable = renderer._is_buildable_local(coord, CHUNK_SIZE, world)
+				var is_occupied = renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+				var sited_here: bool = renderer._field_fits_at(
+					origin, coord, CHUNK_SIZE, world, is_buildable, is_occupied
+				)
+				if sited_here:
+					siting_disagreed += 1
 				if offenders.size() < 8:
-					offenders.append("chunk %s farmhouse at %s (of %d in this village)"
-						% [str(coord), str(origin), fields.size()])
+					offenders.append("chunk %s farmhouse at %s (of %d here) -- siting said it fits: %s"
+						% [str(coord), str(origin), fields.size(), str(sited_here)])
 		parent.queue_free()
 
 	print("villages with at least one farmer: %d" % villages)
@@ -112,6 +129,7 @@ func _initialize() -> void:
 	print("farmhouses with NO field at all:   %d  (%.1f%%)" % [
 		without_a_field, 100.0 * float(without_a_field) / maxf(float(farmhouses), 1.0),
 	])
+	print("...of which siting said a field FITS: %d  <- the two rules disagree" % siting_disagreed)
 	print()
 	print("field size -> how many farmhouses")
 	for size in field_sizes:
