@@ -1473,6 +1473,7 @@ static func backed_up_directories() -> PackedStringArray:
 		EarthChunkManager.UPPER_FLOOR_MODIFICATIONS_DIR,
 		EarthChunkManager.UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR,
 		EarthChunkManager.BUILDINGS_DIR,
+		EarthChunkManager.POND_FISH_DIR,
 	])
 
 
@@ -1560,6 +1561,12 @@ func _wipe_persisted_world() -> void:
 	_world_reset.wipe_directory(EarthChunkManager.UPPER_FLOOR_MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.BUILDINGS_DIR)
+	# A village pond's own fish stock, added with the pond fix (2026-09-20)
+	# and, like every store above it, never joined to this wipe -- the same
+	# drift test caught it. It is READ BACK on the next chunk load
+	# (_restore_pond_fish) and carries no world identity, so a new world
+	# inherited the previous one's fished-out or well-stocked ponds.
+	_world_reset.wipe_directory(EarthChunkManager.POND_FISH_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
