@@ -61,6 +61,25 @@ func test_every_npc_occupation_has_its_own_tunic_palette():
 	assert_eq(seen_tunics.size(), NpcIdentity.OCCUPATIONS.size(), "every occupation should dress differently")
 
 
+## Missing from CLASS_PALETTES costs an occupation more than its colours.
+## outfit_variant_for derives the illustrated rig's outfit ROW from the
+## occupation's INDEX in that same table, through maxi(find(...), 0) -- so
+## "not in the table" (-1) silently becomes index 0, which is the WARRIOR's
+## row. Reported live with a villager in shot: *"a weird npc"*, hauling a
+## cart across a farm in full plate with an axe on its back.
+##
+## Index 0 exactly, not merely >= 0: the warrior is the fallback AND a real
+## entry, so "found at 0" and "not found" are the same outfit and neither is
+## right for a villager.
+func test_no_villager_occupation_silently_wears_the_warrior_outfit_row():
+	const NpcIdentity = preload("res://src/world/npc_identity.gd")
+	for occupation in NpcIdentity.OCCUPATIONS:
+		assert_gt(
+			HeroAppearance.CLASS_PALETTES.keys().find(occupation), 0,
+			"%s has no table entry of its own, so it takes the warrior's outfit row" % occupation
+		)
+
+
 func test_unknown_class_falls_back_to_a_valid_appearance():
 	var a := appearance_maker.appearance_for("not_a_class", 0)
 	assert_has(HeroAppearance.SKIN_TONES, a.skin)
@@ -151,30 +170,65 @@ func test_appearance_from_choices_defaults_the_seed_when_none_is_given():
 	assert_eq(a.seed, 0)
 
 
-## Which of IllustratedCharacterSprite's 100 illustrated heads a hero wears
-## is a real customization axis like every other -- DNA-rolled by default,
+## Which of IllustratedCharacterSprite's illustrated heads a hero wears is a
+## real customization axis like every other -- DNA-rolled by default,
 ## directly cyclable in the creator (reported, after "derive it from the DNA
 ## seed with no new UI" shipped and was actually tried: "you can't choose
-## different heads"). option_count reads the grid size from
-## IllustratedCharacterSprite rather than a second hardcoded 100, so the two
-## can never drift if the sheet's own layout ever changes.
+## different heads").
+##
+## The axis counts the faces the art can actually DRAW, not the grid's own
+## 100 cells: 19 of those fail background removal and fall back to the
+## procedural head (see docs/concept/character_art_brief.md). Counting the
+## grid meant one villager in five was handed one -- reported live as *"a
+## rough sketch with a square as head"*. Derived from usable_head_cells()
+## rather than restated, so the count can never drift from the sheet.
 func test_head_is_a_real_customization_axis():
 	assert_has(HeroAppearance.AXES, "head")
 	assert_eq(
 		appearance_maker.option_count("head"),
-		IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
+		IllustratedCharacterSprite.usable_head_cells().size()
 	)
 
 
+## head_index is a real head.png CELL index, not a position on the axis --
+## generate_head_texture is indexed by it -- so the range it must fall in is
+## the usable set, not [0, option_count).
 func test_appearance_for_rolls_a_head_index_in_range():
 	for seed_value in [0, 1, 4242, 99999]:
 		var a := appearance_maker.appearance_for("warrior", seed_value)
-		assert_between(a.head_index, 0, appearance_maker.option_count("head") - 1)
+		assert_has(IllustratedCharacterSprite.usable_head_cells(), a.head_index)
 
 
+## The reported defect itself: roll a lot of villagers and not one of them
+## may come out wearing a face the art cannot draw. At 19 broken cells out of
+## 100 this failed about a fifth of the time before the axis stopped
+## offering them.
+func test_no_rolled_hero_ever_wears_a_face_the_art_cannot_draw():
+	var broken: Array[int] = []
+	for seed_value in range(400):
+		var a := appearance_maker.appearance_for("farmer", seed_value)
+		if IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS.has(int(a.head_index)):
+			broken.append(seed_value)
+	assert_eq(broken.size(), 0, "seeds rolled onto a broken face: %s" % str(broken.slice(0, 12)))
+
+
+## Cycling in the creator must never stop on a broken face either -- walking
+## the whole axis has to land on drawable art at every single step.
+func test_cycling_the_head_axis_never_stops_on_a_broken_face():
+	var stops: Array[int] = []
+	for step in range(appearance_maker.option_count("head")):
+		var a := appearance_maker.appearance_from_choices("warrior", {"head": step})
+		if IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS.has(int(a.head_index)):
+			stops.append(step)
+	assert_eq(stops.size(), 0, "axis steps landing on a broken face: %s" % str(stops.slice(0, 12)))
+
+
+## Picking step N on the axis wears the Nth face the art can draw -- which is
+## cell N only until the first broken cell is skipped past.
 func test_appearance_from_choices_uses_the_picked_head_index():
+	var usable := IllustratedCharacterSprite.usable_head_cells()
 	var a := appearance_maker.appearance_from_choices("warrior", {"head": 37})
-	assert_eq(a.head_index, 37)
+	assert_eq(a.head_index, usable[37])
 
 
 func test_head_choice_wraps_like_every_other_axis():

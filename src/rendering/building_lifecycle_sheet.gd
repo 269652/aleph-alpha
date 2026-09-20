@@ -94,15 +94,26 @@ const _MANOR_VARIATIONS: Array[String] = [
 ## finished look -- "active" is an eight-frame animation of smoke and lit
 ## windows, not a second standing variant, and burning and ruined are
 ## states this module must never hand a finished building.
+## The cottage and manor sheets carry NO magenta divider between their
+## cells -- only the background showing through and a near-white rule line
+## -- so their cells are found by asking where the art is
+## (IllustratedStructureSprite.GRID_CONTENT). Read the `dividers` way they
+## lose their roof apex, finial and chimney cap, which is exactly what
+## shipped: *"Cottages are still slightly clipped at the top despite having
+## free space in the 2x2 tile."*
 const _GRID_8X5 := {
-	"columns": 8, "rows": 5, "build_rows": [0], "idle_rows": [2],
+	"columns": 8, "rows": 5, "build_rows": [0], "idle_rows": [2], "grid": "content",
 }
 
 ## The 8x10 one, whose own printed labels are quoted at the top of this
 ## file: three build rows (24 real frames) and three idle rows (24 finished
 ## looks).
+## The house_1_* sheets DO draw a real magenta divider between their cells
+## (measured: rows reaching a 1.000 magenta share, where cottage_*/manor_*
+## top out at 0.989), so these are cut on those lines.
 const _GRID_8X10 := {
 	"columns": COLUMNS, "rows": ROWS, "build_rows": BUILD_ROWS, "idle_rows": IDLE_ROWS,
+	"grid": "dividers",
 }
 
 ## Which building ids have real lifecycle variation sheets, and what each

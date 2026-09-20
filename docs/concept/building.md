@@ -612,6 +612,50 @@ around it (`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS`). The list is pinned
 against `BuildingCatalog` rather than trusted, which is how it caught
 `trade_hall` and `mage_guild` the day they were added.
 
+**A cell is cut where the drawing ends, not where it thins (2026-09-20).**
+Reported with five of them in shot: *"Cottages are still slightly clipped at
+the top despite having free space in the 2x2 tile."* This time they really
+were — and the cut happened in the SLICER, long before anything placed them.
+The roof apex, its finial and the whole chimney cap were outside the cropped
+cell: measured on `cottage_3.png`, the band was rows 421–569 where the
+drawing runs 390–570, losing 31 rows off the top and 13px off each side.
+
+The cause is not about houses. `VariantSheetGrid.art_bands` calls a sheet row
+a divider when 60% of it is magenta — and **a row crossing eight roof apexes
+is mostly magenta**, because sparse art reads as background. On
+`cottage_*.png` and `manor_*.png` there is no divider to find at all: no row
+on either reaches even a 0.99 magenta share, where `house_1_*.png` reaches
+1.000. So a band simply began wherever the roofs' silhouette thinned past
+the threshold.
+
+The fix is not a threshold. `content_bands` already existed for precisely
+this, and says so in its own comment — *"art_bands looks for magenta divider
+lines, and the line here is near-white"*. What was wrong is that the grid
+**kind** is a property of the sheet and was hardcoded to `dividers` for every
+variation sheet alike. The cottage and manor sheets declare
+`IllustratedStructureSprite.GRID_CONTENT` now (bands read off the art on both
+axes), `house_1_*` keeps `dividers`, and the chain asks the sheet instead of
+assuming. `GRID_KINDS` is published off the reader's own constants, so a
+sheet naming a kind nothing can read fails loudly rather than falling through
+to the even cut — which is how these sheets spent their life being read the
+wrong way.
+
+Two consequences, both handled rather than shipped. Reading by art reaches
+far enough on some cells to swallow the sheet's own pale **rule line**, which
+would have traded a clipped roof for a white scratch across the eaves; it is
+trimmed, and trimmed *through*, since a chimney tip from the row above
+survives a row or two past the rule. A rule is told from a drawing by SPAN
+rather than colour: a roof apex is 9–31 opaque pixels across a ~174-wide
+cell, a rule runs the whole way. And a whole cottage is about a fifth taller
+than a cut one, which made it the tallest thing on the street again — the
+exact misorder the ladder below exists to correct — so `_DRAW_SCALES` moved
+0.85 → 0.80, still pinned by that ladder's own two tests.
+
+The guard describes the defect rather than the constants: the sheet row above
+a crop must be **essentially empty or essentially full**, because a partly
+covered row is the silhouette of a roof being sliced. Every cut measured
+before the fix sat at 40–52%; every whole crop is at 0–17% or 100%.
+
 **The house tiers read as a ladder (2026-09-19).** Asked in the same breath:
 *"also scale down cottage to be smaller than house"*. Measured, a cottage
 drew 26.0 × 26.0 world px against a house's 39.5 × 24.0 — the smallest tier

@@ -815,6 +815,42 @@ const HEAD_MINIMUM_OPAQUE_FRACTION := 0.15
 const HEAD_MAXIMUM_OPAQUE_FRACTION := 0.97
 
 
+## The cells has_usable_head rejects -- the 7 that erode to almost nothing
+## and the 12 whose background is never removed at all (see both fractions
+## above, and docs/concept/character_art_brief.md's "19 of the 100 cells'
+## flood fill fails"). Every head PICK walks the complement of this list, so
+## nobody is handed a face the art cannot draw: reported live with a
+## villager in shot, *"It's a rough sketch with a square as head and poor
+## resolution"* -- HeroAppearance was rolling across all 100 cells, so about
+## one villager in five wore the procedural square head.
+##
+## PINNED rather than computed on startup: deciding usability means
+## flood-filling and scanning all 100 cells, far too much work to repeat
+## every launch, and the answer is a fact about head.png that only changes
+## when the art does. test_the_pinned_broken_head_cells_are_exactly_the_ones
+## _the_art_cannot_draw checks it against has_usable_head itself, so it
+## cannot drift from the sheet -- fix or re-export the art and that test
+## fails and says so. Measured identical for every one of
+## HeroAppearance.SKIN_TONES, which is why usability takes no tone here:
+## the flood runs before the recolor.
+const UNUSABLE_HEAD_CELLS: Array[int] = [
+	10, 13, 14, 15, 16, 17, 18, 21, 23, 24, 25, 26, 27, 28, 31, 41, 51, 61, 91,
+]
+
+
+## The head.png cells that really draw a face -- the grid minus
+## UNUSABLE_HEAD_CELLS, in order. This is what the head axis offers (see
+## HeroAppearance.option_count/head_cell_for_axis); has_usable_head stays the
+## per-cell safety net underneath for anything that reaches a cell another
+## way, such as a hero saved before the axis narrowed.
+static func usable_head_cells() -> Array[int]:
+	var cells: Array[int] = []
+	for cell in range(HEAD_GRID_COLUMNS * HEAD_GRID_ROWS):
+		if not UNUSABLE_HEAD_CELLS.has(cell):
+			cells.append(cell)
+	return cells
+
+
 ## Whether cell_index's generated (recolored) head texture is real, usable
 ## art -- the head counterpart to has_action/has_composite_part's own
 ## has-X-then-fallback contract, so a caller (CharacterView, the portrait)

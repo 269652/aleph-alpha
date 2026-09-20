@@ -7,6 +7,7 @@ extends GutTest
 ## edge and a doorstep just outside it; every sheet follows the one asset
 ## contract (8 columns x 5 lifecycle rows) blacksmith.png already does.
 
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const BuildingLifecycleSheet = preload("res://src/rendering/building_lifecycle_sheet.gd")
 const NpcGenome = preload("res://src/world/npc_genome.gd")
@@ -502,7 +503,17 @@ func test_a_finished_first_tier_house_is_drawn_from_its_lifecycle_variation():
 	var cell: Vector2i = BuildingLifecycleSheet.idle_cell_for("house_small", 42)
 	assert_eq(sheet["row"], cell.y)
 	assert_eq(sheet["column"], cell.x)
-	assert_eq(sheet["grid"], "dividers", "these sheets divide their cells with magenta lines")
+	# The sheet's OWN declared kind, not one kind assumed for all of them.
+	# This used to assert "dividers" and say those sheets divide their cells
+	# with magenta lines; they do not -- measured, no row on cottage_*.png
+	# or manor_*.png reaches even a 0.99 magenta share, where house_1_*.png
+	# reaches 1.000 -- and reading them that way cost every cottage its roof
+	# apex and chimney.
+	assert_eq(sheet["grid"], String(grid["grid"]))
+	assert_true(
+		IllustratedStructureSprite.GRID_KINDS.has(String(sheet["grid"])),
+		"house_small is drawn on a grid kind nothing can read"
+	)
 
 
 func test_the_flat_variant_sheet_is_still_there_under_the_lifecycle_one():
@@ -549,8 +560,10 @@ func test_every_sheet_choice_names_how_its_grid_is_read():
 			BuildingCatalog.finished_sheet_chain(building_id, 5)
 			+ BuildingCatalog.construction_sheet_chain(building_id, 5, 0.4)
 		):
+			# Read off the reader itself rather than listed here, so a new
+			# grid kind cannot be known to one of them and not the other.
 			assert_true(
-				["even", "gutters", "dividers"].has(entry["grid"]),
+				IllustratedStructureSprite.GRID_KINDS.has(String(entry["grid"])),
 				"%s names its grid as %s, which nothing knows how to read" % [building_id, entry["grid"]]
 			)
 
