@@ -83,6 +83,25 @@ func _hungriest(chunk_coord: Vector2i) -> float:
 	return worst
 
 
+## Everything edible in the village's own market -- the shelf a villager
+## who cannot forage actually buys from. "They starved" and "there was
+## food and they could not reach it" want different fixes.
+func _market_food(chunk_coord: Vector2i) -> int:
+	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
+	var catalog = ItemCatalog.new()
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if not is_instance_valid(node) or not node.has_method("setup_economy"):
+			continue
+		if node.economy == null or node.economy.market == null:
+			continue
+		var total := 0
+		for item_id in node.economy.market.stock:
+			if catalog.kind_of(String(item_id)) == "food":
+				total += int(node.economy.market.stock[item_id])
+		return total
+	return 0
+
+
 func _sample() -> void:
 	if _measured:
 		return
@@ -94,28 +113,42 @@ func _sample() -> void:
 		var settlement_id: String = EntityRef.for_settlement(chunk_coord)
 		_lines.append("")
 		_lines.append("FAMINE watch at %s" % str(chunk_coord))
-		_lines.append("  %8s %8s %10s %10s" % ["seconds", "roster", "standing", "hungriest"])
+		_lines.append(
+			"  %8s %8s %10s %10s %10s" % ["seconds", "roster", "standing", "hungriest", "market food"]
+		)
 
 		var elapsed := 0.0
 		var next_report := 0.0
 		while elapsed < SIMULATED_SECONDS:
 			if elapsed >= next_report:
-				_lines.append("  %8.0f %8d %10d %10.2f" % [
+				_lines.append("  %8.0f %8d %10d %10.2f %10d" % [
 					elapsed,
 					_manager.household_count_for_settlement(settlement_id),
 					_villagers_in(chunk_coord),
 					_hungriest(chunk_coord),
+					_market_food(chunk_coord),
 				])
 				next_report += REPORT_EVERY
+			# The villagers themselves. Hand-ticked because _sample runs
+			# synchronously inside one frame, so the engine never gets a
+			# turn -- the same shape probe_village_farming.gd uses.
 			for node in _manager._loaded_villages.get(chunk_coord, []):
 				if is_instance_valid(node) and not node.is_queued_for_deletion() and node.has_method("setup_economy"):
 					node._process(SLICE)
+			# ...and the world around them. Without the CLOCK and the FARM
+			# PLOTS this measures a village that can never grow anything,
+			# which would make "they all starved" a fact about the probe
+			# rather than about the game -- the exact mistake that made the
+			# first cut of LITRES_PER_TENDING four times too big.
+			_manager.advance_world_age(SLICE)
+			_manager.step_farm_plots(SLICE)
 			_manager.step_settlements(SLICE)
 			elapsed += SLICE
-		_lines.append("  %8.0f %8d %10d %10.2f" % [
+		_lines.append("  %8.0f %8d %10d %10.2f %10d" % [
 			elapsed,
 			_manager.household_count_for_settlement(settlement_id),
 			_villagers_in(chunk_coord),
 			_hungriest(chunk_coord),
+			_market_food(chunk_coord),
 		])
 		return
