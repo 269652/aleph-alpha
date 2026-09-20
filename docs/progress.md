@@ -5043,6 +5043,81 @@ No live world-boss/creature-fitness simulation exists yet, but the promotion mat
   needs the still-unbuilt spell-DSL runtime or a narrower boss-only
   executor as a smaller first step.
 
+### Monsters (`concept/monsters.md`)
+
+A design + art brief, written to obey `worldbosses.md`'s standing rule that
+nothing is placed: a monster is an animal whose own fitness promoted it, or
+a species a biome genuinely affords. Nine are specified across three tiers.
+Nothing in the roster is built — no `CreatureInfo` entry, no
+`MYTHIC_ROSTER_BY_REGION` line, no sheet.
+
+What IS built is the art pipeline's side of it, so commissioned rows have
+somewhere to land:
+
+- ✅ **Attack, hurt and death rows are wired end to end.** Declaring the
+  band is the whole integration: `IllustratedAnimalSprite.has_action`/
+  `_build_textures` key off `"<action>_bands"` generically, and
+  `declared_actions()`/`species_ids()` read the registry itself rather than
+  restating it (the hand-kept-list failure mode this repo keeps
+  rediscovering). `attack` already resolved, to the walk cycle, for any
+  species without dedicated art — a charge is a run, and the alternative
+  was the reported "when the boar is attacking it switches to old
+  procedural sprite".
+- ✅ **`hurt` and `death` are one-shot rows** (`ONE_SHOT_ACTIONS`): they
+  play through once off their own clock, started at the moment of the
+  event, so a flinch beginning mid-cycle still starts at frame 0 and a
+  second hit restarts it rather than inheriting the first's remaining time.
+  `death` additionally stops on its final frame
+  (`HOLDS_LAST_FRAME_ACTIONS`) — load-bearing, not decorative: the held
+  index sits one past the end of the row, so a wrapping modulo would put
+  the corpse back on its feet for exactly the step the body is meant to be
+  resting (pinned by a test that fails on that mutation).
+- ✅ **`CreatureMarker` has the states to ask for them.** `take_damage`
+  flinches on a survivable hit; `_die` lets the body collapse before the
+  marker goes, and only then does the carcass land — where the body came to
+  rest, rather than on top of a creature still falling over. A collapsing
+  body does nothing else (no AI, no movement, no growth, no disease tick)
+  and cannot be killed again. The death is still **booked against the
+  region on the killing blow**, never at the end of the row: a death that
+  only lands when an animation finishes is one a chunk unload mid-collapse
+  would lose outright.
+- ✅ **A death that begins mid-step stops that step too.** Three ticks at
+  the top of `_process` run unconditionally and can each kill — disease, an
+  ignite/blight tick, a Death Cap's weakened roll — and each was followed
+  by a guard asking only whether the marker had been *freed*. A body that
+  collapses first is not freed for several steps, so the step it died on
+  went on to run its AI: measured at ~23,000 world units of wandering by a
+  corpse before `_death_has_begun()` replaced those guards.
+- ✅ **Neither row may borrow another**, unlike swim→walk / drink→idle /
+  idle→eat-frame-0. A flinch built from the walk cycle reads as a stumble,
+  and a death built from a cycling row would never end. Both states are
+  therefore gated on the art really existing, which means **every creature
+  in the game today behaves exactly as it did before this landed** —
+  `_begin_one_shot` returns false for all of them.
+- ⬜ **No sheet declares `hurt_bands` or `death_bands` yet.** The wiring is
+  in place and unexercised until real art arrives; the tests drive it
+  through a stub sheet that subclasses the real sprite class.
+- ⬜ **No `defend` action exists.** The prompt skeleton asks artists for a
+  DEFEND row; it will slice correctly and never be asked for until a
+  braced/guarding behaviour is built.
+- 🚧 **Tier C's "bound to a kind of place" rule is specified, not built** —
+  it needs a real predicate per monster (a bog, a scree slope, a worked
+  shaft) and those predicates do not all exist.
+- ✅ **Tier B needs no new mechanism** — Rimewolf is a roster line in
+  `worldbosses.md`'s existing `MYTHIC_ROSTER_BY_REGION` plus art.
+
+Stale doc comments corrected in the same pass, all found by reading the
+code rather than the headers: `IllustratedAnimalSprite`'s class header and
+`has_action`'s own doc both claimed attack had no fallback, four lines
+above the branch that gives it one, and the header still listed three
+registered species when there are ten. `test_illustrated_animal_sprite.gd`
+carried the same claim plus several comments describing horse/deer/boar as
+having no eat or idle rows, which they have had for some time — two of its
+fallback tests were pointed at species that no longer take the fallback
+they were named for, and now use `wolf`/`sheep`/`alpaca`/`krampus`, which
+genuinely do.
+
+
 ### Evolution (`concept/evolution.md`)
 
 No genetics reaches a living animal: an offspring inherits its species string and nothing else (`CreatureRenderer.spawn_single`, `src/rendering/creature_renderer.gd:263`, rolls a fresh `randi()` wander seed on `:266`, and that seed is exactly what `CreatureInfo` derives level and max_health from, `src/world/creature_info.gd:351-353`). Three pieces of the machinery are nonetheless real, tested and **unwired** -- marked 🚧 individually below, not ⬜ -- and DNA does exist elsewhere in the tree for trees (`TreeGenome`) and for character creation (`HeroDna`). Unmarked entries below are ⬜ Not started:

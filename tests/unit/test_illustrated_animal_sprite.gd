@@ -41,12 +41,12 @@ func test_has_action_true_for_walk_and_idle_on_horse():
 	assert_true(sprite.has_action("horse", "idle"))
 
 
-## No dedicated attack art exists for any illustrated species (none of the
-## three are predators), and attack's own lunge pose isn't well approximated
-## by walk or idle the way swim/drink are (see the fallback tests below) --
-## so it's the one action left with no illustrated fallback at all.
-## CreatureMarker falls back to ProceduralAnimalAnimation for it, rather
-## than crashing or showing nothing.
+## No dedicated attack art exists for any registered species, but attack is
+## still COVERED -- it resolves to the walk cycle (a charge is a run), the
+## same way swim does. Reported live before that fallback existed: "when
+## the boar is attacking it switches to old procedural sprite". See
+## test_attack_falls_back_to_illustrated_walk_rather_than_procedural below
+## for the frames themselves.
 func test_attack_is_covered_by_illustrated_art():
 	assert_true(sprite.has_action("horse", "attack"))
 
@@ -73,11 +73,9 @@ func test_has_action_true_for_drink_via_idle_fallback():
 	assert_true(sprite.has_action("boar", "drink"))
 
 
-## Horse's current sheet has no eat/graze row at all (its idle/walk/trot/
-## sit-hurt-death rows are all it has) -- unlike deer/boar, there's no eat
-## cycle to even synthesize an idle frame from, so this is a real, honest
-## gap: CreatureMarker falls back to ProceduralAnimalAnimation for a
-## grazing horse.
+## Horse's current sheet declares its own eat row (eat_path/eat_bands), so
+## a grazing horse stays on illustrated art rather than dropping to
+## ProceduralAnimalAnimation the way a species with no eat row still does.
 func test_horse_has_dedicated_eat_art():
 	assert_true(sprite.has_action("horse", "eat"))
 
@@ -93,17 +91,17 @@ func test_generate_textures_returns_eight_walk_frames_for_horse():
 		assert_true(texture is ImageTexture)
 
 
-## Horse's current sheet is a single walking row -- no idle row, no eat row.
-## Idle synthesizes from the walk cycle's own frame 0 (the last link in the
-## idle fallback chain: dedicated idle_bands, then eat frame 0, then walk
-## frame 0) rather than regressing a standing horse to procedural art.
-func test_generate_textures_returns_one_idle_frame_synthesized_from_walk_for_horse():
+## Horse declares its own idle row -- a single 1536x1024 portrait, so one
+## frame, held. (The idle fallback chain behind it is still: dedicated
+## idle_bands, then the eat cycle's frame 0, then walk's -- see
+## test_deer_idle_is_a_single_held_pose for a species that takes it.)
+func test_horse_idle_is_its_own_single_declared_frame():
 	assert_eq(sprite.generate_textures("horse", "idle").size(), 1)
+	assert_true(IllustratedAnimalSprite.declared_actions("horse").has("idle"))
 
 
-## has_action already rejects "eat" for horse (see
-## test_has_action_false_for_eat_on_horse) -- generate_textures must honor
-## that and return nothing to animate, not throw digging for a missing key.
+## Horse's eat row is its own file at its own resolution (see _SHEETS'
+## per-action "<action>_path" override) -- eight frames, same as its walk.
 func test_generate_textures_returns_eight_eat_frames_for_horse():
 	assert_eq(sprite.generate_textures("horse", "eat").size(), 8)
 
@@ -113,14 +111,19 @@ func test_generate_textures_returns_the_walk_frames_for_swim():
 
 
 ## Drink resolves through whatever "idle" itself resolves to -- horse's own
-## real 4-frame idle cycle here, not the single synthesized deer/boar pose
-## (see test_generate_textures_returns_four_real_idle_frames_for_horse).
+## declared idle row here (see test_horse_idle_is_its_own_single_declared_frame).
 func test_generate_textures_returns_the_idle_frames_for_drink():
 	assert_eq(sprite.generate_textures("horse", "drink").size(), sprite.generate_textures("horse", "idle").size())
 
 
+## Wolf declares no idle row of its own (walk + eat only), so drink goes
+## the long way round the chain: drink -> idle -> the eat cycle's frame 0.
+## The species taking this path matters -- horse/deer/boar all grew real
+## idle rows since, and pointing this at one of them would test the
+## dedicated-art branch while claiming to test the synthesis.
 func test_generate_textures_returns_the_synthesized_idle_frame_for_drink_when_no_real_idle_art_exists():
-	assert_eq(sprite.generate_textures("deer", "drink").size(), 1)
+	assert_false(IllustratedAnimalSprite.declared_actions("wolf").has("idle"), "precondition")
+	assert_eq(sprite.generate_textures("wolf", "drink").size(), 1)
 
 
 func test_generate_textures_returns_eight_walk_frames_for_deer():
@@ -135,18 +138,19 @@ func test_generate_textures_returns_eight_walk_frames_for_boar():
 	assert_eq(sprite.generate_textures("boar", "walk").size(), 8)
 
 
-func test_generate_textures_returns_six_eat_frames_for_boar():
+func test_generate_textures_returns_eight_eat_frames_for_boar():
 	assert_eq(sprite.generate_textures("boar", "eat").size(), 8)
 
 
-## For a species with no dedicated idle art (deer, boar), idle reuses a
-## single frame (the eat cycle's own head-up/alert pose) rather than needing
-## its own row -- see ProceduralAnimalAnimation's own "idle" precedent (a
-## single static neutral pose for a creature that isn't moving). Horse has
-## real idle art instead -- see
-## test_generate_textures_returns_four_real_idle_frames_for_horse.
-func test_deer_idle_is_a_single_held_pose():
-	assert_eq(sprite.generate_textures("deer", "idle").size(), 1)
+## For a species with no dedicated idle art (sheep, wolf, alpaca and the
+## four bosses), idle reuses a single frame -- the eat cycle's own head-up/
+## alert pose, or walk's frame 0 for a walk-only boss sheet -- rather than
+## needing its own row. Mirrors ProceduralAnimalAnimation's own "idle"
+## precedent: a single static neutral pose for a creature that isn't moving.
+func test_an_undeclared_idle_is_a_single_held_pose():
+	for species in ["sheep", "wolf", "alpaca", "krampus"]:
+		assert_false(IllustratedAnimalSprite.declared_actions(species).has("idle"), "precondition: %s" % species)
+		assert_eq(sprite.generate_textures(species, "idle").size(), 1, species)
 
 
 ## Every frame comes back the same canvas size, regardless of which action or
@@ -727,3 +731,111 @@ func test_apply_chroma_key_completes_quickly_at_real_sheet_resolution():
 		)
 	)
 
+
+
+# -- One-shot rows: hurt and death (docs/concept/monsters.md) ---------------
+#
+# The band lookup itself was already generic -- has_action and
+# _build_textures both key off "<action>_bands", so a sheet that declares
+# hurt_bands or death_bands slices with no new code at all. What a one-shot
+# row needs beyond that is the two things a CYCLE does not: it plays
+# THROUGH once rather than looping for as long as the creature keeps doing
+# it, and a death row HOLDS its final frame rather than snapping the body
+# back upright at frame 0. Both are declared here, on the art side, because
+# they are properties of the ROW, not of any one species' sheet.
+
+
+## The registry is the list. A sweep over "every illustrated species" that
+## is typed out by hand goes stale the moment a sheet is added -- the exact
+## recurring root cause this codebase keeps rediscovering -- so the sweeps
+## below ask the registry itself.
+func test_species_ids_reports_the_registry_not_a_hand_kept_list():
+	var ids := IllustratedAnimalSprite.species_ids()
+	for species in ids:
+		assert_true(sprite.has_species(species), "%s is listed but has_species rejects it" % species)
+	for species in ["horse", "deer", "boar", "sheep", "wolf", "alpaca"] + GERMANY_BOSS_SPECIES:
+		assert_true(ids.has(species), "%s is registered but species_ids omits it" % species)
+
+
+## Which rows a species' sheet REALLY declares, read off its own
+## "<action>_bands" keys rather than restated anywhere. This is what makes
+## the "every declared row slices" sweep below cover hurt/death
+## automatically the day an artist delivers them.
+func test_declared_actions_is_read_off_the_sheets_own_band_keys():
+	assert_eq(IllustratedAnimalSprite.declared_actions("horse"), ["eat", "idle", "walk"])
+	# Sheep/wolf declare no idle row of their own -- their idle is
+	# synthesized from the eat cycle's frame 0 (see has_action's fallback
+	# chain), which is exactly the difference between "declared" and
+	# "covered": has_action says yes to wolf/idle, this says no.
+	assert_eq(IllustratedAnimalSprite.declared_actions("wolf"), ["eat", "walk"])
+	assert_true(sprite.has_action("wolf", "idle"), "covered by fallback, just not declared")
+	# A boss sheet is walk-only; everything else it shows is a fallback.
+	assert_eq(IllustratedAnimalSprite.declared_actions("krampus"), ["walk"])
+	assert_eq(IllustratedAnimalSprite.declared_actions("nonexistent_species"), [])
+
+
+## Declaring a row is the WHOLE integration: no per-action branch exists or
+## is needed. Swept over the real registry so a hurt_bands/death_bands key
+## added later is covered by this test without anyone touching it.
+func test_every_declared_row_is_covered_and_slices_to_real_frames():
+	for species in IllustratedAnimalSprite.species_ids():
+		for action in IllustratedAnimalSprite.declared_actions(species):
+			assert_true(sprite.has_action(species, action), "%s/%s declared but not covered" % [species, action])
+			assert_gt(
+				sprite.generate_textures(species, action).size(),
+				0,
+				"%s/%s declared but sliced to nothing" % [species, action]
+			)
+
+
+## No species has hurt or death art yet -- and crucially, neither may
+## quietly BORROW another row the way swim/drink/idle do. A flinch built
+## from the walk cycle reads as a stumble rather than a hit, and a death
+## built from any cycling row would never end, so the body would never
+## settle. Both are better absent than approximated: CreatureMarker only
+## enters those states when the art really exists (see _begin_one_shot), so
+## this is also what keeps every creature in the game behaving exactly as
+## it did before the one-shot path was wired.
+func test_hurt_and_death_never_borrow_another_species_row():
+	for species in IllustratedAnimalSprite.species_ids():
+		assert_false(sprite.has_action(species, "hurt"), "%s must not borrow a hurt row" % species)
+		assert_false(sprite.has_action(species, "death"), "%s must not borrow a death row" % species)
+
+
+func test_a_missing_one_shot_row_slices_to_nothing_rather_than_a_wrong_one():
+	assert_eq(sprite.generate_textures("boar", "hurt"), [] as Array[ImageTexture])
+	assert_eq(sprite.generate_textures("boar", "death"), [] as Array[ImageTexture])
+
+
+## Exactly the two rows that play through once. Every other action is a
+## state the creature stays in for as long as it keeps doing the thing, so
+## its row cycles -- including "attack", which repeats for as long as the
+## fight lasts rather than being a single lunge.
+func test_only_hurt_and_death_play_once():
+	assert_true(IllustratedAnimalSprite.plays_once("hurt"))
+	assert_true(IllustratedAnimalSprite.plays_once("death"))
+	for action in ["walk", "idle", "eat", "swim", "drink", "attack"]:
+		assert_false(IllustratedAnimalSprite.plays_once(action), action)
+
+
+## And of those two, only death leaves the body where the last frame put
+## it. A flinch returns the creature to whatever it was doing; a corpse
+## stays down until the carcass replaces it (see CreatureMarker._die).
+func test_only_death_holds_its_last_frame():
+	assert_true(IllustratedAnimalSprite.holds_last_frame("death"))
+	assert_false(IllustratedAnimalSprite.holds_last_frame("hurt"))
+	for action in ["walk", "idle", "eat", "swim", "drink", "attack"]:
+		assert_false(IllustratedAnimalSprite.holds_last_frame(action), action)
+
+
+## Anything that holds its last frame must also be one-shot: a row that
+## cycles cannot have a "last" frame to hold. Pinned as a relationship
+## between the two lists rather than as two independently-typed sets, so
+## adding a row to HOLDS_LAST_FRAME_ACTIONS alone fails here instead of
+## silently producing a cycling action that clamps.
+func test_every_held_row_is_also_a_one_shot_row():
+	for action in IllustratedAnimalSprite.HOLDS_LAST_FRAME_ACTIONS:
+		assert_true(
+			IllustratedAnimalSprite.ONE_SHOT_ACTIONS.has(action),
+			"%s holds its last frame but is not declared one-shot" % action
+		)
