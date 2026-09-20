@@ -13,6 +13,7 @@ const TileTargeting = preload("res://src/gameplay/tile_targeting.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const SprintCost = preload("res://src/gameplay/sprint_cost.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
@@ -2385,6 +2386,15 @@ func _authority_step(delta: float) -> void:
 	_step_water_ripples(delta, input_direction)
 
 	survival.advance(delta)
+	# Running costs the legs (docs/concept/survival.md's "Stamina scope",
+	# SprintCost). Only while actually MOVING: standing still with the
+	# sprint key held is not running, and charging the player for it would
+	# make the bar drain in menus and doorways. Before this, spend_stamina
+	# had exactly one caller in the whole game (the sickness step below),
+	# so sprint was free and unlimited -- which is what let a player outrun
+	# every predator on Earth and hollowed out the world's danger gradient.
+	if input_direction.length() > 0.01:
+		survival.spend_stamina(SprintCost.stamina_for_seconds(delta, is_sprinting()))
 	# Real calorie burn (see docs/concept/metabolism.md): the same real
 	# MOVING-vs-RESTING activity signal input_direction already IS above
 	# (the exact 0.01 threshold _last_facing_direction's own convention
@@ -4657,6 +4667,14 @@ func current_speed() -> float:
 ## real, per-individual speed model, and sprint is an on-foot pace, not a
 ## second multiplier stacked on top of it.
 func is_sprinting() -> bool:
+	# Exhausted legs do not run, however hard the key is held
+	# (SprintCost.can_sprint reads the survival meters' OWN exhausted
+	# threshold, so the "Exhausted" chip on the panel and this refusal are
+	# one fact). This is what makes the burst a burst: you get
+	# SprintCost.SECONDS_OF_SPRINT_FROM_FULL of it and then you walk, and
+	# walking is where the world gets to be dangerous at you.
+	if not SprintCost.can_sprint(survival.stamina):
+		return false
 	return Input.is_action_pressed("sprint") if _controlled_locally() else _pending_sprint_pressed
 
 
