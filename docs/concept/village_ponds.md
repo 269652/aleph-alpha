@@ -276,6 +276,13 @@ building's own chain (`BuildingCatalog.finished_sheet_chain`): the day
 line is pure tidying. Pinned by
 `test_a_borrowed_sheet_never_hides_the_buildings_own`.
 
+What it borrows is the BUILDING, not the farmstead: a farmhouse also
+stands in one of nine drawn yards (`background_sheet_for`, "A building's
+own yard, drawn behind it" in [building.md](building.md)), and the hut is
+not declared for one. That is deliberate rather than an oversight -- a
+fisher's hut stands on a bank, not in a farmyard -- and it is also the one
+thing that tells the two apart until the hut's own sheet is drawn.
+
 ### Honest gaps
 
 - **The catch still goes to the fisher's cottage**, not to the hut. The hut
