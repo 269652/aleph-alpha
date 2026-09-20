@@ -1234,7 +1234,6 @@ func _ready() -> void:
 	_build_crafting_window()
 	_build_quest_log_window()
 	_build_conversation_window()
-	_build_house_panel()
 	_build_skill_window()
 	_build_settings_overlay()
 	_build_hover_tooltip()
@@ -1251,6 +1250,8 @@ func _ready() -> void:
 	_build_world_clock_card()
 	_build_karma_display()
 	_build_settlement_card()
+	# After the columns, and after the standing readouts it opens beneath.
+	_build_house_panel()
 	_build_held_item_card()
 	_build_diagnostics_strip()
 	_build_message_stack()
@@ -4428,15 +4429,28 @@ func _step_quest_reconciliation(local_player: Player, delta: float) -> void:
 
 ## The village readout, anchored to the screen's top-left under the HUD and
 ## hidden until a building is actually clicked (see _on_world_clicked).
+## The readout a click on a building opens -- a card in the right-hand
+## column like every other, NOT a panel at coordinates of its own.
+##
+## Reported with both open: *"The Town Panel and Warehouse / Building panel
+## overlap.. a panel should occupy space and make other panels render below
+## it.. don't use fixed coords"*. It was the one card that never joined a
+## column: PRESET_CENTER_RIGHT at a hand-picked 24px from the edge, 180px
+## tall whatever it held, while the right column grew down from the minimap
+## straight into it. The settlement card landing in that column is what
+## finally made the collision visible, but the panel had been placed against
+## nothing all along.
+##
+## Last in the column on purpose: the cards above it are standing readouts
+## (where you are, when you are, what this place is doing) and this one
+## comes and goes with a click, so it opens under them rather than shoving
+## them about. Closed, it takes no room at all -- HousePanel hides itself,
+## and a hidden child of a VBox leaves no hole (see docs/concept/hud.md,
+## "The message stack", which already relies on exactly that).
 func _build_house_panel() -> void:
 	_house_panel = HousePanel.new()
 	_house_panel.theme = _ui_theme
-	_house_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	_house_panel.offset_left = -HousePanel.PANEL_WIDTH - 24.0
-	_house_panel.offset_right = -24.0
-	_house_panel.offset_top = -90.0
-	_house_panel.offset_bottom = 90.0
-	_ui.add_child(_house_panel)
+	_add_hud_card(_hud_right_column, _house_panel, true)
 
 
 ## A left-click in the world opens the readout on whatever building was
