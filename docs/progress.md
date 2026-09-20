@@ -29673,3 +29673,39 @@ bank) and is all a scene with no flow overlay registered would draw at all.
 Tested: `test_village_pond.gd` (+11), `test_earth_chunk_manager_ponds.gd`
 (+3), `test_village_renderer.gd` (+2), `test_building_catalog.gd` (+3, one
 list test renamed).
+
+## A borrowed building borrows the yard it stands in (`concept/building.md`, 2026-09-20)
+
+Asked for directly the moment the fisher's hut was up beside its pond:
+*"the fisher hut should get a yard too"*.
+
+A farmhouse stands in one of nine drawn yards
+(`BuildingCatalog.background_sheet_for`, landed in parallel the same day),
+and the hut is drawn AS a farmhouse through `draws_as` — so it stood on
+bare plot beside the real thing in its finished yard, which reads as one
+building done and the other forgotten. `background_sheet_for` now falls
+through `draws_as` when a building declares no yard of its own: what is
+borrowed is the whole picture, the house and the ground it stands in. The
+hut's OWN seed still picks which of the nine, so the hut by the pond and
+the farmhouse up the street are different pictures, and borrowing art
+stays the only way to inherit a yard — a building that declares neither
+still stands on bare plot.
+
+**A correction, recorded as one.** The doc written a few hours earlier
+argued the opposite — that a fisher's hut stands on a bank rather than in
+a farmyard, so the missing yard was deliberate. It was the wrong call and
+`concept/village_ponds.md` now says so in place of the old reasoning.
+
+**And one thing measured rather than assumed on the way past.** The yard
+is drawn AFTER the kerb (children paint in tree order), so a yard whose
+scene reached the plot's edge would hide the line that marks the hitbox.
+Measured on the delivered `farmhouse_bg_overlay.png`: **0 of 5118 pixels**
+in the outer three-pixel band are opaque, so the kerb is never covered and
+the existing order is right. Pinned by
+`test_a_yard_never_paints_over_the_kerb_at_the_plots_own_edge` rather than
+by reordering two features that were each deliberate — yard art delivered
+one day with its scene bled to the edge would erase every kerb it covers,
+and the first anybody would know is a screenshot.
+
+Tested: `test_building_catalog.gd` (+3),
+`test_earth_chunk_manager_buildings.gd` (+2).
