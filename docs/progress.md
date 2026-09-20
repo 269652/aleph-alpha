@@ -28161,3 +28161,94 @@ to its farmhouse frontage first; that routing is deliberately not attempted
 here. Named rather than silently left.
 
 Tests: `test_npc_marker.gd` + `test_npc_marker_farming.gd` 100/100 (+3 new).
+
+## A villager gets a face, and their own clothes (`concept/character_art_brief.md`, 2026-09-20)
+
+Reported live with one in shot: *"There's still a weird looking farm house
+with a weird npc and weird sil tiles"*, and, asked which part: *"It's a rough
+sketch with a square as head and poor resolution"*. Two independent causes
+under one complaint, each measured before either was touched.
+
+### ✅ A square for a head — the safety net was catching one villager in five
+
+19 of `head.png`'s 100 cells fail background removal (7 erode to almost
+nothing, 12 keep the whole opaque square). `has_usable_head` already caught
+every one of them and `CharacterView._apply_head` already fell back to
+`ProceduralCharacterSprite`'s flat 24×24 `ART_HEAD_SIZE` head. None of that
+was broken and none of it changed.
+
+What was broken is that `HeroAppearance` rolled `"head"` uniformly across all
+100 cells, so the net caught **19% of every villager rolled** — a plain
+square head on a finely illustrated body, which is exactly what reads as "a
+rough sketch with a square as head". Measured with
+`tools/probe_usable_heads.gd`: 81 cells usable for every skin tone, 19
+unusable for every skin tone, and **0 cells usable for some tones and not
+others** — the flood runs before the recolor, so usability is a fact about
+the sheet alone.
+
+The head axis now walks only drawable faces. `option_count("head")` counts
+`usable_head_cells()` instead of the grid, and `head_cell_for_axis`/
+`axis_for_head_cell` map an axis position onto a real `head.png` cell and
+back — so `appearance.head_index` still means the same thing it always did,
+`generate_head_texture` is still indexed by it, and a hero saved before this
+still round-trips through `choices_from_appearance`.
+
+The 19 are **pinned**, not swept at startup: deciding usability means
+flood-filling and scanning all 100 cells, far too much to repeat every
+launch, and the answer only changes when the art does.
+`test_the_pinned_broken_head_cells_are_exactly_the_ones_the_art_cannot_draw`
+checks the list against `has_usable_head` itself, so it cannot drift — fix or
+re-export the art and that test fails and says so.
+
+🚧 **Still a real gap**: the 19 cells are still broken art. Nobody is handed
+one now, but the underlying flood/margin problem is untouched, and the
+character brief still carries it as the open item it was.
+
+### ✅ Dressed as a soldier — a missing palette costs more than colours
+
+`"lumberjack"` and `"carter"` reached `NpcIdentity.OCCUPATIONS` without ever
+reaching `HeroAppearance.CLASS_PALETTES`. That is not only missing colours:
+`outfit_variant_for` derives the illustrated rig's outfit **row** from that
+same table's index, through `maxi(find(...), 0)` — so "not found" (`-1`)
+silently became index `0`, the **warrior's** row. Every lumberjack and every
+carter in every village wore plate with an axe on its back. The villager in
+the screenshot is a carter, hauling a cart across a farm dressed for a
+battle.
+
+Both have their own palette now, appended rather than inserted so the first
+seven entries stay the player archetypes whose order *is* the row mapping.
+
+Worth stating plainly: `test_every_npc_occupation_has_its_own_tunic_palette`
+had been failing on exactly this since those two trades landed — **my own
+regression**, from the pass that added them, and it sat red rather than being
+noticed.
+
+### The beds were measured and are NOT at fault
+
+The same report called the farm beds weird, and three beds 64px wide sitting
+80px apart looks exactly like soil that does not cover its tile — the failure
+`village_farms.md` already records once ("six brown squares in a black
+lattice"). It is not that. Measured twice
+(`tools/probe_soil_ground_size.gd`, `tools/probe_bed_layers.gd`): all nine
+soil frames are 32×32 with **alpha 1.0 in every pixel**, drawn at scale 0.5
+for exactly **1.000 × 1.000 tiles**. A bed covers its whole tile in solid
+dirt, and adjacent beds cannot leave grass between them. Both probes are kept
+precisely so the next session to read that screenshot does not reach for the
+same wrong fix.
+
+⬜ **Unresolved, and named rather than guessed at**: a bed pitch of 1.25 tiles
+is not producible by any path in the code — beds are keyed by `Vector2i` and
+placed at `(tile + 0.5) * TILE_SIZE`, and the terrain's own pitch is
+`TILE_SIZE` via `LAYER_SCALE`. Either the screenshot is rescaled or those
+squares are not `FarmPlotMarker`s at all. The user's own answer — *"They
+shouldn't be there at all"*, alongside *"not a real farmhouse but a
+downscaled miniature farmhouse with no real mechanics"* — points at the
+placeable/real-building split rather than at bed rendering, and that is where
+the next pass should start, not in `FarmPlotMarker`.
+
+Tests: `test_hero_sprite.gd` 49/49 (+3 new, 3 rewritten to the new contract),
+`test_illustrated_character_sprite.gd` 53/53 (+2 new), and
+`test_character_view.gd`, `test_hero_dna.gd`,
+`test_character_sheet_portrait_scene.gd`,
+`test_companion_character_sheet_view.gd`, `test_interior_avatar.gd`,
+`test_house_interior_view.gd` 142/142 green against the change.
