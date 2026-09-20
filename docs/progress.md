@@ -19638,6 +19638,71 @@ between reverting and keeping the new art with the known jump. The
 45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
 whenever a version with genuinely continuous inter-row rotation exists.
 
+## The mushroom crush was playing its own silent lead-in (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-20)
+
+Reported live: *"Mushroom crush sounds are gone"*. Two earlier changes,
+each correct on its own, composed into a sound that never played:
+
+1. The sourced clip (2026-09-09) is **7.54 seconds of continuous crinkling
+   styrofoam**, not a trimmed one-shot — it could not be trimmed, because
+   no audio-editing tooling was available in the session that sourced it.
+2. The 0.3s playback cap (2026-09-10, asked for directly: *"It plays long
+   after you stepped on it"*) plays the clip's **first** 0.3 seconds.
+
+The join between them is `FootstepSound.offset_for`, which returned `0.0`
+for this clip because it was never entered in `CLIP_LENGTH_SECONDS`. An
+unmeasured clip reads as length `0.0` there, so `is_walking_bed` called a
+7.5-second recording a one-shot ("it is already the step") and every
+crush played the same opening lead-in, before the performer has touched
+the styrofoam. Deterministic silence, not intermittent quiet.
+
+**Measured, not guessed, and three candidate causes ruled out first.**
+`tools/probe_mushroom_crush.gd` (new) loads real generated chunks, counts
+fruiting mushrooms and steps on every one: **298 fruiting, 298 crushed**
+on ordinary land — so mushrooms exist and `crush_mushroom_at` returns
+true, which is the branch the sound is played in. (The probe's first run
+reported zero, on chunks that turned out to be open ocean — `"sea": true`
+in the generator's own hydrology. Re-run on land before drawing any
+conclusion.) The audio player itself was already covered by
+`test_interaction_sfx_player.gd`, which loads and plays the real clip. That
+left the offset, and the clip's real length measured **7.536s** against a
+`CLIP_LENGTH_SECONDS` that knew only `default.ogg`.
+
+**Fix:** the clip's measured length (`7.54`) joins `CLIP_LENGTH_SECONDS`,
+where the existing `test_the_pinned_clip_lengths_are_the_real_files_own`
+now checks it against the real file every run like every other length
+there. `is_walking_bed` is then true for it, so each crush reads a
+**random 0.3s window out of the recording** instead of its first 0.3s —
+which for a continuously crinkling source is the right reading anyway:
+any moment in it is a crunch, and a different one each time is variation
+the crush never had. No change to the 0.3s cap the user asked for, and no
+change to any footstep. `is_walking_bed`'s name is now narrower than what
+it does (it is about LENGTH, not walking); the name is left alone rather
+than churned through every caller and its doc comment carries the
+correction.
+
+**TDD:** four pins in `test_footstep_sound.gd` — the clip is registered,
+a 7.5s recording is read as a window, two rolls read different moments,
+the latest window still fits inside the recording — plus the wiring half
+in `test_interaction_sfx_player.gd`: 24 crushes start in more than one
+place, and at least one reads deeper in than a whole window (not merely
+"not exactly zero", which passes vacuously because playback advances a
+hair on its own). All confirmed red against the unmeasured constant
+first, the key one failing with *"every crush started in the same
+place"* — the bug stated exactly. Also pinned: the crush's cap must stay
+inside the tail margin `offset_for` leaves, so neither can be moved into
+the other's way unnoticed. Audio suites 93/93.
+
+Fixed in passing, in the same file: two `assert_eq` comparisons against
+`volume_db` were failing on float precision (`1.1` reads back as
+`1.10000002384186` from a 32-bit engine property). These gains are
+MEASURED by `tools/prepare_footstep_oneshots.py` rather than chosen, so
+most are not exactly representable; both are `assert_almost_eq` now.
+
+🚧 **Not verified by ear.** Nothing in this environment can hear the
+result — what is tested is that the window varies, starts inside the
+recording, and never reads off its end.
+
 ## The mushroom-crush sound is sourced: crushed styrofoam (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-09)
 
 Requested directly: *"can you find a styrofoam crushing sound and use it

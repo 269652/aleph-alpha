@@ -11,6 +11,9 @@ extends GutTest
 ## should make SOME sound.
 
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
+## For the mushroom crush's own playback cap, which the window it reads must
+## fit inside (see the mushroom-crush tests at the foot of this file).
+const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 
 
 func test_forest_biome_gets_the_forest_surface():
@@ -484,3 +487,71 @@ func test_pavement_is_no_longer_ten_decibels_hot():
 ## it rather than to a number chosen here.
 func test_grass_keeps_the_level_that_was_signed_off_by_ear():
 	assert_almost_eq(FootstepSound.volume_db_for("grass"), -12.0, 0.001)
+
+
+# -- the mushroom crush is a 7.5-second recording, not a one-shot ------------
+
+## Reported live: "Mushroom crush sounds are gone".
+##
+## The clip sourced for it is a 7.5-second continuous "crinkling styrofoam"
+## field recording (see MUSHROOM_CRUSH_CLIP_PATH's own doc comment and
+## docs/progress.md's sourcing entry) -- it was never trimmed to a single
+## crush, because no audio-editing tooling was available in the session that
+## sourced it. But it was never registered in CLIP_LENGTH_SECONDS either, so
+## is_walking_bed reads its length as the 0.0 default and calls it a one-shot,
+## offset_for returns 0.0 for every roll, and InteractionSfxPlayer's 0.3s cap
+## then plays the same first 0.3s of the lead-in -- before the performer has
+## touched the styrofoam -- on every single crush.
+##
+## This file's own model already covers exactly this case: a clip too long to
+## be one step is a recording you read a WINDOW out of. The mushroom clip just
+## never got measured into it.
+func test_the_mushroom_crush_clip_has_its_real_length_pinned():
+	assert_true(
+		FootstepSound.CLIP_LENGTH_SECONDS.has(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH),
+		"an unmeasured clip reads as length 0.0, which makes a 7.5s recording a one-shot"
+	)
+
+
+## Not "walking" in the literal sense the name carries -- a continuous
+## crinkling recording rather than a walk -- but the same KIND of clip the
+## windowing exists for: far too long to be one event, so one event is a
+## window into it.
+func test_a_seven_second_recording_is_read_as_a_window_not_played_whole():
+	assert_true(FootstepSound.is_walking_bed(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH))
+
+
+## The whole point of a window: two crushes must not read the identical
+## moment of the recording. With the clip unmeasured every roll returned 0.0,
+## so every crush played the same opening silence.
+func test_two_crushes_read_different_moments_of_the_recording():
+	var early := FootstepSound.offset_for(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, 0.1)
+	var late := FootstepSound.offset_for(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, 0.9)
+	assert_gt(late, early, "a later roll must read a later moment")
+	assert_gt(early, 0.0, "not every crush may start at the very top of the recording")
+
+
+## ...and the latest window a crush can start at still leaves the crush's own
+## capped duration ahead of it, so a crush never runs off the end into silence.
+func test_the_latest_crush_window_still_fits_inside_the_recording():
+	# .get rather than [] on purpose: the constant dictionary is folded at
+	# COMPILE time, so indexing a key it does not have is a parse error that
+	# takes the whole test file down with it instead of failing one test.
+	var length: float = float(
+		FootstepSound.CLIP_LENGTH_SECONDS.get(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, 0.0)
+	)
+	var latest := FootstepSound.offset_for(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, 1.0)
+	assert_lte(
+		latest + InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS, length + 0.0001,
+		"a crush window must not read past the end of its own recording"
+	)
+
+
+## The tail margin offset_for leaves is STEP_WINDOW_SECONDS, and the crush's
+## own cap is shorter than that -- pinned so that neither can be changed into
+## the other's way without this failing.
+func test_the_crush_cap_fits_inside_the_window_margin_offset_for_leaves():
+	assert_lte(
+		InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS,
+		FootstepSound.STEP_WINDOW_SECONDS
+	)

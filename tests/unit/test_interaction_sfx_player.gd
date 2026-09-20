@@ -164,7 +164,11 @@ func test_play_footstep_applies_the_surfaces_own_volume_adjustment():
 	add_child_autofree(player.build())
 	var voice := player.play_footstep("grass")
 	assert_not_null(voice)
-	assert_eq(voice.volume_db, FootstepSound.volume_db_for("grass"))
+	# almost_eq, not eq: volume_db is a 32-bit engine property, and these
+	# gains are MEASURED by tools/prepare_footstep_oneshots.py rather than
+	# chosen, so most of them are not exactly representable -- snow's 1.1
+	# reads back as 1.10000002384186 and failed a plain equality.
+	assert_almost_eq(voice.volume_db, FootstepSound.volume_db_for("grass"), 0.0001)
 
 
 ## The round-robin pool REUSES voices across different surfaces over
@@ -179,7 +183,7 @@ func test_play_footstep_does_not_inherit_a_previous_surfaces_quieter_volume():
 		player.play_footstep("grass")
 	var voice := player.play_footstep("snow")
 	assert_not_null(voice)
-	assert_eq(voice.volume_db, FootstepSound.volume_db_for("snow"))
+	assert_almost_eq(voice.volume_db, FootstepSound.volume_db_for("snow"), 0.0001)
 	assert_ne(
 		FootstepSound.volume_db_for("snow"), FootstepSound.volume_db_for("grass"),
 		"the premise: the two surfaces must actually want different volumes"
@@ -367,3 +371,33 @@ func test_the_root_is_not_in_the_tree_until_it_is_really_added():
 	assert_false(player.root_in_tree(), "built is not the same as added")
 	add_child_autofree(root)
 	assert_true(player.root_in_tree())
+
+
+## Reported live: "Mushroom crush sounds are gone". The clip is 7.5 seconds of
+## continuous crinkling styrofoam, and it was never measured into
+## FootstepSound.CLIP_LENGTH_SECONDS -- so it read as a one-shot, every crush
+## started at 0.0, and the 0.3s cap played the same opening lead-in every
+## time, before the performer has touched the styrofoam.
+##
+## The wiring half of that fix: a crush must actually start somewhere inside
+## the recording, and two crushes must not start in the same place. Mirrors
+## test_a_step_into_a_walking_bed_starts_somewhere_other_than_the_top exactly.
+func test_a_mushroom_crush_starts_somewhere_inside_its_recording():
+	add_child_autofree(player.build())
+	var starts: Dictionary = {}
+	var deepest := 0.0
+	for _crush in 24:
+		var voice := player.play_mushroom_crush()
+		assert_not_null(voice)
+		var started := voice.get_playback_position()
+		deepest = maxf(deepest, started)
+		starts[snappedf(started, 0.01)] = true
+	assert_gt(starts.size(), 1, "every crush started in the same place")
+	# Not just "not exactly zero" -- playback advances a hair on its own, so
+	# that would pass even with every offset pinned at the top. At least one
+	# crush must read from genuinely deeper inside the recording than a whole
+	# window's worth, which is impossible when the offset is always 0.
+	assert_gt(
+		deepest, FootstepSound.STEP_WINDOW_SECONDS,
+		"no crush read from deeper inside the recording than its own lead-in"
+	)
