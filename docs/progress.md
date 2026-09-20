@@ -5012,6 +5012,13 @@ somewhere to land:
   region on the killing blow**, never at the end of the row: a death that
   only lands when an animation finishes is one a chunk unload mid-collapse
   would lose outright.
+- ✅ **A death that begins mid-step stops that step too.** Three ticks at
+  the top of `_process` run unconditionally and can each kill — disease, an
+  ignite/blight tick, a Death Cap's weakened roll — and each was followed
+  by a guard asking only whether the marker had been *freed*. A body that
+  collapses first is not freed for several steps, so the step it died on
+  went on to run its AI: measured at ~23,000 world units of wandering by a
+  corpse before `_death_has_begun()` replaced those guards.
 - ✅ **Neither row may borrow another**, unlike swim→walk / drink→idle /
   idle→eat-frame-0. A flinch built from the walk cycle reads as a stumble,
   and a death built from a cycling row would never end. Both states are

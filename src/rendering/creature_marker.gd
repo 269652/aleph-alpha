@@ -903,14 +903,14 @@ func _process(frame_delta: float) -> void:
 	# (and can still die) no matter what it's doing that frame, the same way
 	# _needs.advance never pauses for those states either.
 	_disease_step(delta)
-	if is_queued_for_deletion():
+	if _death_has_begun():
 		return  # died of disease this frame -- nothing below has a live marker to act on
 
 	# Same "runs unconditionally, ahead of every early-return" reasoning as
 	# disease above: an ignited/blighted creature keeps burning no matter
 	# what it's doing this frame (see docs/concept/spell_runtime.md).
 	_spell_status_step(delta)
-	if is_queued_for_deletion():
+	if _death_has_begun():
 		return  # an ignite/blight tick can kill too
 
 	# Same reasoning again: a weakened-by-Death-Cap creature's real, small
@@ -918,7 +918,7 @@ func _process(frame_delta: float) -> void:
 	# docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
 	# real toxic effects").
 	_mushroom_effect_step(delta)
-	if is_queued_for_deletion():
+	if _death_has_begun():
 		return  # a Death Cap weakened tick can kill too
 
 	if _knockback_time_remaining > 0.0:
@@ -3545,6 +3545,20 @@ func _die() -> void:
 ## docs/concept/carrion.md was written to fix, just one animation later.
 ## Only ever reached by a species with real death art; everything else took
 ## the instant path in _die above.
+## True once this creature's death has BEGUN, whether or not the marker has
+## gone yet -- freed outright (no death art) or still collapsing (_dying).
+## What the three unconditional ticks at the top of _process check: each of
+## disease, an ignite/blight tick and a Death Cap's weakened roll can kill,
+## and each has to stop the rest of that step when it does. Asking
+## is_queued_for_deletion() alone was right while every death freed the
+## marker in the same frame; a body that collapses first is dead for a
+## handful of steps before that ever becomes true, and the step it died on
+## went on to run its AI -- a dead animal wandering off (pinned by
+## test_a_death_that_begins_mid_step_stops_the_rest_of_that_step).
+func _death_has_begun() -> bool:
+	return _dying or is_queued_for_deletion()
+
+
 func _finish_dying() -> void:
 	_one_shot_action = ""
 	_one_shot_held = false

@@ -4855,3 +4855,31 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 func test_the_restated_tile_size_is_the_renderers_own():
 	assert_eq(CreatureMarker.TILE_SIZE_PX, TerrainRenderer.TILE_SIZE)
+
+
+## A death that begins PARTWAY through a step has to stop that step too.
+## Three ticks at the top of _process run unconditionally and can each kill
+## -- disease, a spell's ignite/blight, a Death Cap's weakened roll -- and
+## each is followed by a guard that asked only whether the marker had been
+## FREED. A creature with death art has not been freed at that point, it is
+## collapsing, so the rest of the step went on to run its AI: a dead animal
+## finishing the frame by wandering off.
+func test_a_death_that_begins_mid_step_stops_the_rest_of_that_step():
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	marker.apply_disease_bite(DiseaseModel.CARRION)  # lethal-capable archetype
+	var resting := marker.position
+	# A huge delta drives DiseaseModel's per-second death chance past 1.0 --
+	# deterministic regardless of seed, the same trick
+	# test_a_lethal_disease_death_leaves_a_carcass_and_frees_the_marker uses.
+	marker._process(1000.0)
+	assert_eq(marker.current_action(), "death", "precondition: the disease tick killed it")
+	assert_eq(marker.position, resting, "a collapsing body must not finish the step by wandering")
+
+
+## And the same guard still reads correctly for a species with NO death art,
+## which is every species today: the marker really is freed, and the rest of
+## the step is skipped exactly as it always was.
+func test_a_death_without_death_art_still_stops_the_step_by_being_freed():
+	marker.apply_disease_bite(DiseaseModel.CARRION)
+	marker._process(1000.0)
+	assert_true(marker.is_queued_for_deletion())
