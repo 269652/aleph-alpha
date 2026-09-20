@@ -14,6 +14,8 @@ extends SceneTree
 ##
 ## Usage: godot --headless -s tools/probe_village_famine.gd
 
+const Starvation = preload("res://src/emergence/starvation.gd")
+
 const CHUNK_SIZE := 32
 const STEPS := 40
 const SLICE := 0.25
@@ -72,6 +74,21 @@ func _villagers_in(chunk_coord: Vector2i) -> int:
 	return count
 
 
+## How far the worst-off villager has got through the starvation window.
+## Hunger sitting at 1.00 says nothing on its own -- it reads the same for
+## somebody who emptied a second ago and somebody about to die -- so this
+## is what tells "fed just in time" apart from "the death never fires".
+func _most_starved(chunk_coord: Vector2i) -> float:
+	var worst := 0.0
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if not is_instance_valid(node) or not node.has_method("setup_economy"):
+			continue
+		if node.economy == null:
+			continue
+		worst = maxf(worst, node.economy.needs.starved_seconds)
+	return worst
+
+
 func _hungriest(chunk_coord: Vector2i) -> float:
 	var worst := 0.0
 	for node in _manager._loaded_villages.get(chunk_coord, []):
@@ -121,12 +138,13 @@ func _sample() -> void:
 		var next_report := 0.0
 		while elapsed < SIMULATED_SECONDS:
 			if elapsed >= next_report:
-				_lines.append("  %8.0f %8d %10d %10.2f %10d" % [
+				_lines.append("  %8.0f %8d %10d %10.2f %10d %6.0f/%-5.0f" % [
 					elapsed,
 					_manager.household_count_for_settlement(settlement_id),
 					_villagers_in(chunk_coord),
 					_hungriest(chunk_coord),
 					_market_food(chunk_coord),
+					_most_starved(chunk_coord), Starvation.seconds_to_die(),
 				])
 				next_report += REPORT_EVERY
 			# The villagers themselves. Hand-ticked because _sample runs
@@ -144,11 +162,12 @@ func _sample() -> void:
 			_manager.step_farm_plots(SLICE)
 			_manager.step_settlements(SLICE)
 			elapsed += SLICE
-		_lines.append("  %8.0f %8d %10d %10.2f %10d" % [
+		_lines.append("  %8.0f %8d %10d %10.2f %10d %6.0f/%-5.0f" % [
 			elapsed,
 			_manager.household_count_for_settlement(settlement_id),
 			_villagers_in(chunk_coord),
 			_hungriest(chunk_coord),
 			_market_food(chunk_coord),
+			_most_starved(chunk_coord), Starvation.seconds_to_die(),
 		])
 		return
