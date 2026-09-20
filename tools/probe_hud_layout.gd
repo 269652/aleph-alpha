@@ -55,6 +55,9 @@ func _initialize() -> void:
 
 	var world = load("res://scenes/world.tscn").instantiate()
 	var ui: CanvasLayer = world.get_node("UI")
+	# A real map texture, so the rounded clip has something to actually round.
+	var map: TextureRect = ui.get_node("Minimap")
+	map.texture = _fake_map()
 	# World's @onready members never resolve here (its _ready never runs), so
 	# the handful the HUD builders read are wired by hand -- the same paths
 	# world.gd itself declares them with.
@@ -62,6 +65,7 @@ func _initialize() -> void:
 	world._player_health_bg = ui.get_node("PlayerHealthBar/Background")
 	world._player_health_fill = ui.get_node("PlayerHealthBar/Fill")
 	world._player_health_label = ui.get_node("PlayerHealthBar/Label")
+	world._minimap = ui.get_node("Minimap")
 	world._ui_scale = scale
 	world._apply_ui_scale()
 
@@ -78,6 +82,11 @@ func _initialize() -> void:
 	world._build_held_item_card()
 	world._build_diagnostics_strip()
 	world._build_death_label()
+	# The minimap's frame and the planner switch beside it -- the two things
+	# a render is the only real check of (a clip mask and a knob's rest
+	# position do not show up in any unit test).
+	world._build_minimap_frame()
+	world._build_view_mode_toggle()
 
 	if state == "calm":
 		_fill_in_calm(world)
@@ -130,6 +139,9 @@ func _fill_in(world, scale: float) -> void:
 		card.add_child(label)
 		world._condition_chips_row.add_child(card)
 
+	# Planner mode ON here and off in the calm render, so one run of the probe
+	# at each state shows both halves of the switch.
+	world._view_mode_switch.set_on(true)
 	world._held_item_label.text = HudReadouts.held_item_line("Stone Axe", "worn")
 	world._held_item_card.visible = true
 
@@ -173,3 +185,17 @@ func _fill_in_calm(world) -> void:
 	)
 	for i in world._clock_labels.size():
 		world._clock_labels[i].text = clock[i]
+
+
+## A plausible map image: a green field with a blue river down it, so the
+## rounded corners are visible against the page behind them. Generated rather
+## than loaded -- MinimapRenderer needs a whole EarthChunkManager, and what is
+## being looked at here is the FRAME, not the cartography.
+func _fake_map() -> ImageTexture:
+	var image := Image.create(162, 162, false, Image.FORMAT_RGB8)
+	image.fill(Color(0.35, 0.5, 0.25))
+	for y in image.get_height():
+		var x := 70 + int(14.0 * sin(float(y) / 22.0))
+		for w in 9:
+			image.set_pixel(x + w, y, Color(0.25, 0.45, 0.75))
+	return ImageTexture.create_from_image(image)

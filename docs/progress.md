@@ -19639,6 +19639,130 @@ between reverting and keeping the new art with the known jump. The
 45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
 whenever a version with genuinely continuous inter-row rotation exists.
 
+## The minimap is framed, and the planner toggle is a real switch (`concept/hud.md`, 2026-09-20)
+
+Two asks in one screenshot: *"Can you add a border and borderradius of 4px
+to the minimap and make the planner switch a ios like switch button with
+two states?"*
+
+**The minimap** was the one readout on screen with no frame — a bare
+`TextureRect` running to a hard square edge, directly above a world-clock
+card and a Karma card that both carry the shared rounded, bordered one. Not
+a legibility problem (a map is opaque), a coherence one. `UiTheme.
+map_frame_stylebox` is the shared `PANEL_BORDER` at `MAP_CORNER_RADIUS` 4
+with **no fill** — the map is the background, making this the one stylebox
+in the theme that draws only an edge. Four rather than the theme's six is
+deliberate and pinned: a map is read for the shapes in it, and rounding eats
+them. Rounding a `TextureRect` needs two nodes, because a stylebox draws
+*behind* a texture rather than clipping it and its border draws under its own
+children: a clipper (`clip_children = CLIP_CHILDREN_ONLY`, never drawn, its
+shape the mask) that the map moves into, and a frame added **after** the map
+so it draws on top of it.
+
+**The planner toggle** was a `Button` captioned with the mode you would
+switch *to* (`ViewMode.toggle_label`: "Planner Mode" while you are in RPG
+mode). Correct for a button, wrong for this control — a player could read it
+as *you are in planner mode* or as *press for planner mode*, and nothing on
+screen settled it. `src/ui/toggle_switch.gd` is a real two-state switch: the
+caption is now the constant `ViewMode.SWITCH_LABEL` ("Planner"), and the
+switch's on-state is the existing `ViewMode.shows_palette`, never a second
+predicate that could drift. `toggle_label` stays for callers that really do
+describe the action. The knob slides (a short `Tween`), which is what makes
+it read as one control with two states rather than two pictures; keyboard
+focus stays off it for the reason the old button already documented (a
+focused Control answers `ui_accept`, which is Space, which is attack).
+
+**Rendered, and the render earned its keep.** `tools/probe_hud_layout.gd`
+grew the minimap and the switch, and shows both switch states (planner on in
+the busy render, off in the calm one). It caught two things no unit test
+could: the off-track all but vanished into the card behind it —
+`UiTheme.BUTTON_NORMAL` sits within 0.06 luminance of `PANEL_BG`, so the
+track now carries the shared border in both states — and, inside its row, the
+switch stretched to the row's height, which stops a pill being a pill
+(the radius is half of `TRACK_SIZE.y`, so a taller track turns semicircular
+ends into merely-rounded corners). Both fixed; the second is now pinned by
+`test_the_switch_keeps_its_own_height_inside_a_row`, a test written *because*
+a picture showed what twelve geometry assertions measuring the constants
+could not.
+
+**TDD:** 12 pins in `test_toggle_switch.gd` (the knob is inside the track at
+both ends, the rest positions are symmetric, the travel is exactly track less
+knob less both paddings, the track is a pill, on/off are the theme's own pair
+and visibly differ in luminance), 4 in `test_toggle_switch_view_mode.gd` and
+3 in `test_ui_theme.gd`, all red first. One existing test changed its
+PREMISE rather than its assertion: `test_world_planner_mode_wiring.gd` asserted
+`_apply_view_mode` reads `ViewMode.toggle_label`, which is exactly what must
+no longer be true — it now asserts the caption is the constant, that
+`toggle_label` is absent, and that the switch follows a mode flipped by a
+keypress rather than only by a click. UI suites 144/144.
+
+🚧 **Not verified in a live session** — rendered offscreen, not played.
+
+## The mushroom crush was playing its own silent lead-in (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-20)
+
+Reported live: *"Mushroom crush sounds are gone"*. Two earlier changes,
+each correct on its own, composed into a sound that never played:
+
+1. The sourced clip (2026-09-09) is **7.54 seconds of continuous crinkling
+   styrofoam**, not a trimmed one-shot — it could not be trimmed, because
+   no audio-editing tooling was available in the session that sourced it.
+2. The 0.3s playback cap (2026-09-10, asked for directly: *"It plays long
+   after you stepped on it"*) plays the clip's **first** 0.3 seconds.
+
+The join between them is `FootstepSound.offset_for`, which returned `0.0`
+for this clip because it was never entered in `CLIP_LENGTH_SECONDS`. An
+unmeasured clip reads as length `0.0` there, so `is_walking_bed` called a
+7.5-second recording a one-shot ("it is already the step") and every
+crush played the same opening lead-in, before the performer has touched
+the styrofoam. Deterministic silence, not intermittent quiet.
+
+**Measured, not guessed, and three candidate causes ruled out first.**
+`tools/probe_mushroom_crush.gd` (new) loads real generated chunks, counts
+fruiting mushrooms and steps on every one: **298 fruiting, 298 crushed**
+on ordinary land — so mushrooms exist and `crush_mushroom_at` returns
+true, which is the branch the sound is played in. (The probe's first run
+reported zero, on chunks that turned out to be open ocean — `"sea": true`
+in the generator's own hydrology. Re-run on land before drawing any
+conclusion.) The audio player itself was already covered by
+`test_interaction_sfx_player.gd`, which loads and plays the real clip. That
+left the offset, and the clip's real length measured **7.536s** against a
+`CLIP_LENGTH_SECONDS` that knew only `default.ogg`.
+
+**Fix:** the clip's measured length (`7.54`) joins `CLIP_LENGTH_SECONDS`,
+where the existing `test_the_pinned_clip_lengths_are_the_real_files_own`
+now checks it against the real file every run like every other length
+there. `is_walking_bed` is then true for it, so each crush reads a
+**random 0.3s window out of the recording** instead of its first 0.3s —
+which for a continuously crinkling source is the right reading anyway:
+any moment in it is a crunch, and a different one each time is variation
+the crush never had. No change to the 0.3s cap the user asked for, and no
+change to any footstep. `is_walking_bed`'s name is now narrower than what
+it does (it is about LENGTH, not walking); the name is left alone rather
+than churned through every caller and its doc comment carries the
+correction.
+
+**TDD:** four pins in `test_footstep_sound.gd` — the clip is registered,
+a 7.5s recording is read as a window, two rolls read different moments,
+the latest window still fits inside the recording — plus the wiring half
+in `test_interaction_sfx_player.gd`: 24 crushes start in more than one
+place, and at least one reads deeper in than a whole window (not merely
+"not exactly zero", which passes vacuously because playback advances a
+hair on its own). All confirmed red against the unmeasured constant
+first, the key one failing with *"every crush started in the same
+place"* — the bug stated exactly. Also pinned: the crush's cap must stay
+inside the tail margin `offset_for` leaves, so neither can be moved into
+the other's way unnoticed. Audio suites 93/93.
+
+Fixed in passing, in the same file: two `assert_eq` comparisons against
+`volume_db` were failing on float precision (`1.1` reads back as
+`1.10000002384186` from a 32-bit engine property). These gains are
+MEASURED by `tools/prepare_footstep_oneshots.py` rather than chosen, so
+most are not exactly representable; both are `assert_almost_eq` now.
+
+🚧 **Not verified by ear.** Nothing in this environment can hear the
+result — what is tested is that the window varies, starts inside the
+recording, and never reads off its end.
+
 ## The mushroom-crush sound is sourced: crushed styrofoam (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-09)
 
 Requested directly: *"can you find a styrofoam crushing sound and use it

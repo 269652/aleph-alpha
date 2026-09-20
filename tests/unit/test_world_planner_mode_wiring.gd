@@ -50,7 +50,24 @@ func test_what_each_mode_shows_is_read_from_view_mode_not_reimplemented():
 	var body := _function_body("_apply_view_mode")
 	assert_true(body.contains("ViewMode.shows_hotbar("), "the hotbar's visibility comes from the model")
 	assert_true(body.contains("ViewMode.shows_palette("), "and so does the palette's")
-	assert_true(body.contains("ViewMode.toggle_label("), "and the button's own label")
+	# The premise changed with the switch (docs/concept/hud.md "The planner
+	# toggle is a switch"): the caption used to be derived from the mode
+	# (ViewMode.toggle_label, reading "Planner Mode" while you were in RPG
+	# mode). It is a CONSTANT now, because the switch carries the state -- so
+	# what _apply_view_mode must read from the model is the switch's POSITION,
+	# and shows_palette above is that same read.
+	assert_true(
+		body.contains("ViewMode.SWITCH_LABEL"),
+		"the caption is the model's constant, not a second copy of the word"
+	)
+	assert_false(
+		body.contains("ViewMode.toggle_label("),
+		"a switch's caption must not change with the mode -- the switch shows it"
+	)
+	assert_true(
+		body.contains("_view_mode_switch.set_on("),
+		"the switch has to follow a mode flipped by a keypress, not only by a click"
+	)
 
 
 ## Pillar 4: the toggle changes what the player COMMANDS, never what the

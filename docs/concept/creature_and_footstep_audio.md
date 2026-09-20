@@ -417,6 +417,52 @@ wall-clock `await wait_seconds`, not a simulated delta) confirmed red
 against the uncapped code first, green after. `test_interaction_sfx_
 player.gd` 12/12.
 
+**Revised again (2026-09-20): the cap was capping the lead-in.** Reported
+live: *"Mushroom crush sounds are gone"*. The two revisions above compose
+into a silent sound, and neither is wrong on its own:
+
+- The sourced clip is **7.54 seconds of continuous crinkling**, not a
+  trimmed one-shot — it never could be trimmed, for the tooling reason the
+  revision above names.
+- The 0.3s cap plays the clip's **first** 0.3 seconds, because
+  `FootstepSound.offset_for` returned `0.0` for it.
+
+It returned `0.0` because the clip was never entered in
+`FootstepSound.CLIP_LENGTH_SECONDS`. An unmeasured clip reads as length
+`0.0` there, `is_walking_bed` therefore called a 7.5-second recording a
+one-shot ("it is already the step"), and every crush played the same
+opening lead-in — before the performer has touched the styrofoam. Not
+"quiet", not "intermittent": the same silence, deterministically, on
+every crush.
+
+The machinery to do this right was already in this file and already
+pinned by tests; the clip had simply never been measured into it. Adding
+its real length (`7.54`, measured off the file and pinned against it by
+`test_the_pinned_clip_lengths_are_the_real_files_own`, like every other
+length here) makes `is_walking_bed` true for it, so each crush reads a
+**random 0.3s window out of the recording** instead of its first 0.3s.
+For a continuously crinkling source that is the right reading anyway: any
+moment in it is a crunch, and a different one each time is variation the
+crush did not have before.
+
+`is_walking_bed`'s name is now narrower than what it does — it is about a
+clip's LENGTH, not about walking. The name is left alone rather than
+churned through every caller; its doc comment carries the correction.
+
+One relationship this rests on is now pinned rather than implied: the
+crush's cap (0.3s) must stay inside the tail margin `offset_for` leaves
+(`STEP_WINDOW_SECONDS`, 0.45), or the latest window would read off the end
+— `test_the_crush_cap_fits_inside_the_window_margin_offset_for_leaves`.
+
+**TDD:** four pins in `test_footstep_sound.gd` (the clip is registered, a
+7.5s recording is read as a window, two rolls read different moments, the
+latest window still fits) plus the wiring half in
+`test_interaction_sfx_player.gd` (24 crushes start in more than one place,
+and at least one reads deeper in than a whole window). All confirmed red
+against the unmeasured constant first — the "different moments" one
+failing with *"every crush started in the same place"*, which is the bug
+stated exactly.
+
 ### Creature calls
 
 `src/audio/creature_call_sound.gd` (pure) owns a flat `species -> clip
@@ -705,7 +751,14 @@ independent recording described above.
 - ✅ **Mushroom-crush sound** (`assets/audio/footsteps/mushroom_crush.mp3`,
   2026-09-09) -- a crushed-styrofoam Foley stand-in, requested directly by
   name; see "Mushroom crush" above for the full reasoning and
-  `assets/audio/footsteps/CREDITS.md` for the citation.
+  `assets/audio/footsteps/CREDITS.md` for the citation. **Audible again
+  since 2026-09-20**: the clip is a 7.54s continuous recording that was
+  never measured into `FootstepSound.CLIP_LENGTH_SECONDS`, so it read as a
+  one-shot, every crush started at 0.0, and the 0.3s cap played only its
+  silent lead-in — reported live as *"Mushroom crush sounds are gone"*.
+  Each crush now reads a random 0.3s window out of the recording. **Not
+  verified: whether it sounds right** — nothing here can hear it, so the
+  window's offsets, variation and bounds are what is tested.
 - ✅ **13 real, licensed creature calls sourced and wired**: horse, boar
   (domestic pig standing in, named above), sheep, wolf, bear, squirrel,
   deer, robin, sparrow, kingfisher, honeybee, wild_bee (the last two share

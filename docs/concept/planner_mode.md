@@ -82,6 +82,20 @@ established layout rather than inventing a place to put it. It is a themed
 card, per [hud.md](hud.md)'s pillar 1: the mode you are in carries
 meaning, so it may not be bare text over the world.
 
+**Revised (2026-09-20): it is a switch, not a button.** Asked for directly:
+*"make the planner switch a ios like switch button with two states"*. The
+button's caption was `ViewMode.toggle_label` — the mode you would switch
+**to**, reading "Planner Mode" while you were in RPG mode. That is the right
+caption for a button and the wrong model for this control: a player looking
+at it could read it either as *you are in planner mode* or as *press for
+planner mode*, and nothing on screen settled which. A switch settles it by
+construction. The caption is now the constant `ViewMode.SWITCH_LABEL`
+("Planner"), naming what the switch controls, and the switch's on-state is
+`ViewMode.shows_palette(mode)` — the same predicate the palette's own
+visibility already reads, never a second one that could drift from it.
+`toggle_label` is kept for callers that genuinely describe the ACTION. See
+[hud.md](hud.md)'s "The planner toggle is a switch" for the widget itself.
+
 ### What can be planned
 
 Three kinds, all of them things the game can already build:
