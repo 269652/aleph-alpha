@@ -16504,7 +16504,7 @@ func _despawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i) -> vo
 func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
 	if local_cells.is_empty():
 		return
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims, _bramble_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.block_cells(local_cells)
@@ -16514,7 +16514,7 @@ func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> 
 ## The reverse, for a destroyed piece: bare ground again, open to the next
 ## seed like any other cell.
 func _unblock_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims, _bramble_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.unblock_cells(local_cells)
@@ -16525,6 +16525,8 @@ func _resync_ground_cover_sprites(chunk_coord: Vector2i) -> void:
 		_sync_grass_sprites(chunk_coord)
 	if _fern_sims.has(chunk_coord):
 		_sync_fern_sprites(chunk_coord)
+	if _bramble_sims.has(chunk_coord):
+		_sync_bramble_sprites(chunk_coord)
 	if _flower_patches.has(chunk_coord):
 		_sync_flower_sprites(chunk_coord)
 	if _scrub_sims.has(chunk_coord):
@@ -20076,6 +20078,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		mmi.free()
 	_fern_sprites.erase(chunk_coord)
 	_fern_sims.erase(chunk_coord)
+
+	for sprite in _bramble_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_bramble_sprites.erase(chunk_coord)
+	_bramble_sims.erase(chunk_coord)
 
 	for markers_by_crop in _wild_crop_markers.get(chunk_coord, {}).values():
 		for marker in markers_by_crop.values():

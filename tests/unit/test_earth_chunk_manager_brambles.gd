@@ -252,3 +252,79 @@ func test_a_players_swing_picks_the_bramble_they_are_standing_at():
 	assert_eq(picked.size(), 1, "a swing over a ripe bramble picks it")
 	assert_eq(picked[0].item.id, "blackberry")
 	player.free()
+
+
+# -- what was still missing ---------------------------------------------------
+#
+# Reported live: *"blackberrys are still not wired and don't grow in forest
+# biome"*. The sim, the sheet, the drawing and the picking were all there;
+# three seams every other ground cover has were not, and each of them is
+# the kind of gap that reads in play as "it isn't wired".
+
+
+## A building's floor grows nothing -- the rule every other ground cover
+## already obeys through the one shared seam (docs/concept/building.md's
+## "Placement rules"). A bramble was not on that list, so a house could be
+## raised with a blackberry thicket standing through its floor.
+func test_building_on_a_bramble_clears_it_and_keeps_it_gone():
+	var sim = manager._bramble_sims.get(_chunk_coord)
+	assert_not_null(sim)
+	assert_gt(sim.get_patch_cells().size(), 0, "precondition: this wood has brambles")
+	var cell: Vector2i = sim.get_patch_cells()[0]
+	var g: Vector2i = _chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+
+	manager.build_at_global(g.x, g.y, "wood_floor")
+
+	assert_false(sim.has_bramble(cell), "the floor was raised straight through a thicket")
+
+
+## Tearing the floor up gives the GROUND back, and nothing takes it: a
+## bramble has no plant() and no spread, so once a thicket is cleared that
+## cell carries none for the life of the chunk.
+##
+## Written down rather than asserted as a bug, because the first version of
+## this test asked for `sim.plant(cell)` and there is no such thing. Every
+## other ground cover can re-colonise; a bramble is seeded once when its
+## chunk is created and that is the whole of it. Recorded as a gap in
+## docs/concept/brambles.md rather than quietly fixed here, since giving
+## canes a spread is a design decision and not this pass's.
+func test_a_cleared_bramble_never_comes_back():
+	var sim = manager._bramble_sims.get(_chunk_coord)
+	var cell: Vector2i = sim.get_patch_cells()[0]
+	var g: Vector2i = _chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+	manager.build_at_global(g.x, g.y, "wood_floor")
+	manager.destroy_at_global(g.x, g.y)
+	assert_false(
+		sim.has_bramble(cell),
+		"nothing re-seeds a bramble, so a cleared cell stays cleared"
+	)
+
+
+## ...and its DRAWING goes with it, in the same frame. A cleared thicket
+## still on screen is the same lie a grazed tuft left standing would be.
+func test_a_cleared_bramble_stops_being_drawn():
+	var sim = manager._bramble_sims.get(_chunk_coord)
+	var cell: Vector2i = sim.get_patch_cells()[0]
+	var g: Vector2i = _chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+	assert_true(manager._bramble_sprites.get(_chunk_coord, {}).has(cell), "precondition: it is drawn")
+
+	manager.build_at_global(g.x, g.y, "wood_floor")
+
+	assert_false(
+		manager._bramble_sprites.get(_chunk_coord, {}).has(cell),
+		"the thicket was cleared but its sprite is still standing there"
+	)
+
+
+## They go with the chunk, like every other loaded thing. Without this the
+## sprites accumulate for every wood a player ever walks through and hang
+## over ground that is no longer loaded.
+func test_unloading_a_chunk_takes_its_brambles_with_it():
+	assert_true(manager._bramble_sims.has(_chunk_coord), "precondition: the chunk has a sim")
+	var drawn: int = manager._bramble_sprites.get(_chunk_coord, {}).size()
+	assert_gt(drawn, 0, "precondition: some are drawn")
+
+	manager._unload_chunk(_chunk_coord)
+
+	assert_false(manager._bramble_sims.has(_chunk_coord), "the sim outlived its chunk")
+	assert_false(manager._bramble_sprites.has(_chunk_coord), "the sprites outlived their chunk")
