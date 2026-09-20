@@ -339,6 +339,27 @@ func deliver_load() -> float:
 	return delivered
 
 
+## Takes one meal out of what this villager is carrying. True when they
+## really ate.
+##
+## Only FOOD: a carter's load is whatever the round picked up, and nobody
+## is fed by a log. The first food item in the load, in stock order, the
+## same deterministic pick VillageMarket.buy_meal makes.
+func _eat_from_the_load() -> bool:
+	if market == null:
+		return false
+	for item_id in carried:
+		if not market.is_food(item_id):
+			continue
+		if float(carried[item_id]) < VillageMarket.FOOD_UNITS_PER_MEAL:
+			continue
+		carried[item_id] = float(carried[item_id]) - VillageMarket.FOOD_UNITS_PER_MEAL
+		if float(carried[item_id]) <= 0.0:
+			carried.erase(item_id)
+		return true
+	return false
+
+
 func _hands_are_full() -> bool:
 	return carry_limit > 0.0 and carried_total() >= carry_limit
 
@@ -481,6 +502,21 @@ func can_obtain_a_meal(world = null, pixel_position: Vector2 = Vector2.ZERO) -> 
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
 	if is_working and feeds_itself_from_work(world, pixel_position):
 		needs.feed()  # a free bite from their own active harvest -- see file doc comment
+		return
+	# ...and failing that, out of the basket in their own hands.
+	#
+	# Switching hauling on (NpcMarker.HAULING_CARRY_LIMIT) put a producer's
+	# take into their HANDS until they walk it to the store, and every
+	# other source below looks somewhere ELSE -- the stall, the purse, the
+	# village's stores. So a hunter could starve to death carrying five
+	# units of meat, and did: measured on a real village the moment
+	# hauling went on, the roster fell 10 -> 2 inside one starvation window
+	# of founding while the warehouse filled up behind them.
+	#
+	# Before the wage and the market on purpose: what you are already
+	# holding costs the village nothing and is nearer than the stall.
+	if _eat_from_the_load():
+		needs.feed()
 		return
 	_draw_subsistence_wage(world, pixel_position)
 	if market.buy_meal(wallet) != "":

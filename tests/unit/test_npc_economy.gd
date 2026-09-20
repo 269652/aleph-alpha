@@ -1129,3 +1129,88 @@ func _seconds_to_gather(occupation: String, units: float) -> int:
 	if per_second <= 0.0:
 		return 0
 	return int(ceil(units * NpcProduction.FOOD_UNIT / per_second)) + 1
+
+
+# -- a villager does not starve carrying food ------------------------------
+#
+# Switching hauling on (NpcMarker.HAULING_CARRY_LIMIT) put a producer's
+# take into their HANDS until they walk it to the store. _try_eat knew
+# four places to look for a meal -- a free bite from active work, the
+# village market, and the village's stores -- and not one of them was the
+# basket the villager is holding.
+#
+# So a hunter could starve to death carrying five units of meat. Measured
+# on a real village the moment hauling went on: the roster fell 10 -> 2
+# inside one starvation window of founding, while the warehouse filled.
+
+const Starvation = preload("res://src/emergence/starvation.gd")
+
+
+## A producer holding a load, with nothing else anywhere to eat: no market
+## stock, no purse, no yield from the world.
+func _a_villager_carrying_food() -> NpcEconomy:
+	var market := VillageMarket.new()
+	var economy := NpcEconomy.new(1, "hunter", market)
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	economy.carried[NpcProduction.PRODUCER_ITEM_BY_OCCUPATION["hunter"]] = (
+		NpcEconomy.CARRY_LIMIT
+	)
+	economy.needs.hunger = 1.0
+	return economy
+
+
+func test_a_villager_eats_from_their_own_load_before_starving():
+	var economy := _a_villager_carrying_food()
+	var barren := StubWorld.new()
+	barren.vegetation_density = 0.0
+	barren.herbivore_population = 0.0
+	barren.fish_population = 0.0
+
+	economy.step(0.1, false, barren, Vector2.ZERO)
+
+	assert_lt(economy.needs.hunger, 1.0, "they starved with a full basket in their hands")
+
+
+func test_eating_from_the_load_costs_the_load():
+	var economy := _a_villager_carrying_food()
+	var before := economy.carried_total()
+	var barren := StubWorld.new()
+	barren.vegetation_density = 0.0
+	barren.herbivore_population = 0.0
+	barren.fish_population = 0.0
+
+	economy.step(0.1, false, barren, Vector2.ZERO)
+
+	assert_lt(economy.carried_total(), before, "the meal came out of nowhere")
+	assert_gt(economy.carried_total(), 0.0, "one meal ate the whole load")
+
+
+## They eat a MEAL, not the basket: what is left still reaches the village.
+func test_what_is_left_of_the_load_still_reaches_the_village():
+	var economy := _a_villager_carrying_food()
+	var barren := StubWorld.new()
+	barren.vegetation_density = 0.0
+	barren.herbivore_population = 0.0
+	barren.fish_population = 0.0
+	economy.step(0.1, false, barren, Vector2.ZERO)
+
+	var delivered := economy.deliver_load()
+	assert_gt(delivered, 0.0, "nothing was left to deliver")
+
+
+## Somebody carrying something nobody can eat is not fed by it.
+func test_a_load_of_timber_feeds_nobody():
+	var market := VillageMarket.new()
+	var economy := NpcEconomy.new(1, "lumberjack", market)
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	economy.carried["log"] = NpcEconomy.CARRY_LIMIT
+	economy.needs.hunger = 1.0
+	var barren := StubWorld.new()
+	barren.vegetation_density = 0.0
+	barren.herbivore_population = 0.0
+	barren.fish_population = 0.0
+
+	economy.step(0.1, false, barren, Vector2.ZERO)
+
+	assert_eq(economy.needs.hunger, 1.0, "they ate a log")
+	assert_eq(economy.carried_total(), NpcEconomy.CARRY_LIMIT, "the timber was eaten")
