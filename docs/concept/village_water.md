@@ -135,14 +135,40 @@ deliberately a separate rule from `_drinkers_in_house` rather than a
 widening of it — folding the two together would have a building with no
 residents drinking for somebody who does not exist.
 
-### The field is billed per VISIT, not per tile
+### The field is billed per VISIT, and priced per DAY
 
 A farmer at a bed waters it **and the beds around it**
 (`NpcMarker._water_the_beds_around` — one trip with a can wets the ground
-you are standing on, not one plant). So the unit priced is the visit:
+you are standing on, not one plant). So the unit *charged* is the visit:
 `LITRES_PER_TENDING` out of the farmhouse's tank, once per
 `_work_field_cell`. Pricing tiles would make a wide field cost more than a
 narrow one for the same walk, which is not how a furrow works.
+
+But the unit *priced* is the **day**, and this is where the first cut of
+this feature went wrong badly enough to be worth writing down.
+`LITRES_PER_TENDING` was originally pinned against the premise that a
+living field is tended "more than once a simulated day" — reasoned from
+`FarmPlot.MIN_WATER_GRACE_SECONDS` (45 s) being shorter than a simulated
+day (60 s). The premise is true and nearly useless: `tools/
+probe_farm_water.gd` counts **5.7 and 6.1 tendings a day** on the two
+working farms of a real twelve-villager village. The bill was more than
+four times what it should have been; the farmhouse ran dry almost at once,
+the beds stopped being watered, and `tools/probe_village_farming.gd` went
+from 164 wheat harvested to 24 on the same village. Every unit test passed
+the whole time.
+
+So `TENDINGS_PER_SIMULATED_DAY` is a **measured** constant, and the cost
+is pinned through the rhythm it produces rather than through the visit:
+
+- `field_draw_per_day()` — what a working field takes in a day.
+- `days_between_farm_trips()` — one bucket's worth, over that.
+- `days_between_household_trips(heads)` — the same for people who only
+  drink.
+
+The tests demand a farm reach the well **oftener than a household** and
+**not spend the day walking there**, and that one bucket lifts a farmhouse
+clear of the level that sent somebody. Those are facts about the errand a
+player watches; the litre figure is just what satisfies them.
 
 `HouseholdWater.can_water_crops(level)` is false once the tank is down to
 the reserve, and then **the beds are not watered at all**. That refusal is
@@ -219,9 +245,15 @@ table stops saying it.
   and every tank-holding building keeps exactly one in its own stock.
 - ✅ **The farmhouse holds a tank and its field drinks from it.** A
   tending visit is billed to the farmhouse; down to the reserve it cannot
-  water at all. Measured: a working farm reaches the well about every 3
-  days against a one-person cottage's ~11, with no day on which the beds
-  went dry (`tools/probe_well_crowding.gd`).
+  water at all. The cost is pinned to a **measured** tending rate
+  (`tools/probe_farm_water.gd`, 5.7–6.1 visits a simulated day), after the
+  first cut — pinned to a reasoned one — cut the same village's harvest
+  from 164 wheat to 24.
+- ✅ **The bucket is in their hand.** `ProceduralItemSprite` draws the
+  pail, empty and full (the same pail; water standing at the brim is the
+  only difference), and `NpcMarker._sync_carried_item` puts it in the
+  `CharacterView` tool slot. Until this, `carried()` said what a villager
+  was holding and nothing showed it.
 - ⬜ **Nobody washes, brews or waters livestock with it.** Only drinking
   and crops draw on a tank. The village's trades have their own inputs and
   are not plumbed into this.

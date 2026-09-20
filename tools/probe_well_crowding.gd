@@ -93,46 +93,48 @@ func _print_water_rhythm() -> void:
 
 ## What a FARMHOUSE's tank produces (docs/concept/village_water.md
 ## mechanism 3), against a cottage's on the same span. The claim being
-## measured is pillar 5: a farm is seen at the well OFTENER than a
-## household, because its tank has a field on it as well as people.
+## measured is pillar 5: somebody is at the well for a farm OFTENER than
+## for a household, because a farmhouse's tank has a field on it.
 ##
-## A living field is tended more than once a simulated day -- a bed
-## withers after FarmPlot.MIN_WATER_GRACE_SECONDS (45s) and a simulated
-## day is 60s -- so the rates below bracket the real one rather than
-## guessing a single number.
+## The tending rate is HouseholdWater.TENDINGS_PER_SIMULATED_DAY, which is
+## itself measured against a real village by tools/probe_farm_water.gd --
+## this probe deliberately does NOT invent one. The first cut of this
+## feature guessed 1.33 here, was wrong by a factor of four, and starved
+## every field in the game until the real thing was measured.
 func _print_farm_rhythm() -> void:
 	var days := int(SeasonCycle.DAYS_PER_YEAR / 4.0)
-	print("\n-- the farmhouse's own tank over one season (%d days) --" % days)
-	for rate in [1.0, 1.33, 2.0]:
-		var level := HouseholdWater.farm_starting_level(hash("probe_farm"))
-		var trips := 0
-		var dry_days := 0
-		for day in days:
-			var budget: float = rate
-			while budget >= 1.0:
-				if not HouseholdWater.can_water_crops(level):
-					dry_days += 1
-					break
-				level = HouseholdWater.level_after_tending(level)
-				budget -= 1.0
-
-			if HouseholdWater.farm_trip_is_due(level):
-				level = WaterErrand.poured(level)
-				trips += 1
-		print("  %4.2f tendings/day: %2d trips, one every %5.1f days, %d day(s) the beds went dry" % [
-			rate, trips, float(days) / float(maxi(trips, 1)), dry_days
-		])
+	var rate := HouseholdWater.TENDINGS_PER_SIMULATED_DAY
+	print("\n-- the farmhouse's own tank over one season (%d days, %.1f tendings/day) --" % [days, rate])
+	var level := HouseholdWater.farm_starting_level(hash("probe_farm"))
+	var trips := 0
+	var dry_days := 0
+	var carried := 0.0
+	for day in days:
+		carried += rate
+		while carried >= 1.0:
+			if not HouseholdWater.can_water_crops(level):
+				dry_days += 1
+				break
+			level = HouseholdWater.level_after_tending(level)
+			carried -= 1.0
+		if HouseholdWater.farm_trip_is_due(level):
+			level = WaterErrand.poured(level)
+			trips += 1
+	print("  %2d trips, one every %.1f days, %d day(s) the beds went dry" % [
+		trips, float(days) / float(maxi(trips, 1)), dry_days
+	])
+	print("  the pure rule's own answer: one every %.1f days" % HouseholdWater.days_between_farm_trips())
 
 	# Averaged over a whole village's worth of cottages rather than one, so
 	# the comparison is not decided by which level a single seed started at.
 	var cottages := 12
 	var cottage_trips := 0
 	for i in cottages:
-		var level := HouseholdWater.starting_level(hash("probe_cottage_%d" % i))
+		var cottage := HouseholdWater.starting_level(hash("probe_cottage_%d" % i))
 		for day in days:
-			level = HouseholdWater.level_after(level, 1, 1.0)
-			if HouseholdWater.trip_is_due(level):
-				level = WaterErrand.poured(level)
+			cottage = HouseholdWater.level_after(cottage, 1, 1.0)
+			if HouseholdWater.trip_is_due(cottage):
+				cottage = WaterErrand.poured(cottage)
 				cottage_trips += 1
 	print("  %d one-person cottages, for comparison: one trip every %.1f days each" % [
 		cottages, float(days * cottages) / float(maxi(cottage_trips, 1))
