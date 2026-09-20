@@ -457,15 +457,42 @@ func _layout_once(
 	# took (nor the plaza or a side street, claimed up front below).
 	var claimed: Dictionary = {}
 
-	# The plaza and its side streets are reserved FIRST, only when the whole
-	# square can actually be paved -- a village whose centre is water or
-	# forest gets no plaza (and so no hall), honestly, rather than a square
-	# with a lake in it.
-	var has_plaza := _every_cell_clear(_rect_cells(plaza), chunk_size, is_buildable, is_occupied)
+	# The plaza and its side streets are reserved FIRST, and the square is
+	# kept whenever MOST of it can really be paved (plaza_is_worth_laying) --
+	# never abandoned over a handful of cells something already speaks for.
+	#
+	# This used to demand the WHOLE rect clear, and on chunk (676,148) --
+	# the village reported a fourth time as "the hall still isn't finishing
+	# and no square plaza either" -- the sawmill's own road spur ran down
+	# the square's east column and blocked exactly three of its 48 cells.
+	# The square was dropped, nothing was claimed, and the founding houses
+	# marched straight through it, covering every cell of the civic plot. A
+	# village that loses its square at FOUNDING loses it for good: the
+	# reload's re-paving can pave around a house, but it cannot move one,
+	# and _civic_plot_origin_for needs the plot to be paving, so that
+	# village can never raise a hall.
+	#
+	# The reload path (VillageRenderer._lay_plaza_if_missing) already lays
+	# the square around what stands in it. This is the same rule, at the end
+	# that matters more. A village whose centre is genuinely water or built
+	# over still gets no plaza (and so no hall), honestly -- that floor is
+	# PLAZA_MIN_PAVED_SHARE, not "every cell".
+	var plaza_cells := _rect_cells(plaza)
+	var takeable: Array = []
+	for cell in plaza_cells:
+		if _cell_clear(cell, chunk_size, is_buildable, is_occupied):
+			takeable.append(cell)
+	var has_plaza := plaza_is_worth_laying(takeable.size(), plaza_cells.size())
 	var side_street_cells: Array = []
 	if has_plaza:
-		for cell in _rect_cells(plaza):
+		# The whole rect is CLAIMED -- the square's ground is the square's,
+		# so no plot may creep into the part a spur happens to cross -- but
+		# only the takeable cells are PAVED. Whatever reserved the rest
+		# (a mill's spur, a store's corner) keeps its own ground and lays
+		# its own surface there.
+		for cell in plaza_cells:
 			claimed[cell] = true
+		for cell in takeable:
 			road_cells[cell] = true
 		var second_street_y := street_y + STREET_PITCH_TILES
 		for x in [plaza.position.x, plaza.end.x - 1]:

@@ -703,14 +703,25 @@ func test_a_village_big_enough_for_a_second_street_is_still_one_network():
 ## street just as well as a side street does.
 func test_a_village_with_no_square_still_houses_everyone_it_arrived_with():
 	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
-	# Water down the chunk's middle AND across the row the square's own
-	# northern edge needs. The square can slide along the street (see
-	# plaza_x0_for) but never off that row, so this village really has
-	# nowhere to put one -- while a 2-deep house, standing on the two rows
-	# directly north of the street, still fits perfectly well.
+	# Water down the chunk's middle AND across three of the six rows the
+	# square needs: its northern edge, and both rows south of the street.
+	# The square can slide ALONG the street (see plaza_x0_for) but never off
+	# those rows, so half of it is drowned wherever it stands -- below
+	# PLAZA_MIN_PAVED_SHARE, so this village really has nowhere to put one.
+	# A 2-deep house, on the two rows directly north of the street, still
+	# fits perfectly well.
+	#
+	# One drowned row used to be enough here, back when founding demanded
+	# the WHOLE square clear. It no longer is, and rightly so: 40 of 48
+	# cells is a square, and a village must not lose its centre to one row
+	# of water (see test_a_spur_crossing_the_square_does_not_cost_the_
+	# village_its_square).
 	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 99)["street_y"]
+	var drowned_rows := [
+		street_y - VillageLayout.PLAZA_ROWS_NORTH, street_y + 1, street_y + 2
+	]
 	var no_square := func(cell: Vector2i) -> bool:
-		return cell.x != CHUNK_SIZE / 2 and cell.y != street_y - VillageLayout.PLAZA_ROWS_NORTH
+		return cell.x != CHUNK_SIZE / 2 and not drowned_rows.has(cell.y)
 	var result := layout.layout(five, CHUNK_SIZE, 99, no_square, _never_occupied)
 	var plaza: Rect2i = result["plaza"]
 	assert_false(plaza.has_area(), "precondition: the water really does drown this village's square")
@@ -1588,3 +1599,143 @@ func test_the_square_goes_where_most_of_it_fits_when_none_of_it_fits_wholly():
 		usable, pocket_width,
 		"the square lands over the whole pocket, not on ground it cannot use"
 	)
+
+
+# -- founding keeps a square that is mostly clear ---------------------------
+#
+# Reported a fourth time, with the village in shot: *"the hall still isn't
+# finishing and no square plaza either"*. Measured on the exact village
+# reported (chunk (676,148), lat 47.2 lon 15.1, tools/probe_village_hall.gd and
+# tools/probe_village_founding.gd):
+#
+#     PROBE2: industry={origin:(13,7), road_spur:[(14,9)...(14,15)]}
+#     PROBE: plaza cell (14, 13) blocked  buildable=true occupied=true
+#     PROBE: plaza cell (14, 14) blocked  buildable=true occupied=true
+#     PROBE: plaza cell (14, 15) blocked  buildable=true occupied=true
+#
+# The sawmill stands up at the timber and its road spur runs down the
+# square's own east column. Those three RESERVED cells made _layout_once's
+# all-or-nothing `has_plaza` false, so the square was abandoned outright --
+# and with nothing claimed, the founding houses marched straight through
+# it: origins (6,14) (8,14) (10,14) (12,14), covering every cell of the
+# civic plot at (9,13). From then on the village is stuck for good:
+# _civic_plot_origin_for answers null (the plot is house, not road), so
+# _apply_civic_build_decision returns before CivicBuildDecision is ever
+# asked -- hall 0, project none, forever.
+#
+# _lay_plaza_if_missing (the RELOAD path) was already taught this exact
+# lesson and lays the square around what stands in it. Founding never was,
+# and founding is the half that matters: a square abandoned there is a
+# square the houses then TAKE, which no later pass can undo.
+
+
+## Three cells of a mill's spur must not cost a village its square.
+func test_a_spur_crossing_the_square_does_not_cost_the_village_its_square():
+	var bones := VillageLayout.skeleton(CHUNK_SIZE, 7, _always_buildable)
+	var plaza: Rect2i = bones["plaza"]
+	var street_y: int = bones["street_y"]
+	# The mill's own reserved spur, exactly as measured: the square's east
+	# column, north of the street.
+	var spur_x: int = plaza.end.x - 1
+	var occupied := func(cell: Vector2i) -> bool:
+		return cell.x == spur_x and cell.y < street_y
+
+	var result := layout.layout(_ten_houses(), CHUNK_SIZE, 7, _always_buildable, occupied)
+
+	assert_eq(
+		result["plaza"], plaza,
+		"three reserved cells of spur must not cancel the whole square"
+	)
+
+
+## ...and with the square kept, no house may stand on it -- which is the
+## half that actually cost this village its city hall.
+func test_no_founding_house_stands_on_a_square_a_spur_crosses():
+	var bones := VillageLayout.skeleton(CHUNK_SIZE, 7, _always_buildable)
+	var plaza: Rect2i = bones["plaza"]
+	var street_y: int = bones["street_y"]
+	var spur_x: int = plaza.end.x - 1
+	var occupied := func(cell: Vector2i) -> bool:
+		return cell.x == spur_x and cell.y < street_y
+
+	var result := layout.layout(_ten_houses(), CHUNK_SIZE, 7, _always_buildable, occupied)
+
+	for plot in result["plots"]:
+		for cell in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+			assert_false(
+				plaza.has_point(cell),
+				"house at %s stands on the square at %s" % [str(plot["origin"]), str(cell)]
+			)
+
+
+## The civic plot is the whole point of keeping the square: a hall can only
+## rise where every one of its footprint cells is real paving.
+func test_the_civic_plot_is_paved_when_a_spur_crosses_the_square():
+	var bones := VillageLayout.skeleton(CHUNK_SIZE, 7, _always_buildable)
+	var plaza: Rect2i = bones["plaza"]
+	var street_y: int = bones["street_y"]
+	var spur_x: int = plaza.end.x - 1
+	var occupied := func(cell: Vector2i) -> bool:
+		return cell.x == spur_x and cell.y < street_y
+
+	var result := layout.layout(_ten_houses(), CHUNK_SIZE, 7, _always_buildable, occupied)
+
+	var roads: Array = result["road_cells"]
+	var civic: Dictionary = result["civic_plot"]
+	assert_false(civic.is_empty(), "a kept square keeps its civic plot")
+	for cell in BuildingCatalog.footprint_cells(civic["building_id"], civic["origin"]):
+		assert_true(roads.has(cell), "civic plot cell %s was never paved" % str(cell))
+
+
+## The square is laid AROUND the spur, not through it: a cell something
+## already stands on is stepped over, never paved and never claimed away
+## from whatever reserved it.
+func test_the_kept_square_is_paved_around_the_spur_not_through_it():
+	var bones := VillageLayout.skeleton(CHUNK_SIZE, 7, _always_buildable)
+	var plaza: Rect2i = bones["plaza"]
+	var street_y: int = bones["street_y"]
+	var spur_x: int = plaza.end.x - 1
+	var occupied := func(cell: Vector2i) -> bool:
+		return cell.x == spur_x and cell.y < street_y
+
+	var result := layout.layout(_ten_houses(), CHUNK_SIZE, 7, _always_buildable, occupied)
+
+	var roads: Array = result["road_cells"]
+	for y in range(plaza.position.y, street_y):
+		assert_false(
+			roads.has(Vector2i(spur_x, y)),
+			"the square paved over the mill's own spur at %s" % str(Vector2i(spur_x, y))
+		)
+	var paved_of_the_square := 0
+	for cell in VillageLayout._rect_cells(plaza):
+		if roads.has(cell):
+			paved_of_the_square += 1
+	assert_true(
+		VillageLayout.plaza_is_worth_laying(paved_of_the_square, plaza.get_area()),
+		"only %d of %d square cells were paved" % [paved_of_the_square, plaza.get_area()]
+	)
+
+
+## But the rule still has a floor: a square with almost nothing left of it
+## is stray paving, not a market place, and is honestly abandoned -- the
+## same threshold the reload path uses, applied at founding too.
+func test_a_square_almost_entirely_built_over_is_still_abandoned():
+	var bones := VillageLayout.skeleton(CHUNK_SIZE, 7, _always_buildable)
+	var plaza: Rect2i = bones["plaza"]
+	var keep_x: int = plaza.position.x
+	var occupied := func(cell: Vector2i) -> bool:
+		return plaza.has_point(cell) and cell.x != keep_x
+
+	var result := layout.layout(_ten_houses(), CHUNK_SIZE, 7, _always_buildable, occupied)
+
+	assert_false(
+		(result["plaza"] as Rect2i).has_area(),
+		"one column left of a square is not a square"
+	)
+
+
+func _ten_houses() -> Array:
+	var ids: Array = []
+	for _i in range(10):
+		ids.append("house_small")
+	return ids
