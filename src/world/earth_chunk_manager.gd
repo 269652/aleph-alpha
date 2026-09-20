@@ -10523,6 +10523,51 @@ func tall_grass_growth_at(pixel_position: Vector2) -> float:
 ## `radius_tiles`, dropping plant fibre as a ground item (the fibre in the
 ## stick+shard+fibre crude-blade recipe). Returns true if a patch was
 ## harvested. Only mature patches yield fibre -- young shoots tear uselessly.
+## Picks the blackberries off a ripe bramble the player is standing at or
+## beside, dropping them on the ground through WorldItemBus -- the same real
+## ground-drop path harvest_grass_near uses, so nothing about carrying,
+## stacking or picking the item back up is special-cased here.
+##
+## Returns whether anything was actually picked. False is the ordinary
+## answer for most of the year: fruit is only ripe across autumn (see
+## BlackberryBramble.ripeness_at), and a patch already picked this bearing
+## year gives nothing more until the next one. Both refusals are the sim's,
+## not this function's -- it only asks.
+##
+## The CANE always survives, so unlike harvest_grass_near this does not
+## remove anything from the sim and the sprite stays exactly where it is: a
+## bramble is not an annual, and the same patch bears again next year.
+##
+## `year` is whole years elapsed, which is what makes "already picked" mean
+## "this season" rather than "ever" -- derived from the same world clock the
+## season itself comes from, so the two can never disagree.
+func pick_blackberries_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
+	var year_fraction := _season_cycle.year_fraction(_world_age_seconds)
+	var year := int(floor(_world_age_seconds / SeasonCycle.SECONDS_PER_YEAR))
+	var center_tile := _world_tile_for_pixel(pixel_position)
+	for dy in range(-radius_tiles, radius_tiles + 1):
+		for dx in range(-radius_tiles, radius_tiles + 1):
+			var tile := center_tile + Vector2i(dx, dy)
+			var chunk_coord := _chunk_coord_for_tile(tile)
+			var sim = _bramble_sims.get(chunk_coord)
+			if sim == null:
+				continue
+			var local := _local_coord(tile.x, tile.y)
+			var picked: int = sim.pick(local, year_fraction, year)
+			if picked <= 0:
+				continue
+			var drop_position := Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			WorldItemBus.item_dropped.emit(
+				ItemStack.new(Item.new("blackberry", "Blackberry", "food", 20), picked),
+				drop_position
+			)
+			return true
+	return false
+
+
 func harvest_grass_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
 	var center_tile := _world_tile_for_pixel(pixel_position)
 	for dy in range(-radius_tiles, radius_tiles + 1):

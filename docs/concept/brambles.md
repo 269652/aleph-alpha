@@ -113,5 +113,21 @@ records the YEAR it was picked, so:
   its own global cell, so a wood is not one bramble stamped over and over
   and it looks the same across a reload. `blackberry.png` carries real alpha,
   so unlike `fern.png` nothing is keyed.
-- ⬜ **Nothing picks them but the player would.** `pick` exists and is
-  tested; no forager, bird or villager calls it yet.
+- ✅ **The player picks them, on the same key as everything else.**
+  `EarthChunkManager.pick_blackberries_near` sweeps the tile the player
+  stands on and its neighbours, takes the first ripe unpicked patch, and
+  drops real `blackberry` through `WorldItemBus` — the same ground-drop path
+  `harvest_grass_near` uses, so nothing about carrying, stacking or picking
+  the item back up is special-cased. `Player._pick_blackberries_step` fires
+  it from `_perform_attack` beside `_harvest_grass_step` and
+  `_pull_wild_crop_step`: the same attack key every other harvest-shaped
+  verb already uses, rather than a "pick" button of its own.
+
+  Every refusal belongs to the bramble rather than to the swing — out of
+  season, already picked this year, or no bramble there at all — so the
+  player-facing verb has no rules of its own to drift out of step.
+
+  Unlike `harvest_grass_near`, picking removes NOTHING from the sim and the
+  sprite stays exactly where it is. The cane is perennial.
+- ⬜ **No animal forages one.** No bird, mammal or villager calls `pick`
+  yet; the player is the only forager.
