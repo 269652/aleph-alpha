@@ -28179,3 +28179,210 @@ Tests: `test_interior_templates.gd` (29, up from 22), `test_house_decor.gd`
 (9), plus additions to `test_player.gd`; `test_house_interior_view.gd` (23),
 `test_house_interior_view_occupants.gd` (15) and `test_building_catalog.gd`
 (75) green alongside.
+
+---
+
+## 2026-09-20 — A farmhouse with no field, and a field with an unbroken bed
+
+Reported live with the village in shot: *"There's a farmhouse without bed
+enclosure and the NPC only sows 4 / 6 tiles"*. Two reports, two causes.
+
+### The last bed of every field was never broken
+
+Measured before changing anything (`tools/probe_village_farming.gd`). Every
+field in the sample held exactly six cells, five cycling normally — and the
+sixth, the last in the field's own order, reported `no marker -- never
+tilled` after a full 600-second work block. The same bed, for both farmers
+in the village.
+
+`VillageFarm.next_action` scanned from index 0 and returned the first plot
+wanting the highest-priority kind. **Ground nobody has tilled asks to be
+planted, and so does a bed that was sown, ripened and harvested.** So the
+moment the earlier beds started cycling, one of them was always an earlier
+"plant" than the ground at the end, and the last bed was never broken at all.
+
+✅ Unbroken ground now wins **among beds asking for the same thing**, which
+only reorders equals: a `null` plot's action is `"plant"` and nothing else,
+so a ripe crop and a dying bed still come first — that priority is what the
+kind order exists for, and what the existing tests pin. Re-measured after
+the fix: the two previously untilled cells now read `grown=30.3/30.3` and
+`23.7/23.6`, and every field is 6/6.
+
+### Siting and derivation had drifted apart
+
+"Is there room for a field here?" (`_field_fits_at`, at siting) and "here is
+your field" (`_workable_field_of`, later) were two separate copies of the
+same question. The derivation rejects a cell a **neighbouring farmhouse
+owns** — ownership is geometric, so a farmhouse raised later can take ground
+from one raised earlier — and a cell **reserved for a landmark**. Siting
+checked neither. A farmhouse could be raised on ground that looked free and
+then be handed nothing: no beds, so no fence ring.
+
+✅ Both go through one `_may_sow(origin, origins, …)` predicate now, with
+`_reserving` wrapping the occupancy test identically for both. A candidate
+origin is judged **with itself in the running** against the farmhouses
+already standing, because a farmhouse owns ground by being nearest to it.
+`test_siting_and_derivation_never_disagree_about_an_origin` states that
+invariant directly instead of testing the two copies apart; mutating the
+reserved-cell handling back out fails it with the bug's own words —
+*"siting said true at (10, 10), derivation handed over 0 cells"*.
+
+⬜ **Not reproduced before fixing, and worth saying so.**
+`tools/probe_farmhouse_fields.gd` scanned 14 villages and 29 farmhouses on
+flat stub ground: every one took a full six-cell field, with landmarks
+reserved, and the two rules never disagreed there. The first run of that
+probe was worse than useless — it called `_fenced_farm_fields` *without* the
+reserved landmarks the real village passes, so it measured a more permissive
+world than the game's and reported everything fine. Flat ground has no
+water, no trees and no prior tiles, so the terrain that would expose this is
+exactly what the stub lacks. The gaps are real and are fixed by
+construction; catching one in the act still wants a real-terrain probe.
+
+Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
+132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
+
+## A field's fence shut its own farmer out (`concept/village_farms.md`, "The rail stands on the inner edge", 2026-09-20)
+
+Reported live, with the village in shot: *"The farmer doesn't farm anymore"*.
+
+✅ **A regression from `f64a360e`** ("a villager walks round a wall and a
+rail, not through them"), which gave rails a hitbox against villagers. A
+field's rails stand on its **inner** edge, so the one villager they shut out
+is the farmer whose beds they enclose.
+
+✅ **Measured, not guessed — and three wrong guesses were measured away
+first.** `tools/probe_village_farming.gd` on a real village: of three
+villagers with a field, one worked 58 beds in 600s and the other two worked
+**none**, each frozen in `APPROACHING` for 2650 of 2750 on-field ticks. The
+hypotheses that died, in order:
+
+| Guess | How it died |
+| --- | --- |
+| The fence blocks them | Tested `fence_blocks_step_global` with **pixel** coordinates — it takes tiles — and on a straight line to the bed centre rather than the 2px step actually taken. Read false. Wrong test, right suspect. |
+| The carter round hijacks the target | `VillageCart.walks_the_round` is carter-only |
+| A conversation freezes them | 0 talking ticks while on the field |
+| Some other override hijacks the target | Recorded the real target every tick: it was the field for all 2650 |
+
+What finally showed it was tracing the actual per-tick step: position frozen,
+a 2px step east proposed, and `_slid_along_walls` handing back the same
+position — then asking the fence in **tile** coordinates: `FENCE=true`.
+
+✅ **The worker may cross into ground they themselves work.** "The gate"
+exists for this, but reaching one needs pathfinding a `Sprite2D` walking one
+`move_toward` per frame does not have — `f64a360e` said so itself: *"boxed
+in on both, they stay put"*. Nothing else moves: every other rail still
+stops them, a neighbour's included, and no villager without a field is
+exempt.
+
+After, over the same 600s run: the herbalist **0 → 100 wheat** (30 deposits,
+all six beds worked), farmer one **45 → 77** (18 → 29 deposits, 3 → 6 beds).
+
+🚧 **A farmer whose field lies beyond ANOTHER farmstead's ring still cannot
+reach it.** In the probe's village the third farmer stands west of its
+neighbour's fenced beds with its own field east of them, and walks into that
+ring's rail forever — still 0 of 6 beds. Its own gate would serve if it went
+to its farmhouse frontage first; that routing is deliberately not attempted
+here. Named rather than silently left.
+
+Tests: `test_npc_marker.gd` + `test_npc_marker_farming.gd` 100/100 (+3 new).
+
+## A villager gets a face, and their own clothes (`concept/character_art_brief.md`, 2026-09-20)
+
+Reported live with one in shot: *"There's still a weird looking farm house
+with a weird npc and weird sil tiles"*, and, asked which part: *"It's a rough
+sketch with a square as head and poor resolution"*. Two independent causes
+under one complaint, each measured before either was touched.
+
+### ✅ A square for a head — the safety net was catching one villager in five
+
+19 of `head.png`'s 100 cells fail background removal (7 erode to almost
+nothing, 12 keep the whole opaque square). `has_usable_head` already caught
+every one of them and `CharacterView._apply_head` already fell back to
+`ProceduralCharacterSprite`'s flat 24×24 `ART_HEAD_SIZE` head. None of that
+was broken and none of it changed.
+
+What was broken is that `HeroAppearance` rolled `"head"` uniformly across all
+100 cells, so the net caught **19% of every villager rolled** — a plain
+square head on a finely illustrated body, which is exactly what reads as "a
+rough sketch with a square as head". Measured with
+`tools/probe_usable_heads.gd`: 81 cells usable for every skin tone, 19
+unusable for every skin tone, and **0 cells usable for some tones and not
+others** — the flood runs before the recolor, so usability is a fact about
+the sheet alone.
+
+The head axis now walks only drawable faces. `option_count("head")` counts
+`usable_head_cells()` instead of the grid, and `head_cell_for_axis`/
+`axis_for_head_cell` map an axis position onto a real `head.png` cell and
+back — so `appearance.head_index` still means the same thing it always did,
+`generate_head_texture` is still indexed by it, and a hero saved before this
+still round-trips through `choices_from_appearance`.
+
+The 19 are **pinned**, not swept at startup: deciding usability means
+flood-filling and scanning all 100 cells, far too much to repeat every
+launch, and the answer only changes when the art does.
+`test_the_pinned_broken_head_cells_are_exactly_the_ones_the_art_cannot_draw`
+checks the list against `has_usable_head` itself, so it cannot drift — fix or
+re-export the art and that test fails and says so.
+
+🚧 **Still a real gap**: the 19 cells are still broken art. Nobody is handed
+one now, but the underlying flood/margin problem is untouched, and the
+character brief still carries it as the open item it was.
+
+### ✅ Dressed as a soldier — a missing palette costs more than colours
+
+`"lumberjack"` and `"carter"` reached `NpcIdentity.OCCUPATIONS` without ever
+reaching `HeroAppearance.CLASS_PALETTES`. That is not only missing colours:
+`outfit_variant_for` derives the illustrated rig's outfit **row** from that
+same table's index, through `maxi(find(...), 0)` — so "not found" (`-1`)
+silently became index `0`, the **warrior's** row. Every lumberjack and every
+carter in every village wore plate with an axe on its back. The villager in
+the screenshot is a carter, hauling a cart across a farm dressed for a
+battle.
+
+Both have their own palette now, appended rather than inserted so the first
+seven entries stay the player archetypes whose order *is* the row mapping.
+
+Worth stating plainly: `test_every_npc_occupation_has_its_own_tunic_palette`
+had been failing on exactly this since those two trades landed — **my own
+regression**, from the pass that added them, and it sat red rather than being
+noticed.
+
+### The beds were measured and are NOT at fault
+
+The same report called the farm beds weird, and three beds 64px wide sitting
+80px apart looks exactly like soil that does not cover its tile — the failure
+`village_farms.md` already records once ("six brown squares in a black
+lattice"). It is not that. Measured twice
+(`tools/probe_soil_ground_size.gd`, `tools/probe_bed_layers.gd`): all nine
+soil frames are 32×32 with **alpha 1.0 in every pixel**, drawn at scale 0.5
+for exactly **1.000 × 1.000 tiles**. A bed covers its whole tile in solid
+dirt, and adjacent beds cannot leave grass between them. Both probes are kept
+precisely so the next session to read that screenshot does not reach for the
+same wrong fix.
+
+⬜ **Unresolved, and named rather than guessed at**: a bed pitch of 1.25 tiles
+is not producible by any path in the code — beds are keyed by `Vector2i` and
+placed at `(tile + 0.5) * TILE_SIZE`, and the terrain's own pitch is
+`TILE_SIZE` via `LAYER_SCALE`. Either the screenshot is rescaled or those
+squares are not `FarmPlotMarker`s at all. The user's own answer — *"They
+shouldn't be there at all"*, alongside *"not a real farmhouse but a
+downscaled miniature farmhouse with no real mechanics"* — points at the
+placeable/real-building split rather than at bed rendering, and that is where
+the next pass should start, not in `FarmPlotMarker`.
+
+Tests: `test_hero_sprite.gd` 49/49 (+3 new, 3 rewritten to the new contract),
+`test_illustrated_character_sprite.gd` 53/53 (+2 new), and
+`test_character_view.gd`, `test_hero_dna.gd`,
+`test_character_sheet_portrait_scene.gd`,
+`test_companion_character_sheet_view.gd`, `test_interior_avatar.gd`,
+`test_house_interior_view.gd` 142/142 green against the change.
+
+Also run, and green: `test_village_renderer.gd`,
+`test_character_preview_diorama.gd`, `test_inventory_window.gd`,
+`test_main_menu.gd` — 308 of 309, the one failure being
+`diorama panel bottom (598) is cut off by the scroll area's own visible
+bottom (586)` in `test_main_menu.gd`. **Pre-existing, not from this change**:
+A/B'd in a clean worktree at `6c407024`, the commit immediately before it,
+where it fails with the identical 598/586. Recorded rather than quietly left,
+and deliberately not fixed here — the character creator's panel heights are
+live in another session's HUD pass.

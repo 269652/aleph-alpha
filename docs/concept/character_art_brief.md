@@ -430,6 +430,40 @@ baked skin tone, solid near-black background, no alpha channel).
   real, visible gap, affecting close to 1 in 5 possible faces, just a far
   smaller defect than a smear or a solid block.
 
+  **Closed on the PICK side, 2026-09-20.** Reported live with a villager in
+  shot: *"It's a rough sketch with a square as head and poor resolution"*.
+  The fallback above is a safety net, not a plan, and `appearance_for` was
+  still rolling `"head"` uniformly across all 100 cells -- so close to one
+  villager in five wore `ProceduralCharacterSprite`'s plain `ART_HEAD_SIZE`
+  (24x24) head on an otherwise illustrated body, which reads exactly as a
+  square stuck on a painted figure.
+
+  The art is unchanged and the fallback stays where it is. What changed is
+  that the head AXIS only ever walks cells the art can really draw:
+  `IllustratedCharacterSprite.usable_head_cells()`, derived from the pinned
+  `UNUSABLE_HEAD_CELLS`. So `HeroAppearance.option_count("head")` is the
+  count of USABLE faces rather than the grid's own 100, a rolled villager
+  can no longer land on a broken face, and the creator's cycling never stops
+  on one either.
+
+  `appearance.head_index` stays a REAL `head.png` cell index -- the axis is
+  a position in the usable list, mapped both ways by `head_cell_for_axis`/
+  `axis_for_head_cell`, so a hero saved before this still round-trips
+  through `choices_from_appearance` onto the same face wherever that face is
+  one of the good ones.
+
+  The list is PINNED rather than measured at startup: deciding usability
+  means flood-filling and scanning all 100 cells, which is far too much work
+  to repeat every launch, and the answer is a fact about `head.png` that
+  only changes when the art does. `test_the_pinned_broken_head_cells_are_
+  exactly_the_ones_the_art_cannot_draw` checks the list against
+  `has_usable_head` itself, so it cannot drift from the sheet -- if the art
+  is ever fixed or re-exported, that test fails and says so.
+
+  The 19 cells are still broken art and still worth fixing at the source
+  (the flood or the margins, as above); this only stops anyone being handed
+  one.
+
 ## Hair is a known gap
 
 `head.png`'s 100 faces are all bald. There is no hair overlay art, so an
