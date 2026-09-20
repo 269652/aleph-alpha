@@ -139,7 +139,8 @@ founding.
 
 **One search, whoever asks** (2026-09-20). `VillageRenderer
 .farm_plot_with_field` is the field-aware plot: the next free frontage
-whose ground fits a field, and the outskirts (`VillageLayout.outskirt_plot`)
+whose ground fits a field and, since the rule below, its fence
+(`_field_fits_at`), and the outskirts (`VillageLayout.outskirt_plot`)
 when the streets are full. The founding placement asks it for each
 farmstead in turn, judged against the farmhouses already standing, and
 the growth path (`EarthChunkManager._growth_site_for`) asks the same

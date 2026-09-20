@@ -352,7 +352,8 @@ number the world produces:
   else on every reload (`test_settlement_generator.gd`).
 - **A growth farmhouse is sited where its field fits.**
   `VillageRenderer.farm_plot_with_field` is the one search for a
-  farmstead's plot — the next frontage with room for a field, the outskirts
+  farmstead's plot — the next frontage with room for a field and its fence
+  (`_field_fits_at`, [village_farms.md](village_farms.md)), the outskirts
   when the streets are full — and both the founding placement and
   `EarthChunkManager._growth_site_for` ask it, against the landmarks and the
   ground a project is already rising on
