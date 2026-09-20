@@ -484,3 +484,37 @@ exists, built for an entirely unrelated reason of its own.
   real per [timber_construction.md](timber_construction.md)'s own Status
   section); nothing here needs a new foundational mechanism, only new real
   callers.
+
+## A hall needs a plot nobody built on first (2026-09-20)
+
+Reported a fourth time: *"the hall still isn't finishing and no square
+plaza either"*. It was not finishing because it had never been started.
+
+The whole chain hangs off the civic plot being **real paving**:
+`_civic_plot_origin_for` returns `null` unless every footprint cell and the
+doorstep is a road tile, and `_apply_civic_build_decision` returns on a
+`null` origin without ever reaching `CivicBuildDecision`. Silent by design
+— a village whose centre is water honestly has nowhere to put a seat — but
+identical, from the outside, to a hall that is merely slow. The HUD's
+"Building City Hall" is the village's aspiration line, not a live project,
+so a village that could never start one reads as one that never finishes.
+
+On the reported village, the plot had **two houses standing on it**. The
+founding layout had abandoned the square over three cells of a sawmill's
+road spur, and with nothing claimed the houses took the square's own rows.
+That is terminal: the reload's re-paving can pave around a house but
+cannot move one, so the plot never becomes paving and the hall can never
+begin. The fix is at founding, in
+[village_market_square.md](village_market_square.md) — "A square is never
+abandoned over a few cells of it".
+
+Verified on that village, same seed: `hall=1`, standing on its plot, with
+the square paved around it.
+
+- 🚧 **Known gap, unchanged:** a village whose square really cannot be
+  laid (water, or a save whose houses already stand on the plot) still has
+  nowhere to put a seat and silently has none. Sliding the plot to another
+  clear 4×3 strip of the square was considered and not taken: the plot is
+  re-derived from the seed on every load with nothing persisted, and a plot
+  that moved with occupancy could slide away from a half-built project of
+  its own.

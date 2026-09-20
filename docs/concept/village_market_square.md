@@ -341,3 +341,103 @@ nothing ever overhangs sideways onto a neighbour's cell. The well is
 32×24 world px now, exactly its 2×2. A one-cell prop keeps the size its
 own art declares, unchanged. Pinned by
 `test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on`.
+
+## A square is never abandoned over a few cells of it (2026-09-20)
+
+Reported a fourth time, with the village in shot: *"the hall still isn't
+finishing and no square plaza either"* — a hamlet of ten households at lat
+47.2 lon 15.1, HUD reading **Building City Hall**, with neither a square
+nor a hall on the ground.
+
+Measured on that exact village, chunk (676,148)
+(`tools/probe_village_hall.gd`, `tools/probe_village_founding.gd`):
+
+```
+VILLAGE (676, 148) households=10  hall=0  project=none
+   PLAZA [P: (7, 13), S: (8, 6)] paved=15/48 pavable=34
+   CIVIC PLOT origin=(9, 13) site_clear=false plot_origin_for=<null>
+      (10, 14) mod='house_small'   (12, 14) mod='house_small'
+      ...every other cell of the plot 'building_footprint'
+```
+
+The hall was not *unfinished*. It had **never been started**, and could
+never be: `_civic_plot_origin_for` needs every cell of the plot to be real
+paving, a plot with a house on it answers `null`, and
+`_apply_civic_build_decision` returns before `CivicBuildDecision` is ever
+asked. "Building City Hall" is the village's aspiration line, not a live
+project — which is exactly why it read as "not finishing".
+
+**The cause is one all-or-nothing rule at founding.** The reload path was
+taught a year of lessons — it lays the square *around* what stands in it
+and declines only a square that is mostly holes (`PLAZA_MIN_PAVED_SHARE`).
+`_layout_once` never was: it demanded all 48 cells clear or dropped the
+square entirely. On this chunk the sawmill sits up at the timber at (13,7)
+and its reserved road spur runs down the square's own east column:
+
+```
+industry={origin:(13,7), road_spur:[(14,9)...(14,15)]}
+plaza cell (14, 13) blocked  buildable=true occupied=true
+plaza cell (14, 14) blocked  buildable=true occupied=true
+plaza cell (14, 15) blocked  buildable=true occupied=true
+```
+
+Three cells of spur, out of forty-eight. The square was dropped, nothing
+was claimed, and the founding houses marched straight through it —
+origins (6,14) (8,14) (10,14) (12,14), covering every cell of the civic
+plot.
+
+**A square lost at founding is lost for good.** The reload's re-paving can
+pave around a house; it cannot move one. So of the two ends, founding is
+the one that had to learn the rule, and it has: the square is kept
+whenever `plaza_is_worth_laying`, the **whole rect is claimed** (the
+square's ground is the square's, so no plot creeps into the part a spur
+crosses) and only the genuinely takeable cells are **paved** — whatever
+reserved the rest lays its own surface there. The floor stays: a square
+with almost nothing left of it is still honestly declined.
+
+Verified end to end on the reported village, same seed, same 49-chunk
+sweep: `hall=1`, square paved 36/48 with the other 12 being the hall
+itself standing on it.
+
+Pinned by `test_a_spur_crossing_the_square_does_not_cost_the_village_its_
+square`, `test_no_founding_house_stands_on_a_square_a_spur_crosses`,
+`test_the_civic_plot_is_paved_when_a_spur_crosses_the_square`,
+`test_the_kept_square_is_paved_around_the_spur_not_through_it` and
+`test_a_square_almost_entirely_built_over_is_still_abandoned`.
+
+## The square is sited by water that never moves (2026-09-20)
+
+Found while verifying the fix above, and it is the same guarantee: the
+square's rectangle came out at **x0=7 in one run and x0=12 in the next**,
+same chunk, same seed.
+
+`plaza_x0_for` states the invariant in as many words — every consumer
+re-derives the same rectangle with nothing persisted, so the input must be
+the one thing that never changes once the world is seeded: *"trees get
+felled and ground gets built on, rivers do not move"*. Ponds broke it. A
+fisher digs a 3×2 pond beside their own door
+([village_ponds.md](village_ponds.md)) and that is a chunk
+**modification**, which `is_water_at_global` answers before anything the
+generator knows. So the square started sliding for built water. Measured
+directly on Berlin's chunk: digging one row of pond across a square moved
+it from x0=12 to x0=4.
+
+A square that moves leaves its own paving behind — the well, the stall,
+the market stands and the civic plot all point at ground nobody paved,
+while the stonework stays where it was laid.
+
+`EarthChunkManager.is_generated_water_at_global` is everything
+`is_water_at_global` knows **except** the ponds people dig. It asks
+`generator.is_river_at_global` directly, because this class's own river
+test answers a pond too (a pond's flow is what carries what floats in it).
+`_is_dry_local`, `VillageRenderer._is_dry_local` and all six places the
+renderer derives a square read it now; `VillageLayout.layout` takes the
+same optional `is_dry` that `skeleton`, `industry_plot` and
+`next_street_plot` already took. A dug pond still refuses a *house* — it
+is water, and nothing is built in water. It just no longer moves a square.
+
+Pinned by `test_village_square_ignores_dug_water.gd` (three tests),
+`test_every_square_the_renderer_derives_is_sited_by_water_that_never_
+moves`, `test_the_founding_layout_is_handed_the_same_water_rule` and
+`test_the_founding_layout_sites_its_square_by_is_dry_not_by_what_it_can_
+build_on`.

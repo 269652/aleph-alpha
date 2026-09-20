@@ -492,10 +492,28 @@ founding layout, the reload's re-paving, the civic plot, the growth
 ladder's next plot, the well/stall/gate props — has to derive the same
 rectangle with nothing persisted, so the input must be the one thing that
 never changes once the world is seeded: trees get felled and ground gets
-built on, rivers do not move. `skeleton`, `industry_plot`,
+built on, rivers do not move. `skeleton`, `layout`, `industry_plot`,
 `next_street_plot` and `SettlementGenerator.generate_settlement` all take
 it optionally; omitted, the square stands at its designed centre exactly
 as before.
+
+And it is the **generated** world's water, never
+`is_water_at_global`: a fisher's dug pond
+([village_ponds.md](village_ponds.md)) is real water that refuses a house,
+but it lives in `chunk.modifications`, so a square sited by it *moves* when
+somebody digs. Measured: one row of pond dug across a square slid it from
+x0=12 to x0=4, stranding the paving already laid.
+`EarthChunkManager.is_generated_water_at_global` is the rule every
+square-siting caller asks — see
+[village_market_square.md](village_market_square.md), "The square is sited
+by water that never moves".
+
+The square is also never **abandoned** over a few cells of it. Founding
+used to demand all 48 clear, and a sawmill's road spur crossing three of
+them cost one village its square, its civic plot and therefore its city
+hall for good — the houses simply took the ground. Founding now keeps any
+square that is `plaza_is_worth_laying`, claims the whole rect so nothing
+creeps into it, and paves the cells it can really take.
 
 **A drowned square costs a square, not the village.** The plaza is the
 only thing further streets used to hang on: side streets ran down its two
