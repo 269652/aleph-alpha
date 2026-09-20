@@ -273,11 +273,26 @@ business; that there is one is the rule.
 > what they meant: the sprite stands where the settlement thinks the
 > landmark is, and every villager agrees with every other.
 
-🚧 **The art is still much bigger than the 2×2 it stands on.** Measured on
-a real village: the well's sprite is **80×60 px — five tiles by nearly
-four — over a 32×32 px footprint**, covering 24 cells of which 12 are
-road. So even sited perfectly on clean grass it reads as standing on the
-street. Whether that is fixed by scaling the art to its footprint (the
-rule a building's own sheet follows: width matches the footprint, height
-overhangs upward) or by giving the well a larger footprint is a look
-decision, not a correctness one, and is deliberately left open.
+✅ **And the art is scaled to that ground** (asked for directly: *"scale
+the art to its footprint"*). The well took its world size from
+`ProceduralLandmarkSprite.SIZES` — the old procedural placeholder box,
+40×44 world px — which has nothing to do with the 2×2 it is sited and
+reserved on. 40px is **2.5 tiles over a 2-tile footprint**, so a quarter
+of a tile hung over the paving on each side however well it was sited.
+
+> A measurement worth correcting rather than quietly fixing: this was
+> first reported here as "80×60 px, five tiles wide, covering 24 cells".
+> That read the raw TEXTURE and ignored `ArtResolution.SPRITE_SCALE` —
+> art is authored at `DETAIL_MULTIPLIER` (2×) and drawn back down at 0.5,
+> so 80×60 texture pixels are 40×30 **world** pixels. The overhang was
+> half a tile of width, not three.
+
+`LandmarkSheet.world_scaled_image` takes the world width the caller knows
+now, and the renderer passes `footprint.x * tile_size` for any prop with a
+declared footprint — the rule a building's own sheet already follows:
+width matches the ground the thing stands on, height follows the same
+factor, so a tall prop overhangs **upward** (it is foot-anchored) and
+nothing ever overhangs sideways onto a neighbour's cell. The well is
+32×24 world px now, exactly its 2×2. A one-cell prop keeps the size its
+own art declares, unchanged. Pinned by
+`test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on`.

@@ -28785,11 +28785,21 @@ only matched while the well sat on one cell's centre. They now assert what
 they meant — the sprite stands where the settlement thinks it does, and
 every villager agrees with every other.
 
-🚧 **The art is still five tiles wide over a 2×2.** The well's sprite
-measures **80×60 px against a 32×32 footprint**, covering 24 cells of which
-12 are road, so even a perfectly sited well reads as standing on the
-street. Scaling the art to its footprint, or giving the well a bigger
-footprint, is a look decision and is left open rather than guessed at.
+✅ **And the art is scaled to that ground** (asked for next: *"scale the
+art to its footprint"*). The well's world size came from
+`ProceduralLandmarkSprite.SIZES` — the old procedural placeholder box,
+40×44 world px — which has nothing to do with the 2×2 it stands on. 40px
+is 2.5 tiles over a 2-tile footprint, so a quarter of a tile hung over the
+paving each side however well it was sited.
+`LandmarkSheet.world_scaled_image` takes a world width now and the
+renderer passes `footprint.x * tile_size`: **40×30 → 32×24 world px**,
+exactly its 2×2. One-cell props are unchanged.
+
+**A measurement of mine, corrected.** I first reported this as "80×60 px,
+five tiles wide, covering 24 cells". That read the raw texture and ignored
+`ArtResolution.SPRITE_SCALE` — art is authored at 2× and drawn back at
+0.5, so 80×60 texture pixels are 40×30 world pixels. The overhang was half
+a tile of width, not three.
 
 Tests: `test_village_renderer.gd` + `test_village_layout.gd` +
 `test_landmark_sheet.gd` 253/253 (+1 new, 2 corrected).
