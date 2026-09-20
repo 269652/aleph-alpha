@@ -176,6 +176,33 @@ Expressed as a function of those inputs rather than a literal, so a change
 to the player's speed or the tile size moves it instead of silently making
 a crossing cheaper.
 
+### Built, and measured
+
+- ✅ `IllustratedBramblePatch`, banded like the ferns, forwarding to
+  `IllustratedGrassPatch` for the shader, the mesh subdivision and the
+  band maths. **17 cards drawn** on a real Harz chunk, and a frame centred
+  on a thicket shows two of them correctly beside the bracken.
+- ✅ `bend_scale` at **0.25**, set once on the material because it is a
+  fact about the plant rather than a live condition like the wind. The
+  ORDERING against the plants that lay over is what a test pins.
+- ✅ **One card per cell**, not the fern's three: a thicket is a single
+  woody clump with its berries drawn into it, and brambles are the sparser
+  plant besides.
+- ✅ **The cell penalty**: `_bramble_speed_multiplier` joins the same
+  product chain the road bonus and the wade penalty live in, and
+  `_step_bramble_thorns` runs in the outdoor authority step. A test pins
+  that both reach the REAL per-frame values rather than a helper nobody
+  calls.
+- ⬜ **Nothing but the player feels it.** A creature walking a thicket is
+  neither slowed nor scratched; the penalty is wired into the player's own
+  step alone. A boar pushing through bramble is exactly the kind of thing
+  this world models elsewhere, so this is a gap rather than a decision.
+- ⬜ **The drawn clump is wider than its tile, and the penalty is not.**
+  Standing on the cell is the whole test, so a player can be visually
+  waist-deep in canes drawn from the neighbouring tile and walk at full
+  speed. Deliberate — it needs no radius to tune and it matches what the
+  cell means everywhere else — but it is a seam somebody will notice.
+
 ## Status
 
 - ✅ **`BlackberryBramble`, the thicket's own sim.** Seeds on forest cells
