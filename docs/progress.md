@@ -481,6 +481,41 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **Motes drop — the Magicraft loop finally has a supply**
+  (2026-09-21) — see `concept/spell_weaving.md`.
+
+  `SpellMote.drop_tier_cap_for_ring` and `droppable_atoms_at_ring` said
+  exactly what is eligible where and had **zero callers**. The only two
+  ways an atom ever reached a pouch were the seven one-time `witness`
+  phenomena and the `/arena` dev command — so a character had **at most
+  seven atoms for the whole game**, and the four-socket Weave could never
+  be full of anything they had chosen. Which makes the Magicraft
+  requirement a surface with nothing to compose.
+
+  `MoteDrop` says what a mote *is*: **a souvenir of something that nearly
+  killed you.** The odds are `SpeciesBite.threat_score` scaled against the
+  roster's own peak — the same score the difficulty rings are ordered by,
+  so the animals a ring gates you away from are exactly the ones worth
+  hunting for parts, and a grazer leaves nothing because it never bit
+  anybody. The eligible set is the ring's own, so a far-country atom cannot
+  be farmed at the hearth. Seeded from the kill's position, so the same
+  kill always leaves the same thing.
+
+  **The one tuned value is pinned by what it means**, not by taste:
+  `SpellDraft.MAX_SOCKETS / MAX_DROP_CHANCE` is how many kills of the
+  world's worst animal fill a Weave, and a test holds it to a hunting trip
+  — over eight kills, so the Weave is not a vending machine; under forty,
+  so it is not a grind — and under a coin flip, past which motes stop being
+  a souvenir of hunting and become the reason for it.
+
+  Found and learned land in one place: `Player.find_mote` uses the same
+  `grant_mote` and the same `MOTE_FOUND` row the witness path does, so an
+  atom arriving either way is announced one way.
+
+  Tests: `test_mote_drop.gd` 16 (new), `test_spell_mote.gd` 21,
+  `test_player_spell_weaving.gd` 20, `test_player_answerback.gd` 19,
+  `test_journey_ring.gd` 35 — green.
+
 - ✅ **Order is the craft, and it changed nothing** (2026-09-21) — see
   `concept/spell_weaving.md`. That doc's fifth design pillar is *"order is
   the craft: adjacent motes react, and the reactions scale magnitude at

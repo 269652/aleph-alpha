@@ -397,9 +397,30 @@ holds both halves of pillar 6 at once.
   pipeline; `cast_spell` deliberately does not, because a spell nobody
   arranged has no order to be paid for. Tested
   (`test_reaction_multiplier_lands.gd`, 9).
-- ⬜ **Motes do not drop.** `drop_tier_cap_for_ring` /
-  `droppable_atoms_at_ring` say what is eligible where, and still have zero
-  callers: the only ways into a pouch are the seven one-time witness
-  phenomena and the `/arena` dev command. So a character has at most seven
-  atoms for the whole game, and the four-socket Weave can never be full of
-  anything they chose. This is the last unbuilt half of the loop.
+- ✅ **Motes drop** (2026-09-21). `drop_tier_cap_for_ring` /
+  `droppable_atoms_at_ring` said exactly what is eligible where and had
+  **zero callers** — the only ways into a pouch were the seven one-time
+  witness phenomena and the `/arena` dev command, so a character had at
+  most seven atoms for the whole game and the four-socket Weave could never
+  be full of anything they had chosen.
+
+  `MoteDrop` is the rule, and it says what a mote *is*: **a souvenir of
+  something that nearly killed you.** The odds are
+  `SpeciesBite.threat_score` scaled against the roster's own peak — the
+  same score the difficulty rings are ordered by, so the animals a ring
+  gates you away from are exactly the ones worth hunting for parts, and a
+  grazer (threat zero, because it never bit anybody) leaves nothing. The
+  eligible set is the ring's own, so a far-country atom cannot be farmed at
+  the hearth. The roll is seeded from the kill's position, the spatial-hash
+  convention every other one-time world roll here uses, so the same kill
+  always leaves the same thing.
+
+  `MAX_DROP_CHANCE` is the one tuned value and it is pinned by what it
+  *means*: `SpellDraft.MAX_SOCKETS / MAX_DROP_CHANCE` is how many kills of
+  the world's worst animal fill a Weave, and that must be a hunting **trip**
+  — not a handful, which makes the Weave a vending machine, and not forty,
+  which makes it a grind. It is also held under a coin flip, past which
+  motes stop being a souvenir of hunting and become the reason for it.
+
+  A world that has not decided where home is yields nothing rather than
+  pretending the origin is the hearth. Tested (`test_mote_drop.gd`, 16).

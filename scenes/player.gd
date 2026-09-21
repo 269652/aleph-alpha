@@ -18,6 +18,8 @@ const Answerback = preload("res://src/gameplay/answerback.gd")
 const SpellParser = preload("res://src/gameplay/spell_parser.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const SpellMote = preload("res://src/gameplay/spell_mote.gd")
+const MoteDrop = preload("res://src/gameplay/mote_drop.gd")
+const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
 const WitnessConditions = preload("res://src/gameplay/witness_conditions.gd")
 const Slumber = preload("res://src/gameplay/slumber.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
@@ -3426,6 +3428,16 @@ func _perform_attack() -> void:
 		# A hit that kills the creature awards XP scaled by its level (see
 		# ExperienceTrack / concept/progression.md).
 		if creature.is_queued_for_deletion() and creature.info != null:
+			# What the kill teaches a spellwright, if anything
+			# (docs/concept/spell_weaving.md). A mote is a souvenir of
+			# something that nearly killed you, so the odds are the
+			# species' own threat and the eligible set is the ground it
+			# died on. Rolled from the kill's POSITION, the same spatial
+			# hash every other one-time world roll here uses, so the same
+			# kill always leaves the same thing.
+			find_mote(MoteDrop.drops(
+				creature.info.species, _journey_ring_index(), _mote_seed_at(creature.position)
+			))
 			var gained := XP_PER_KILL * creature.info.level
 			var levels := gain_experience(gained)
 			answer("xp_gain", {"xp": gained})
@@ -3459,6 +3471,42 @@ func _perform_attack() -> void:
 ## reading it.
 func motes() -> Dictionary:
 	return _motes.duplicate()
+
+
+## Takes a mote found in the world -- off a kill, today -- into the pouch,
+## and says so. "" is the ordinary answer and grants nothing.
+##
+## The same `grant_mote` the witness layer uses and the same `MOTE_FOUND`
+## row, so an atom found and an atom learned land in one place and are
+## announced one way. A silent grant is exactly how an atom goes unnoticed,
+## which the witness path spent its whole life doing.
+func find_mote(atom_id: String) -> bool:
+	if atom_id == "":
+		return false
+	grant_mote(atom_id)
+	answer(Answerback.MOTE_FOUND, {"item": SpellMote.display_name_for(atom_id), "count": 1})
+	return true
+
+
+## Which ring this character is standing in, for what the ground can teach
+## (docs/concept/journey_rings.md). -1 -- a world that has not decided where
+## home is -- yields nothing rather than pretending the origin is the
+## hearth, the same "not known is not zero" rule `chunks_from_spawn`'s own
+## doc comment states.
+func _journey_ring_index() -> int:
+	if _chunk_manager == null:
+		return -1
+	var distance: int = _chunk_manager.chunks_from_spawn(current_tile())
+	if distance < 0:
+		return -1
+	return JourneyRing.ring_index_at(distance)
+
+
+## The seed one kill rolls under: its own position, the spatial-hash
+## convention `Carcass._roll_contamination` and the ore/stone placement
+## already share.
+func _mote_seed_at(at: Vector2) -> int:
+	return hash("%d_%d_mote" % [int(at.x), int(at.y)])
 
 
 ## Lives through a phenomenon and learns what it teaches, the FIRST time
