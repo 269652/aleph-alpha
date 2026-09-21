@@ -481,6 +481,34 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **`slow` did not slow anything you cast it at** (2026-09-21) — see
+  `concept/spell_runtime.md`. `grep -c SLOW src/rendering/creature_marker.gd`
+  returned **0**: the marker carried the stacks faithfully in
+  `active_spell_debuffs` and its movement never looked at them, so Frost
+  Lance — whose own source is `frost_damage(magnitude: 6) |> slow(duration:
+  3)` — slowed nothing in the world and half of a two-atom spell was
+  decoration. `freeze` and `root` worked only because `is_rooted()` stops
+  the creature outright; `slow` is the one that needed a *speed*, and a
+  speed was the one thing nothing multiplied.
+
+  Applied at `_advance`, the choke point whose own doc comment already says
+  *"every intent's movement funnels through this, so one multiplier here
+  covers all of them"* — the herd-disease slowdown had been using it alone.
+  The shared figure, so a creature and the player are slowed by one number,
+  and multiplied rather than replacing, so a sick *and* slowed wolf is
+  slower than either. `test_slow_lands_on_creatures.gd` 4,
+  `test_creature_marker.gd` 293, `test_spell_status_effects.gd` 9 — green.
+
+  **And the other half of that slice is a verified no-op, named rather than
+  papered over.** `fear` and `calm` both override the temperament fed into
+  `CreatureBehavior.decide`, and `_will_fight` is the only reader of
+  temperament — it asks `== "aggressive"`. So every other string behaves
+  identically: both atoms take the fight out of something aggressive and
+  change nothing whatever about a deer. `calm` is complete by that
+  standard; `fear` promises flight it cannot cause, and causing it means a
+  real `flees_regardless` fact threaded into the pure decider, not a
+  temperament rename.
+
 - ✅ **Nine nodes of the Mage wedge that bought nothing** (2026-09-21) —
   see `concept/skill_payoff.md`.
 

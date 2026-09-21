@@ -2160,6 +2160,24 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# covers all of them.
 	if disease_id == DiseaseModel.HERD and disease_state == DiseaseModel.State.INFECTED:
 		speed *= _disease_model.movement_speed_multiplier(disease_severity)
+	# And the `slow` spell atom, at the same choke point and for the same
+	# reason (docs/concept/spell_runtime.md).
+	#
+	# Measured: `grep -c SLOW` over this file returned ZERO. The marker
+	# carried the stacks faithfully in active_spell_debuffs and its movement
+	# never looked at them, so Frost Lance -- whose own source is
+	# `frost_damage(magnitude: 6) |> slow(duration: 3)` -- slowed nothing in
+	# the world and half of a two-atom spell was decoration. `freeze` and
+	# `root` worked only because is_rooted() stops the creature outright;
+	# `slow` is the one that needed a speed, and a speed was the one thing
+	# nothing multiplied.
+	#
+	# The SHARED figure, not a second opinion: Player wears exactly this
+	# multiplier when slowed (_status_speed_multiplier), so one spell means
+	# one thing to everything it lands on. Multiplied rather than replacing,
+	# so a sick AND slowed animal is slower than either.
+	if _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.SLOW) > 0:
+		speed *= SpellStatusEffects.SLOW_SPEED_MULTIPLIER
 	# Real slope underfoot slows a creature exactly the way it slows the
 	# player (see _terrain_speed_multiplier above) -- one query for the tile
 	# this creature is CURRENTLY standing on, not a scan over any area, so
