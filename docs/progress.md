@@ -529,6 +529,15 @@ and most species have no loot row so they vanish on death.
   `test_species_bite.gd` 48, `test_sprint_cost.gd` 18,
   `test_player_rest.gd` 14, `test_player_input_latch.gd` 16 — green.
 
+  **How `test_player.gd` was verified, stated rather than glossed.** That
+  suite is 343 tests over 5199 lines and instantiates the player scene per
+  test; three attempts to run it whole in this session's container reached
+  7.6 GB resident and were killed without finishing. CI runs the full
+  ~12k-test suite in one process and will catch anything missed. Here it
+  was covered by name-filtered subsets over exactly the paths these changes
+  touch — `damage` 10, `venom` 5, `block` 4, `knockback` 3, `health` 3,
+  `hurt` 2 — all green.
+
   **Named gap, and the reason this slice came first:** there is still
   nothing to dodge. `SpeciesBite.windup_seconds_for` has no consumer, so a
   bite lands on the frame a creature is in range with no telegraph at all —
