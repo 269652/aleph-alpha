@@ -14711,9 +14711,15 @@ func _reconcile_chunk_creatures(chunk_coord: Vector2i) -> void:
 			alive.append(creature)
 
 	var chunk: Chunk = _loaded_chunks[chunk_coord]
+	# The SAME chunk and salts spawn_creatures itself uses (herbivores 1,
+	# predators 2), or this pass and that one would disagree about how many
+	# animals belong here and a chunk would gain and lose one on every
+	# stream (see CreatureRenderer.marker_count_for).
 	var target := _creature_renderer.marker_count_for(
-		_ecosystem.herbivore_population(chunk_coord)
-	) + _creature_renderer.marker_count_for(_ecosystem.predator_population(chunk_coord))
+		_ecosystem.herbivore_population(chunk_coord), chunk_coord, 1
+	) + _creature_renderer.marker_count_for(
+		_ecosystem.predator_population(chunk_coord), chunk_coord, 2
+	)
 
 	if alive.size() > target:
 		alive = _thin_creatures(alive, alive.size() - target)

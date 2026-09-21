@@ -1487,7 +1487,47 @@ already commits to. A region's difficulty tier is meant to *inform* (a
 HUD/warning signal is a natural, separate follow-up), not police, where a
 player of a given level should be.
 
-### Status / mechanisms
+### Populations become animals you can meet
+
+**Measured 2026-09-21, in a real `--solo` launch**, after a report that
+there was nothing to fight. Across the 25 chunks the streamer holds around
+a fresh spawn:
+
+| | per chunk | drawn |
+|---|---|---|
+| herbivores | 0.40 – 1.26 | 24 animals |
+| **predators** | **0.03 – 0.10** | **0 animals** |
+
+Those predator figures sum to **1.66 animals** in the neighbourhood — a
+real, non-zero population the simulation tracks and steps every day — and
+`CreatureRenderer.marker_count_for`'s `roundi` turned every one of them
+into nothing, because each chunk on its own rounds below a half. The world
+near spawn was a petting zoo: boar, sheep, mouse, deer, squirrel, horse,
+alpaca, and not one thing that hunts. Every predator the danger gradient,
+the bite profiles and the ring demands are built around simply was not
+drawn.
+
+**The trophic pyramid is not the bug.** `PredatorPopulationModel.
+PREDATORS_PER_PREY_UNIT` is 0.08 because an ecosystem really does sustain
+far fewer predators than prey. Rounding a real density away per chunk is
+what was wrong — it is the one step between "the world has predators in
+it" and "the player can meet one".
+
+`PopulationMarkers.count_for` keeps the fraction as a **chance** instead:
+the whole part is always drawn (two deer are two deer), and the remainder
+is taken from seeded noise, so a chunk with 0.3 predators draws one three
+times in ten and the neighbourhood totals what the ecology says is there.
+Seeded per chunk and species, deterministic like every other pick in this
+codebase — a chunk does not gain and lose a wolf each time it streams back
+in, and the spawn pass and `_reconcile_chunk_creatures` cannot disagree
+(they pass the same chunk and the same salts, 1 for herbivores and 2 for
+predators, pinned by test).
+
+Measured again afterwards, same launch: **21 animals, one of them a
+jackal, 905 px away.** The total fell because unbiased rounding is *more*
+accurate than `roundi` — the populations really do sum to ~20.9.
+
+## Status / mechanisms
 
 - ✅ `region_difficulty.gd` (chunk-distance-from-spawn → tier), wired into
   `CreatureRenderer`'s species-pool selection (`MIN_DIFFICULTY_TIER_BY_SPECIES`)

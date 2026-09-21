@@ -70,11 +70,37 @@ func after_each():
 	parent.free()
 
 
-func test_spawns_one_marker_per_rounded_unit_of_herbivore_population():
+## The whole part of a population is always drawn; the fraction is a
+## SEEDED CHANCE rather than a rounding (see PopulationMarkers, and
+## test_population_markers.gd for the unbiasedness sweep).
+##
+## This test used to assert `3.4 -> 3`, pinning `roundi`. That rounding is
+## exactly what made the world near spawn a petting zoo: predator density
+## there is 0.03..0.10 per chunk, which summed to 1.66 real animals across
+## the streamed neighbourhood and drew as ZERO, because every chunk
+## individually rounds below a half.
+func test_spawns_the_whole_part_of_a_population_and_maybe_the_fraction():
 	var spawned := renderer.spawn_creatures(
 		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 3.4, 0.0
 	)
-	assert_eq(spawned.size(), 3)
+	assert_true(
+		spawned.size() == 3 or spawned.size() == 4,
+		"3.4 animals is three animals, and sometimes a fourth -- got %d" % spawned.size()
+	)
+
+
+## Deterministic, so the reconcile pass cannot disagree with the spawn.
+func test_the_same_chunk_spawns_the_same_number_twice():
+	var first := renderer.spawn_creatures(
+		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 3.4, 0.0
+	).size()
+	var second_parent := Node2D.new()
+	add_child(second_parent)
+	var second := renderer.spawn_creatures(
+		second_parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 3.4, 0.0
+	).size()
+	second_parent.free()
+	assert_eq(first, second)
 
 
 ## See docs/concept/disease.md's "Region pressure": a spawned marker carries

@@ -13,6 +13,7 @@ const ProceduralAnimalSprite = preload("res://src/rendering/procedural_animal_sp
 const CreatureInfo = preload("res://src/world/creature_info.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const PopulationMarkers = preload("res://src/world/population_markers.gd")
 
 const HERBIVORE_COLOR := Color(0.65, 0.5, 0.2)
 const BOAR_COLOR := Color(0.25, 0.18, 0.12)
@@ -169,10 +170,25 @@ var _illustrated := preload("res://src/rendering/illustrated_animal_sprite.gd").
 ## as before) filters out any species whose MIN_DIFFICULTY_TIER_BY_SPECIES
 ## exceeds it -- see docs/concept/ecosystem_dynamics.md's Region difficulty
 ## section.
-## How many markers one species' aggregate population is drawn as. Shared with
-## the reconcile pass so "how many should be here" has exactly one answer.
-func marker_count_for(population: float) -> int:
-	return mini(int(roundi(population)), MAX_MARKERS_PER_SPECIES)
+## How many markers one species' aggregate population is drawn as. Shared
+## with the reconcile pass so "how many should be here" has exactly one
+## answer -- which is why both callers must pass the SAME chunk and salt, or
+## a chunk would gain and lose an animal every time it streamed.
+##
+## `PopulationMarkers.count_for` keeps the fractional part as a seeded
+## chance rather than rounding it away. Measured in a real --solo launch:
+## predator density around spawn is 0.03..0.10 per chunk, which summed to
+## 1.66 real animals across the streamed neighbourhood and drew as ZERO
+## under the old `roundi`, because every chunk individually rounds below a
+## half. The world near spawn had no predators in it at all.
+func marker_count_for(
+	population: float, chunk_coord: Vector2i = Vector2i.ZERO, species_salt: int = 0
+) -> int:
+	return PopulationMarkers.count_for(
+		population,
+		hash("%d_%d_%d_markers" % [chunk_coord.x, chunk_coord.y, species_salt]),
+		MAX_MARKERS_PER_SPECIES
+	)
 
 
 func spawn_creatures(
@@ -280,7 +296,7 @@ func _spawn_species(
 	start_index: int = 0,
 	difficulty_tier: int = RegionDifficulty.Tier.EASY
 ) -> Array[Node2D]:
-	var count := marker_count_for(population)
+	var count := marker_count_for(population, chunk_coord, species_salt)
 	var spawned: Array[Node2D] = []
 	# `start_index` lets a chunk TOP UP rather than rebuild (see
 	# EarthChunkManager._reconcile_chunk_creatures): a newcomer takes the next
