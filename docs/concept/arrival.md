@@ -288,7 +288,13 @@ becomes its own piece of work:
   settlement. `ArrivalBriefing.card_text` joins the lines, closing up the
   missing ones rather than leaving blank rows, and nothing known at all
   raises no card. It is shown for `Answerback.seconds_to_read` of its own
-  text and clears itself.
+  text — but the countdown does **not start until the character takes a
+  step**. Measured after a report that no card was visible: the card really
+  was raised and really did read *"You are on the Isar, in spring."* — for
+  1.51 s, while the loading overlay was still fading. A greeting nobody can
+  read is not a greeting, and this is the one moment a new player is
+  listening, so standing still reads it for as long as they like and moving
+  says they are done.
 
   Pinned by `test_world_arrival_card.gd` (11) and
   `test_arrival_briefing.gd`'s own card tests (26 total): a **loaded save

@@ -252,6 +252,30 @@ reading something real.
   really takes a footfall, really pays the player, floats through the same
   rising label as every other act, and never forms a second opinion about
   what new ground is worth).
+- ✅ **A place reading that never goes away** (2026-09-20, after the
+  report *"no card or XP visible"*). Instrumenting a `--solo` launch showed
+  the wiring was fine — frame one paid its 2 XP and produced the float —
+  and that everything this layer fed was **transient**: the receipt lasts
+  ~1 s and only re-fires after 512 px of walking (~13 s in a straight
+  line), the crossing card needs six chunks (over a minute one way), and
+  the arrival card really did say *"You are on the Isar, in spring."* for
+  1.51 s while the loading overlay was still fading. A player who wanders
+  inside their spawn chunk met the whole journey layer once, for one
+  second, and could not have spotted it.
+
+  `Discovery.place_chip` is the answer: a permanent HUD card beside the
+  condition chips reading *"The Hearth  -  home  -  1 known"*. The distance
+  is the **play** scale (`JourneyRing.walking_metres_from_spawn`), so it can
+  be compared with `SprintCost`'s "one burst carries 80 m" rather than with
+  the map's kilometres; standing at home says *home* rather than "0 m", the
+  same rule `ArrivalBriefing.distance_phrase` keeps. The **known count** is
+  the live `ExploredTiles` size, so a number ticking up every chunk is the
+  visible proof that walking records ground at all. This is the "HUD place
+  chip naming the ring" [journey_rings.md](journey_rings.md) has listed as
+  unbuilt since the rings shipped.
+
+  Hidden entirely while `chunks_from_spawn` answers −1 (no spawn set yet),
+  rather than claiming the origin is home.
 - ⬜ **The map is still a console command.** `/map` now reports real
   explored ground, and `MapProjection.landmarks_visible_on_map` now filters
   by a real journey — but there is still no fogged in-world map render,

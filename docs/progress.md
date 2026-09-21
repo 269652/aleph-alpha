@@ -282,6 +282,39 @@ and most species have no loot row so they vanish on death.
   matched the explanatory comment above the call and would have passed
   against a file that only talked about setting a spawn.
 
+- ✅ **Nothing in the journey layer persisted, so none of it could be
+  spotted** (2026-09-20) — reported plainly: *"no card or XP visible"*.
+  Instrumented a `--solo` launch rather than guessing again, the way this
+  project's own note says to find a bug no unit test can see. The wiring
+  was fine: frame one paid its 2 XP and produced the float, the banner and
+  the UI layer both existed, and the arrival card really was raised and
+  really did read *"You are on the Isar, in spring."*
+
+  The defect was that **everything built was transient**. The receipt lasts
+  `Answerback.DELIBERATE_INTERVAL_SECONDS` (~1 s) and only re-fires after a
+  whole chunk of walking — 512 px, ~13 s in a straight line at
+  `Player.BASE_SPEED`; the crossing card needs six chunks, over a minute one
+  way; and the arrival card was up for 1.51 s, while the loading overlay was
+  still fading. A player who wanders inside their spawn chunk met the whole
+  layer once, for one second. That is a tuning failure, not a wiring one,
+  and it is the same complaint the whole overhaul started from.
+
+  Two fixes. **`Discovery.place_chip`** is a permanent HUD card beside the
+  condition chips — *"The Hearth  -  home  -  1 known"* — reading the ring,
+  the distance at **walking** scale (so it compares with `SprintCost`'s "one
+  burst carries 80 m" rather than with the map's kilometres), and the live
+  `ExploredTiles` size, whose ticking up is the visible proof that walking
+  records ground. Hidden while `chunks_from_spawn` answers −1, rather than
+  claiming the origin is home. This is the "HUD place chip naming the ring"
+  `concept/journey_rings.md` had listed as unbuilt since the rings shipped.
+  And **the arrival card no longer counts down until the character takes a
+  step** — standing still reads it for as long as they like.
+
+  Tests: `test_discovery.gd` 35/35 (6 new), `test_world_discovery.gd` 19/19
+  (5 new), `test_world_arrival_card.gd` 14/14 (3 new). Confirmed in a real
+  `--solo` run, not only in tests: the chip renders *"The Hearth  -  home
+  -  1 known"*, visible.
+
 
 ### Loose stone (see `docs/concept/stone.md`)
 

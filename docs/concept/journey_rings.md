@@ -200,7 +200,10 @@ doing two jobs.
   lethal there, and its packing list; and `demands_at` is the *only*
   difficulty input to what newly-walked ground pays, so the rings now grant
   as well as threaten. See [discovery.md](discovery.md).
-- ⬜ The HUD has no permanent "place" chip naming the current ring — the
-  card is raised on the crossing and then gone. A ring's demands do not yet
-  feed a departure checklist.
+- ✅ **The HUD's permanent "place" chip** (2026-09-20).
+  `Discovery.place_chip`, beside the condition chips: the ring, how far out
+  at walking scale, and how much ground is recorded. Built after a report
+  that none of the journey layer could be spotted — everything else it fed
+  was transient. See [discovery.md](discovery.md).
+- ⬜ A ring's demands do not yet feed a departure checklist.
 - ⬜ Ring names are not yet spoken by any NPC or written on any map.
