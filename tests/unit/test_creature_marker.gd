@@ -1031,6 +1031,7 @@ func test_strong_aggressive_predator_attacks_a_nearby_player():
 	var player := _add_stub_player(Vector2(108, 100))  # within attack range
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0, "a strong predator should damage the player")
 
@@ -1067,6 +1068,7 @@ func test_venomous_snake_applies_venom_when_it_attacks_the_player():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	snake._process(0.2)
+	_let_the_jaws_close(snake)
 
 	assert_gt(player.damage_taken, 0.0, "the snake should still deal ordinary bite damage")
 	assert_eq(player.venom_applications, 1, "a venomous snake's bite should apply venom")
@@ -1077,6 +1079,7 @@ func test_nonvenomous_predator_does_not_apply_venom():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0)
 	assert_eq(player.venom_applications, 0, "an ordinary predator's bite should not apply venom")
@@ -1144,6 +1147,7 @@ func test_infected_predator_spreads_disease_when_it_bites_the_player():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0, "the bite should still deal ordinary damage")
 	assert_eq(player.disease_bites, [DiseaseModel.PREDATOR])
@@ -1154,6 +1158,7 @@ func test_healthy_predator_does_not_spread_disease_when_it_bites_the_player():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0)
 	assert_eq(player.disease_bites.size(), 0)
@@ -4751,6 +4756,7 @@ func _bite_of(species: String) -> float:
 	victim.position = Vector2(100, 100)
 	add_child(victim)
 	biter._try_attack(victim)
+	_let_the_jaws_close(biter)
 	var dealt: float = victim.damage_taken
 	biter.queue_free()
 	victim.queue_free()
@@ -4792,6 +4798,7 @@ func test_the_cooldown_between_bites_is_the_species_own():
 	victim.position = Vector2(100, 100)
 	add_child(victim)
 	biter._try_attack(victim)
+	_let_the_jaws_close(biter)
 	if SpeciesBite.has_profile("bear"):
 		assert_almost_eq(
 			biter._attack_cooldown_remaining,
@@ -4883,3 +4890,16 @@ func test_a_death_without_death_art_still_stops_the_step_by_being_freed():
 	marker.apply_disease_bite(DiseaseModel.CARRION)
 	marker._process(1000.0)
 	assert_true(marker.is_queued_for_deletion())
+
+
+## Real frames until a committed creature's windup runs out
+## (docs/concept/predator_profiles.md, "The telegraph, in the engine"): a
+## bite is no longer instantaneous -- `_try_attack` COMMITS, and the jaws
+## close a windup later, re-checking reach. Driven off the creature's OWN
+## remaining clock rather than a round number, so this cannot go stale when
+## a species' telegraph changes.
+func _let_the_jaws_close(biter) -> void:
+	var guard := 0
+	while biter.is_winding_up() and guard < 600:
+		biter._process(1.0 / 60.0)
+		guard += 1

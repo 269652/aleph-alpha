@@ -151,6 +151,11 @@ func test_a_creature_can_actually_be_killed_by_casting():
 # -- and the other direction ---------------------------------------------
 
 ## A battletest needs something that fights BACK, or it is target practice.
+##
+## A bite is no longer instantaneous (docs/concept/predator_profiles.md,
+## "The telegraph, in the engine"): `_try_attack` COMMITS, and the jaws
+## close a windup later, re-checking reach. So the exchange is driven for
+## the species' own telegraph rather than asserted on the same frame.
 func test_a_predator_really_damages_the_player():
 	var marker = _creature_at("wolf", IN_REACH)
 	assert_not_null(marker, "precondition: a wolf spawned")
@@ -160,6 +165,7 @@ func test_a_predator_really_damages_the_player():
 	marker.position = player.position + Vector2(4.0, 0.0)
 	marker._attack_cooldown_remaining = 0.0
 	marker._try_attack(player)
+	_let_the_jaws_close(marker)
 	assert_lt(player.health, before, "a predator that cannot hurt you is scenery")
 
 
@@ -170,7 +176,19 @@ func test_the_bite_that_landed_is_the_species_own_profile():
 	marker.position = player.position + Vector2(4.0, 0.0)
 	marker._attack_cooldown_remaining = 0.0
 	marker._try_attack(player)
+	_let_the_jaws_close(marker)
 	assert_almost_eq(before - player.health, marker.bite_damage(), 0.001)
+
+
+## Real frames until a committed creature's windup runs out. Deliberately
+## the creature's OWN remaining clock rather than a round number, so this
+## helper cannot quietly go stale when a species' telegraph changes.
+func _let_the_jaws_close(marker) -> void:
+	var frame := 1.0 / 60.0
+	var guard := 0
+	while marker.is_winding_up() and guard < 600:
+		marker._process(frame)
+		guard += 1
 
 
 func test_the_bite_is_the_species_own_rather_than_one_shared_number():

@@ -157,11 +157,20 @@ key in this project, whose UI is built rather than themed.
 - ⬜ A visual for the roll — the character simply moves.
 - ⬜ **The sound.** `dodge_roll` is a commissioning-list id like every
   other sound in the feedback table; no clip exists.
-- ⬜ **Nothing to dodge yet.** A bite lands on the frame a creature is in
-  range, with no telegraph at all, because `SpeciesBite.windup_seconds_for`
-  has no consumer — so today the dodge answers a blow a player cannot see
-  coming. That is the next slice, and it is the reason this one came
-  first: a telegraph with no dodge is only a delay.
+- ✅ **There is something to dodge** (2026-09-21) — see
+  [predator_profiles.md](predator_profiles.md)'s "The telegraph, in the
+  engine". A creature now commits, plants itself, rears, and re-checks
+  reach when its own windup runs out; a dodge *away* clears every bite in
+  the roster, because the freeze makes the gap `R + 20 > 16` for any commit
+  range. This is the reason the dodge came first: a telegraph with no dodge
+  would only have been a delay.
+- 🚧 **A player cannot dodge every bite**, and that is the design rather
+  than a gap. `COOLDOWN_DURATION` (1.5 s) is longer than the full
+  `windup + cooldown` cycle of ten of the twelve biters — a wolf's is
+  1.20 s, a lynx's 1.05 s — so against those the dodge answers every
+  *other* bite and the rest is the block's job. Only the bear (2.02 s) and
+  the lion (1.63 s) can be answered every time, which is the right way
+  round: the heaviest blows are the ones you must be able to refuse.
 - ⬜ Dodging a *spell* projectile: spells resolve on the target directly
   rather than travelling, so there is nothing yet to roll under.
 - ⬜ It does not replicate. `Player._setup_replication` syncs `position`

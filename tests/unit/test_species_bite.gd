@@ -631,3 +631,32 @@ func test_a_profile_is_a_copy_the_caller_may_scribble_on():
 func test_an_animal_exactly_as_fast_as_you_is_never_outrun():
 	assert_false(SpeciesBite.is_outrun_by(5.0, 5.0))
 	assert_true(SpeciesBite.is_outrun_by(5.0, 5.0 * SpeciesBite.OUTRUN_MARGIN))
+
+
+## The one number in the windup rule with no assertion of its own.
+##
+## `WINDUP_SECONDS_PER_HEALTH_FRACTION` is not authored -- it is whatever
+## slope joins the two anchors, and the two anchors plus monotonicity
+## determine a line uniquely. This test says exactly that rather than
+## restating the arithmetic: the slope really is the one that carries the
+## curve from the base telegraph at a fair bite to the whole dodge cooldown
+## at a bite that kills outright, so it cannot be nudged on its own.
+func test_the_windup_slope_is_the_line_between_its_own_two_anchors():
+	var fair := SpeciesBite.FAIR_BITE_HEALTH_FRACTION
+	assert_almost_eq(
+		SpeciesBite.WINDUP_SECONDS_PER_HEALTH_FRACTION,
+		(SpeciesBite.LETHAL_WINDUP_SECONDS - SpeciesBite.BASE_WINDUP_SECONDS) / (1.0 - fair),
+		0.000001,
+		"the slope is derived from the anchors, never chosen beside them"
+	)
+
+
+## And the anchors themselves are the player's own dodge, not two numbers
+## that happen to look like it -- which is what makes the whole fairness
+## model a statement about a verb the player can really perform.
+func test_both_anchors_are_the_dodge_itself():
+	assert_eq(SpeciesBite.BASE_WINDUP_SECONDS, DodgeForWindup.INVINCIBLE_DURATION)
+	assert_eq(SpeciesBite.LETHAL_WINDUP_SECONDS, DodgeForWindup.COOLDOWN_DURATION)
+
+
+const DodgeForWindup = preload("res://src/gameplay/dodge.gd")

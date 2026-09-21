@@ -481,6 +481,84 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **The bite is telegraphed** (2026-09-21) — see
+  `concept/predator_profiles.md`'s new "The telegraph, in the engine".
+
+  `SpeciesBite.windup_seconds` had been authored per species,
+  fairness-tested against the player's own dodge, and **completely dead**:
+  `grep -rn windup` outside that file returned two comments. A bite landed
+  on the frame a creature crossed `ATTACK_RANGE`, so the whole fairness
+  model was arithmetic about a thing that never happened — the same
+  "real, tested, zero callers" pattern as the dodge itself, on the other
+  side of the same exchange.
+
+  Four decisions, each forced by arithmetic rather than chosen, and the
+  arithmetic was worked out twice independently before any code was
+  written:
+
+  - **The creature freezes while it winds up.** If it keeps closing at its
+    own pursuit speed the dodge fails for ten of the twelve biting
+    profiles — a lion closes 52.8 px in its 0.60 s, a bear 62.2 px in its
+    0.90 s, against a dodge worth 20 px. The tolerance for *any* residual
+    closing is under `4 / W` px/s, which is frozen in all but name. The
+    guard sits at the single movement choke point, not in the attack arm:
+    `_will_fight` needs half health, so a bear damaged past it mid-windup
+    flips to *flee* and was free to walk out of its own bite.
+  - **The jaws re-check reach.** Without it the windup is a delayed
+    guaranteed hit whose only counter is the 0.25 s invincibility boolean —
+    a window that always *ends* at the bite, so reacting on the first frame
+    of the tell would be punished on eleven of twelve species.
+  - **The windup lengthens the cycle.** `SpeciesBite.damage_per_second`
+    already models `cycle = windup + cooldown`, and nesting the windup
+    inside the recovery would have broken the table's own
+    minimum-time-to-kill floor for the bear (8.78 s → 4.87 s) and the viper.
+  - **A commitment is not interrupted, only missed.** The player's swing is
+    on a 0.5 s cooldown, shorter than eleven of the twelve windups, so an
+    interrupt would make every heavy predator unbiteable again.
+
+  **And a fifth, found by running the exchange rather than reasoning about
+  it.** The moment the windup landed,
+  `test_a_player_who_only_swings_does_not_beat_a_bear_for_free` went green
+  to red: a frozen creature cannot close again either, so *any* shove
+  during a windup made the bite whiff. A bear is shoved 8 px per swing and
+  winds up for 0.90 s, during which a 0.5 s swing lands twice — sixteen
+  pixels, and the jaws close on nothing for ever. So **a planted animal is
+  braced**. The asymmetry is the design: moving yourself out of reach
+  answers a bite; shoving the animal does not.
+
+  **The tell is a rear-up, not a colour, and both halves of that are
+  forced.** There is no windup animation and none can be borrowed — the
+  whole creature action vocabulary is walk / idle / attack / eat / drink /
+  swim, and for illustrated species `"attack"` already falls back to the
+  **walk** row, so an attacking boar is pixel-identical to a walking one.
+  And a `CreatureMarker` *is* its `Sprite2D`: that one 24-pixel body already
+  says three things through `modulate` (warm-brighter is a good coat, pale
+  green is sick, red is just-hit), so the obvious hue for "about to hurt
+  you" is the one already spoken for by "you just hurt it". `BiteTell`
+  grows the body as the strike nears, taller than it is wider, folded into
+  `_apply_action_scale`'s own formula rather than written onto `scale` from
+  outside — which is reverted within one stepped frame and would desync the
+  animal from its own shadow.
+
+  Tests: `test_bite_telegraph.gd` 19, `test_bite_tell.gd` 7,
+  `test_species_bite.gd` 50, `test_creature_marker.gd` 293,
+  `test_fight_is_loseable.gd` 6, `test_battle_loop.gd` 8,
+  `test_player_dodge.gd` 21, `test_creature_behavior.gd` 53,
+  `test_ethogram.gd` 52, `test_alp.gd` 21, `test_curupira.gd` 16,
+  `test_npc_marker_hunting.gd` 33, `test_world_arena_command.gd` 10 —
+  green. Nine existing tests asserted the instantaneous model and were
+  **rewritten to drive the windup**, not deleted; each drives the
+  creature's own remaining clock rather than a round number, so they cannot
+  go stale when a species' telegraph changes.
+
+  Named gaps: a creature **rooted** mid-strike still bites (what a root
+  takes is its footing) but its rear-up stops building, because that early
+  return skips the animation step. Beyond 200 px one step can advance
+  ~0.49 s, so a distant windup can start and resolve untelegraphed — and
+  `_nearest_player_position` returns the *first* player rather than the
+  nearest, so in multiplayer a creature biting the far player is throttled
+  and its tell is invisible to them.
+
 - ✅ **Dodge gets a key — the verb the whole predator table was balanced
   against** (2026-09-21) — see the new `concept/dodge.md`.
 

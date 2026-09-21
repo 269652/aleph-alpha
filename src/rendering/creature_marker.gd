@@ -39,6 +39,7 @@ const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const EcologicalGrudge = preload("res://src/gameplay/ecological_grudge.gd")
 const NightMare = preload("res://src/gameplay/night_mare.gd")
 const HitFlash = preload("res://src/rendering/hit_flash.gd")
+const BiteTell = preload("res://src/rendering/bite_tell.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
 ## The play-scale tile in pixels, for converting a species profile's
 ## tiles-per-second pace into this scene's own pixel speeds. Restated
@@ -905,6 +906,7 @@ func _process(frame_delta: float) -> void:
 		return
 	_step_one_shot(delta)
 	_attack_cooldown_remaining = maxf(0.0, _attack_cooldown_remaining - delta)
+	_windup_step(delta)
 	# Always ages, regardless of which branch below this creature takes --
 	# a courting/restrained/tamed juvenile still grows up (see _step_growing).
 	_step_growing(delta)
@@ -1930,10 +1932,20 @@ func _apply_action_scale(uses_illustrated: bool, action: String = "walk") -> voi
 	# normal size once mature -- the mammal counterpart to
 	# AmbientFlyerMarker._step_growing's own adult_scale * size_scale_at.
 	var new_scale := _base_scale * MammalGrowth.size_scale_at(age_seconds, info.species)
+	# The rear-up before a strike (BiteTell, docs/concept/predator_profiles.
+	# md), folded in HERE rather than written onto `scale` from outside --
+	# this line runs on every stepped frame and would revert an external
+	# bump within one of them. Exactly Vector2.ONE when nothing is coming,
+	# so there is no restore branch to get wrong.
+	#
+	# _shadow_base_scale deliberately keeps the UNREARED size: a shadow is
+	# cast on the ground by a body that has not moved, and growing it with
+	# the rear-up would read as the animal rising off its own shadow.
+	_shadow_base_scale = new_scale
+	new_scale *= BiteTell.scale_multiplier(_windup_remaining, _windup_total)
 	if new_scale == scale:
 		return
 	scale = new_scale
-	_shadow_base_scale = new_scale
 
 
 ## How fast a serpent can swing its heading, in radians/sec. A snake is a
@@ -2362,6 +2374,14 @@ func _apply_decision(decision: Dictionary, delta: float) -> void:
 		# it. Measured at the time: a wall one tile ahead, and the animal
 		# crossed two full tiles through it in a single 0.5s step.
 		"attack":
+			# _advance_gated is where the plant-to-strike freeze lives, so
+			# this reads exactly as it always did: a committed creature
+			# simply does not advance. Measured across the twelve biting
+			# profiles, a creature that kept closing during its own windup
+			# would defeat the player's dodge for ten of them -- a bear
+			# closes 62.2 px in its 0.90 s, against a dodge worth 20.
+			# Frozen, the gap at resolve is always R + 20 > 16
+			# (docs/concept/predator_profiles.md).
 			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_attack(_stimulus_node(decision))
 			_current_action = "attack"
@@ -2474,21 +2494,87 @@ func _try_attack(target: Node) -> void:
 	# whether or not it ever reaches this path.
 	if info != null and NightMare.presses_instead_of_striking(info.species):
 		return
+	if _windup_remaining > 0.0:
+		return  # already committed -- the clock resolves it, not a second decision
 	if position.distance_to(target.position) > ATTACK_RANGE:
 		return
-	if target.has_method("take_damage"):
-		# What THIS animal bites for, not one number every species shares
-		# (docs/concept/predator_profiles.md). Measured before SpeciesBite:
-		# a mouse and a bear both bit for ATTACK_DAMAGE 6.0 on the same
-		# 0.8 s cooldown, so the world's difficulty rings gated which
-		# species may spawn while gating nothing a player could feel. A
-		# species with no profile of its own falls back to the shared
-		# constants rather than dealing nothing.
-		target.take_damage(bite_damage())
-		if VENOMOUS_SPECIES.has(info.species) and target.has_method("apply_venom"):
-			target.apply_venom()
-		_try_transmit_predator_disease(target)
+	if not target.has_method("take_damage"):
+		return
+	# The telegraph this species is owed, from the table that has carried it
+	# since it was written and never had a caller
+	# (docs/concept/predator_profiles.md). It takes the TARGET's own live max
+	# health by design -- a frailer character is warned longer, not less --
+	# so the number is read here, where the target is known, rather than
+	# baked per species.
+	var windup := SpeciesBite.windup_seconds_for(info.species, _max_health_of(target))
+	if windup <= 0.0:
+		# A species with no bite is owed no telegraph, and a zero-length
+		# windup must not become a state a grazer sits in every frame.
+		_land_bite(target)
+		return
+	_windup_remaining = windup
+	_windup_total = windup
+	_windup_target_id = target.get_instance_id()
+
+
+## What the jaws finally close on, or nothing.
+##
+## The range is re-checked against the target's CURRENT position, and that
+## check is the whole reason a dodge is worth anything: without it the
+## windup is a delayed guaranteed hit whose only counter is the player's
+## 0.25 s invincibility boolean -- a window that always ends exactly when
+## the jaws close, so reacting on the FIRST frame of the tell would be
+## punished on eleven of the twelve biting species.
+##
+## A miss still charges the recovery, so a dodge buys TIME rather than one
+## skipped hit.
+func _resolve_windup() -> void:
+	var target := instance_from_id(_windup_target_id) as Node2D
+	_windup_target_id = 0
+	_windup_total = 0.0
+	if target == null or not is_instance_valid(target) or info == null or _dying:
+		return
+	# A miss costs the recovery too, which is what makes a dodge buy TIME
+	# rather than one skipped hit. Charged here for the miss and inside
+	# _land_bite for the hit -- never both, which an adversarial read of
+	# this function caught as a redundant double assignment.
+	if position.distance_to(target.position) > ATTACK_RANGE:
 		_attack_cooldown_remaining = bite_cooldown_seconds()
+		return  # the jaws closed on empty ground
+	if target.has_method("take_damage"):
+		_land_bite(target)
+	else:
+		_attack_cooldown_remaining = bite_cooldown_seconds()
+
+
+## The bite itself, once something is really there to bite.
+##
+## What THIS animal bites for, not one number every species shares
+## (docs/concept/predator_profiles.md). Measured before SpeciesBite: a mouse
+## and a bear both bit for ATTACK_DAMAGE 6.0 on the same 0.8 s cooldown, so
+## the world's difficulty rings gated which species may spawn while gating
+## nothing a player could feel. A species with no profile of its own falls
+## back to the shared constants rather than dealing nothing.
+func _land_bite(target: Node) -> void:
+	target.take_damage(bite_damage())
+	if VENOMOUS_SPECIES.has(info.species) and target.has_method("apply_venom"):
+		target.apply_venom()
+	_try_transmit_predator_disease(target)
+	_attack_cooldown_remaining = bite_cooldown_seconds()
+
+
+## The target's own live maximum health, for the telegraph it is owed. A
+## player carries `max_health`; a creature carries `info.max_health`. Falls
+## back to the table's own reference player rather than to zero, which
+## `required_windup_seconds` reads as "warn them for the maximum".
+func _max_health_of(target: Node) -> float:
+	var direct = target.get("max_health")
+	if direct != null and float(direct) > 0.0:
+		return float(direct)
+	var target_info = target.get("info")
+	if target_info != null and float(target_info.max_health) > 0.0:
+		return float(target_info.max_health)
+	return SpeciesBite.PLAYER_REFERENCE_MAX_HEALTH
 
 
 ## Predator (rabies-like) disease transmission: rides this SAME bite,
@@ -2732,6 +2818,18 @@ func _fence_blocks_movement(heading: Vector2) -> bool:
 ## trees, but must not be talked out of running by the very thing it's
 ## running from.
 func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats: bool) -> void:
+	# An animal that has planted itself to strike does not move, whatever
+	# the AI decides this frame (docs/concept/predator_profiles.md).
+	#
+	# The guard lives at the single movement choke point rather than in the
+	# "attack" arm, and that is a measured correction rather than tidiness:
+	# a committed creature whose decision flips -- to wander, to graze, to
+	# flee -- was still free to walk away from its own bite, and a bear's
+	# 0.90 s telegraph is long enough to do it. The jaws then closed on
+	# empty ground it had left itself.
+	if is_winding_up():
+		_is_moving = false
+		return
 	if _gate_standing:
 		# The gate already said "nowhere to go" this sensing window -- hold
 		# idle until fresh senses instead of re-scanning every candidate
@@ -3408,6 +3506,49 @@ func _disease_aware_base() -> Color:
 	return base_modulate()
 
 
+# -- the telegraph (docs/concept/predator_profiles.md) ---------------------
+#
+# SpeciesBite's windup_seconds column was authored, fairness-tested and
+# balanced against the player's own dodge -- and completely dead. A bite
+# landed on the frame a creature crossed ATTACK_RANGE, so the whole
+# fairness model was arithmetic about a thing that never happened.
+
+## Seconds left before the jaws close, and how long the whole rear-up was
+## (the tell reads the ratio, so it has to remember both).
+var _windup_remaining := 0.0
+var _windup_total := 0.0
+
+## Who it committed to. An instance id rather than a reference: the target
+## can legitimately be freed mid-windup, and _resolve_windup re-validates
+## exactly as _stimulus_node already does.
+var _windup_target_id := 0
+
+
+func is_winding_up() -> bool:
+	return _windup_remaining > 0.0
+
+
+func windup_remaining() -> float:
+	return _windup_remaining
+
+
+## One frame of the jaws coming. Ticked beside the bite cooldown, ABOVE
+## every early return, so a commitment keeps running through a shove, a
+## root or a lost target -- what a shove buys is DISTANCE, and distance is
+## what _resolve_windup's range check reads.
+##
+## Being hit deliberately does NOT cancel it: the player's own swing is on
+## a 0.5 s cooldown, shorter than eleven of the twelve windups, so an
+## interrupt would make every heavy predator unbiteable again -- the exact
+## unloseable fight this overhaul just finished removing.
+func _windup_step(delta: float) -> void:
+	if _windup_remaining <= 0.0:
+		return
+	_windup_remaining = maxf(0.0, _windup_remaining - delta)
+	if _windup_remaining <= 0.0:
+		_resolve_windup()
+
+
 func take_damage(amount: float) -> void:
 	if info == null or _dying:
 		return  # already dead, just not finished falling over -- a corpse
@@ -3742,6 +3883,14 @@ func _die() -> void:
 	# aggregate restocking whatever the player just hunted is the exact bug
 	# this booking was added to close.
 	_book_death_against_the_region()
+	# The clock and the pose go together: a creature killed mid-strike must
+	# not keep a windup running, or -- once any species ships death art and
+	# _dying is really set -- it would stay visibly reared over its own
+	# corpse for the whole death row, because _apply_action_scale still runs
+	# from that branch (docs/concept/predator_profiles.md).
+	_windup_remaining = 0.0
+	_windup_total = 0.0
+	_windup_target_id = 0
 	if _begin_one_shot("death"):
 		_dying = true
 		return  # the body collapses first; _finish_dying lands the carcass
@@ -4010,5 +4159,23 @@ func struck_by(attacker: Node, amount: float, force: Vector2 = Vector2.ZERO) -> 
 
 
 func apply_knockback(force: Vector2) -> void:
+	# An animal that has planted itself to strike is BRACED, and a braced
+	# animal is not shoved (docs/concept/predator_profiles.md).
+	#
+	# Not flavour -- the hole the freeze opens, measured rather than
+	# reasoned about. The freeze is what makes the dodge real, because a
+	# creature that kept closing would defeat it for ten of the twelve
+	# biting profiles. But a frozen creature cannot close again either, so
+	# any shove during a windup would make the bite whiff: a bear is shoved
+	# 8 px per swing and winds up for 0.90 s, during which the player's
+	# 0.5 s swing lands twice. Sixteen pixels, and the jaws close on nothing
+	# for ever -- precisely the unloseable fight this overhaul had just
+	# finished removing.
+	#
+	# The asymmetry IS the design: moving yourself out of reach answers a
+	# bite; shoving the animal does not. Being struck still hurts it and
+	# still makes it angry (see struck_by) -- only its footing is unmoved.
+	if is_winding_up():
+		return
 	_knockback_remaining = force
 	_knockback_time_remaining = KNOCKBACK_DURATION
