@@ -671,11 +671,28 @@ and most species have no loot row so they vanish on death.
   existing caution tests protect, not one of which uses a predator, which
   is exactly why none of them caught this.
 
-  Tests: `test_predator_initiative.gd` 6 (new), `test_creature_marker.gd`
+  **What the fix does, stated exactly.** Removing the repulsion removes a
+  *wall*; it does not add a *pull*. Beyond `SENSE_RADIUS` the player is not
+  published as a stimulus at all, so a predator's approach is still an
+  undirected wander — it is now merely *allowed* to cross its own
+  perception boundary, where the bias used to erase the inward component
+  precisely there. A hunter that really *seeks* a player it has not yet
+  seen needs the player published as a stimulus beyond `SENSE_RADIUS`
+  (a scent channel at the species' authored `sense_radius_tiles`, which is
+  itself still dead). That is not built, and is recorded as such in
+  `concept/predator_profiles.md`.
+
+  Tests: `test_predator_initiative.gd` 8 (new), `test_creature_marker.gd`
   293, `test_creature_behavior.gd` 53, `test_creature_info.gd` 60 — green.
-  The new suite's closing test drove a wolf from 120 px for ten seconds and
-  measured it **ending at 299 px** — it had been pushed further out the
-  whole time.
+  The three closing assertions are deterministic single steps — a hunter's
+  inward step survives intact, a grazer's is still deflected, and the ramp
+  measures **0.00 inward at exactly `SENSE_RADIUS`** — because the first
+  draft was not. That draft drove a wolf from 120 px for ten seconds and
+  asserted it ended inside `SENSE_RADIUS`; it passed on the run after the
+  fix and then failed three runs at **148, 230 and 330 px**. An earlier
+  version of this entry quoted its red measurement ("ending at 299 px")
+  alongside that green claim; the claim is withdrawn, and with it any
+  implication that a predator now closes on a player it cannot perceive.
 
 - ✅ **A lit campfire was a twenty-tile no-predator zone** (2026-09-21) —
   see `concept/olfaction.md` and `concept/ethogram.md`.

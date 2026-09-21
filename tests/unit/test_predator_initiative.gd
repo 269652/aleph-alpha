@@ -104,18 +104,65 @@ func test_a_tamed_animal_neither_fears_nor_avoids():
 	assert_false(deer.steers_clear_of_players())
 
 
-# -- and it can really close --------------------------------------------
+# -- and the wall is really gone -----------------------------------------
 
-## The whole point, driven rather than argued: a wolf that starts outside
-## its own perception radius must be able to reach it.
-func test_a_wolf_can_close_on_a_player_it_has_not_sensed_yet():
+## What the fix actually guarantees, stated exactly.
+##
+## A first draft of this test drove a wolf for ten seconds from 120 px and
+## asserted it ended inside SENSE_RADIUS. It passed on the run that
+## followed the fix and then failed three times running at 148, 230 and
+## 330 px -- because the claim was too strong. Removing the repulsion
+## removes a WALL; it does not add a PULL. Beyond `SENSE_RADIUS` the player
+## is not published as a stimulus at all, so a predator's approach is an
+## undirected wander until it crosses that line, and whether one particular
+## wander crosses it is a coin toss.
+##
+## So the assertion is the thing that really changed, and it is
+## deterministic: a step a hunter takes TOWARD a player keeps its inward
+## component, where it used to have it stripped on a ramp that reached full
+## strength at exactly the perception boundary.
+func test_a_hunter_walking_toward_a_player_is_no_longer_pushed_back():
 	await get_tree().process_frame
-	var wolf = _creature("wolf", Vector2(120.0, 0.0))
-	var start: float = wolf.position.distance_to(player.position)
-	assert_gt(start, CreatureMarker.SENSE_RADIUS, "precondition: it cannot perceive them yet")
-	for _i in 600:
-		wolf._process(FRAME)
-	assert_lt(
-		wolf.position.distance_to(player.position), CreatureMarker.SENSE_RADIUS,
-		"a predator that cannot reach its own perception radius can never start a fight"
+	var wolf = _creature("wolf", Vector2(100.0, 0.0))
+	wolf._process(FRAME)  # one sensing tick, so the caution list is built
+	# Put it back exactly where it was: that tick also MOVED it, and this
+	# assertion is about a specific distance.
+	wolf.position = Vector2(100.0, 0.0)
+	var toward := Vector2.LEFT  # from (100, 0) toward the player at the origin
+	var biased: Vector2 = wolf._caution_biased_step(toward)
+	assert_almost_eq(
+		biased.x, toward.x, 0.0001,
+		"a hunter's step toward a player must survive intact"
+	)
+
+
+## And a grazer's does not: the behaviour the five existing caution tests
+## protect, asserted here too so this fix cannot quietly widen.
+func test_a_grazer_walking_toward_a_player_is_still_pushed_back():
+	await get_tree().process_frame
+	var deer = _creature("deer", Vector2(100.0, 0.0))
+	deer._process(FRAME)
+	deer.position = Vector2(100.0, 0.0)
+	var toward := Vector2.LEFT
+	var biased: Vector2 = deer._caution_biased_step(toward)
+	assert_gt(
+		biased.x, toward.x,
+		"a calm animal still gives a person a wide berth while roaming"
+	)
+
+
+## The ramp is why the wall was absolute: it reaches full strength at
+## exactly SENSE_RADIUS, the distance at which a predator would first
+## perceive the player at all -- so the inward component was not reduced
+## there, it was ZERO. That coincidence is what this fix is about, and it
+## is asserted rather than left as a comment.
+func test_the_ramp_really_saturated_at_the_perception_boundary():
+	await get_tree().process_frame
+	var deer = _creature("deer", Vector2(CreatureMarker.SENSE_RADIUS, 0.0))
+	deer._process(FRAME)
+	deer.position = Vector2(CreatureMarker.SENSE_RADIUS, 0.0)
+	var biased: Vector2 = deer._caution_biased_step(Vector2.LEFT)
+	assert_almost_eq(
+		biased.x, 0.0, 0.0001,
+		"at its own sense radius the inward step was not reduced, it was erased"
 	)

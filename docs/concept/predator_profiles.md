@@ -380,7 +380,8 @@ and suddenly plants is very readable.
   `windup_seconds` was a fairness-tested column with no runtime consumer at
   all, so the whole fairness model above was arithmetic about something
   that never happened.
-- ✅ **A predator can start a fight now** (2026-09-21).
+- ✅ **A predator is no longer walled off from starting a fight**
+  (2026-09-21).
   `CreatureMarker.fears_players()` is literally `not is_tame()`, so it was
   true for every untamed creature — and it was the sole gate on the
   wander-avoidance list. The bias built from it ramps
@@ -402,6 +403,23 @@ and suddenly plants is very readable.
   grazer still keeps its distance, which is what ended the flee hysteria
   the five existing caution tests were written for; not one of them uses a
   predator, which is why none of them would have caught this.
+
+  **What this does not do.** Removing the repulsion removes a *wall*; it
+  does not add a *pull*. Beyond `SENSE_RADIUS` the player is not published
+  as a stimulus at all, so a hunter's approach to a player it has not yet
+  perceived is an undirected wander — now merely *permitted* to cross the
+  boundary instead of being stopped dead at it. The fairness numbers above
+  all describe a fight already joined, and they are unaffected; what is
+  still missing is the *approach*. A predator that really seeks you needs
+  the player published as a stimulus out to the species' authored
+  `sense_radius_tiles` — the same dead column listed below, which is why
+  wiring it is the one change that would turn this from a removed wall into
+  a hunt. `test_predator_initiative.gd` asserts only what is true: a
+  hunter's inward step survives intact, a grazer's is still deflected, and
+  the old ramp measured **0.00 inward at exactly `SENSE_RADIUS`**. A draft
+  that asserted a wolf closes from 120 px within ten seconds passed once
+  and then failed three runs at 148, 230 and 330 px; a random walk is not
+  a hunt, and the suite no longer claims it is.
 
 - 🚧 **Wiring, partly.** `bite_damage`, `bite_cooldown_seconds`,
   `windup_seconds` and `pursuit_speed_tiles_per_second` all reach the live
