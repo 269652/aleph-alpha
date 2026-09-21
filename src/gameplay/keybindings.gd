@@ -32,6 +32,12 @@ const ACTIONS := [
 	# other action except M/N/O; N for "eNter" is a real, available key.
 	{"action": "enter", "label": "Enter / Leave Building", "default": KEY_N},
 	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
+	# Sleeping through a night (docs/concept/sleep.md). NOT R -- every
+	# letter on the keyboard is already bound (R is primary_action), which
+	# test_keybindings.gd caught the moment this verb tried to take one.
+	# A number would read as a sixth hotbar slot, so it gets the first
+	# punctuation key with nothing attached to it.
+	{"action": "rest", "label": "Rest Until First Light", "default": KEY_PERIOD},
 	# The "put this down" complement to E's "pick this up into hand" (see
 	# docs/concept/stone.md's held-item concept, generalized to any real
 	# physical object in docs/concept/wild_crops.md) -- stashes whatever

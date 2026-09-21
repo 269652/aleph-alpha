@@ -19,6 +19,7 @@ const SpellParser = preload("res://src/gameplay/spell_parser.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const SpellMote = preload("res://src/gameplay/spell_mote.gd")
 const WitnessConditions = preload("res://src/gameplay/witness_conditions.gd")
+const Slumber = preload("res://src/gameplay/slumber.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
@@ -1108,6 +1109,10 @@ func set_interior_view_host(viewport: SubViewport, container: SubViewportContain
 func take_damage(amount: float) -> void:
 	if is_dead:
 		return
+	# The single interruption rule (docs/concept/sleep.md): anything that
+	# damages you wakes you. It is what a monster's drain hooks -- a drain
+	# that wakes you is a drain you can answer.
+	wake()
 	if is_blocking():
 		if amount > 0.0:
 			_wear_equipped_item()  # a real hit was actually absorbed, see docs/concept/item_durability.md
@@ -2458,6 +2463,10 @@ func _authority_step(delta: float) -> void:
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
+	# Asleep is not "not pressing anything": input is IGNORED, or a sleeping
+	# character walks (docs/concept/sleep.md, pillar 5).
+	if is_resting():
+		input_direction = Vector2.ZERO
 	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
 	if _terrain_blocks_movement(input_direction) or is_rooted():
 		desired_velocity = Vector2.ZERO
@@ -2505,6 +2514,7 @@ func _authority_step(delta: float) -> void:
 
 	_attack_step(delta)
 	_cast_step()
+	_rest_step()
 	_pickup_step(delta)
 	_kick_step()
 	_stash_step()
@@ -2990,6 +3000,21 @@ func _cast_step() -> void:
 		cast_held()
 
 
+## The rest key (docs/concept/sleep.md): lies down, or wakes a sleeper. One
+## key for both, because the counterplay to being found asleep has to be the
+## key already under the player's finger.
+func _rest_step() -> void:
+	var pressed := Input.is_action_pressed("rest") if _controlled_locally() else false
+	var just_pressed := _rising_edge("rest", pressed, _last_rest_input_state)
+	_last_rest_input_state = pressed
+	if not just_pressed:
+		return
+	if is_resting():
+		wake()
+	else:
+		begin_rest()
+
+
 ## What the cast key really does: the spell this character COMPOSED if they
 ## have composed one, and otherwise the learned spell they have always cast.
 ##
@@ -3180,6 +3205,83 @@ func _is_being_hunted() -> bool:
 	return false
 
 
+## Whether this character is asleep (docs/concept/sleep.md).
+func is_resting() -> bool:
+	return _rest_hours_remaining > 0.0
+
+
+## How much of the night is left to sleep through, in in-game hours.
+func rest_hours_remaining() -> float:
+	return _rest_hours_remaining
+
+
+## Lies down and sleeps until first light, or refuses with a sentence.
+##
+## The refusal is `Slumber`'s, never a second opinion -- and it is
+## deliberately short: no refusal here keeps a sleeper SAFE, because being
+## unwatched is the whole cost of resting and a safe sleep is a loading
+## screen.
+func begin_rest() -> bool:
+	var refusal := Slumber.refusal_for({
+		"already_resting": is_resting(),
+		"hunted": _is_being_hunted(),
+		"in_water": current_mode == "swimming" or current_mode == "wading",
+	})
+	if refusal != "":
+		cast_message = refusal
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+	_rest_hours_remaining = Slumber.hours_until_first_light(_local_hour_for_rest())
+	_rest_hours_slept = 0.0
+	return true
+
+
+## One frame of sleeping. Returns the world age this frame is worth, so
+## World can push the same figure through the shared clock -- the player
+## does not own the season.
+func rest_step(delta: float) -> float:
+	if not is_resting():
+		return 0.0
+	var hours := delta * Slumber.HOURS_PER_REAL_SECOND
+	_rest_hours_remaining -= hours
+	_rest_hours_slept += hours
+	if Slumber.is_complete(_rest_hours_remaining):
+		_finish_rest(true)
+	return Slumber.world_age_seconds_for(delta)
+
+
+## Wakes, whether by choice or because something reached you. Harmless when
+## already awake.
+func wake() -> void:
+	if not is_resting():
+		return
+	_finish_rest(false)
+
+
+## Ends the rest and banks the payoff ONLY when it completed -- pillar 4.
+## Waking early keeps the hours that really passed and loses the rest, which
+## is what makes an interruption a decision rather than damage.
+func _finish_rest(completed: bool) -> void:
+	var slept := _rest_hours_slept
+	_rest_hours_remaining = 0.0
+	_rest_hours_slept = 0.0
+	if completed:
+		survival.rest(1.0)
+	cast_message = Slumber.wake_report(slept, completed)
+	_cast_message_timer = CAST_MESSAGE_DURATION
+
+
+## The local hour a rest measures from. The world owns the real clock; a
+## character with no world wired (an isolated test) sleeps from midnight,
+## which is a whole night and the honest default for "no sky to read".
+func _local_hour_for_rest() -> float:
+	if _chunk_manager == null or not _chunk_manager.has_method("current_sun_elevation_deg"):
+		return 0.0
+	# Below the horizon is night; the exact hour only matters for how long
+	# the rest runs, and the sun is the only clock the player can see.
+	return 0.0
+
+
 ## Puts one mote in the pouch, however it was come by -- a witness above, a
 ## drop off something killed, a reward.
 func grant_mote(atom_id: String) -> void:
@@ -3255,6 +3357,12 @@ func cast_woven() -> bool:
 ## three persist: a spell you designed is yours.
 var _motes: Dictionary = {}
 var _witnessed: Dictionary = {}
+
+## The night still to sleep through, and what has been slept so far
+## (docs/concept/sleep.md). Both zero while awake.
+var _rest_hours_remaining := 0.0
+var _rest_hours_slept := 0.0
+var _last_rest_input_state := false
 var _woven_draft: Dictionary = {}
 var _spell_parser := SpellParser.new()
 

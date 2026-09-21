@@ -175,6 +175,11 @@ const FEEDBACK := {
 	"enter": {"sound": "door", "flash": FLASH_NONE, "floats": FLOAT_NONE, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
 	"lasso": {"sound": "rope_throw", "flash": FLASH_NONE, "floats": FLOAT_NONE, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
 	"mount": {"sound": "mount", "flash": FLASH_NONE, "floats": FLOAT_NONE, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
+	# Lying down for a night (docs/concept/sleep.md): the most deliberate
+	# act in the game -- it hands the next several hours to the world --
+	# and the one whose whole result is a SENTENCE, since what a sleeper
+	# wants to know on waking is how much of the night they got.
+	"rest": {"sound": "rest", "flash": FLASH_NONE, "floats": FLOAT_NONE, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
 	# Cast and reel is a held level, polled every frame: slow interval for
 	# the same reason sprint's is.
 	"fish": {"sound": "cast_line", "flash": FLASH_NONE, "floats": FLOAT_ITEM, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},

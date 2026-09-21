@@ -7679,6 +7679,14 @@ func _process(delta: float) -> void:
 		_chunk_manager.advance_world_age(
 			TimeLapse.calendar_seconds(delta, _ecology_time_scale)
 		)
+		# A sleeping character puts the night behind them through this SAME
+		# clock (docs/concept/sleep.md) -- the door /ecotest's TimeLapse
+		# already uses -- so the sun, the season, the fruit and the ecology
+		# all move together and a rest never runs on a second clock. The
+		# player counts its own hours down and hands back what the frame was
+		# worth; World only pushes it.
+		if focus_player != null and focus_player.is_resting():
+			_chunk_manager.advance_world_age(focus_player.rest_step(delta))
 		# Real in-flight regional-trade caravans (see docs/concept/trade.md)
 		# read the clock rather than a delta, so they belong with the clock:
 		# once, right after it moves. They used to run per slice, back when
