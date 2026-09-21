@@ -3502,6 +3502,32 @@ func _mushroom_effect_step(delta: float) -> void:
 	active_mushroom_debuffs = _debuff_stack.advance(active_mushroom_debuffs, delta)
 
 
+## Shows or hides every status bar this marker carries -- health, and the
+## taming trust bar above it. For a marker being used as SCENERY rather
+## than as a live animal: the character creator's own ambient boar (see
+## CharacterPreviewDiorama) is a real marker, so it arrived wearing the
+## world's combat UI, and a red health bar floating over a character
+## portrait is nobody's idea of a portrait.
+##
+## Deliberately a method here rather than the caller reaching into
+## _health_bar_bg/_health_bar_fill/_trust_bar: which bars exist, and which
+## of them are independently gated (the trust bar only shows while the
+## player is genuinely in the taming loop -- see _trust_bar's own gate), is
+## this marker's business, and a caller poking at children would silently
+## miss the next bar added. Hiding is one-way for exactly that reason: the
+## trust bar's own gate decides when it comes back.
+func set_status_bars_visible(shown: bool) -> void:
+	for bar in [_health_bar_bg, _health_bar_fill, _trust_bar]:
+		if bar != null and not shown:
+			bar.visible = false
+	if not shown:
+		return
+	if _health_bar_bg != null:
+		_health_bar_bg.visible = true
+	if _health_bar_fill != null:
+		_health_bar_fill.visible = true
+
+
 func _update_health_bar() -> void:
 	if info == null or _health_bar_fill == null:
 		return

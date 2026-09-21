@@ -103,7 +103,10 @@ func test_build_creates_the_expected_number_of_butterflies():
 func test_build_creates_one_ambient_boar():
 	assert_not_null(diorama.boar_node)
 	assert_true(diorama.boar_node.is_inside_tree())
-	assert_eq(diorama.boar_node.position, diorama.get("_layout").boar_position)
+	# global_position: the boar hangs under a scaling holder now (see
+	# _build_boar), so its own position is local to that holder. Where it
+	# STANDS in the scene is what the layout decided and what this is about.
+	assert_eq(diorama.boar_node.global_position, diorama.get("_layout").boar_position)
 
 
 ## The pond is a Node2D grouping several tile sprites now (see the grid
@@ -134,12 +137,16 @@ func _pond_tiles() -> Array:
 	return pond.get_children()
 
 
-func test_pond_tiles_cover_a_grid_at_the_real_worlds_own_tile_size():
+func test_pond_tiles_cover_a_grid_of_the_ponds_own_cells():
 	var tiles := _pond_tiles()
 	assert_gt(tiles.size(), 1, "a single stretched tile is exactly the bug being fixed")
+	# One POND CELL each, not one world tile -- the grid's resolution is a
+	# fixed cell COUNT now (see POND_GRID_COLUMNS), so its cells are as big
+	# as the pond divided by that count.
+	var cell: float = CharacterPreviewDioramaScript._pond_cell_world_size(diorama.get("_layout"))
 	for tile in tiles:
-		assert_almost_eq(tile.scale.x * tile.texture.get_width(), CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE, 0.01)
-		assert_almost_eq(tile.scale.y * tile.texture.get_height(), CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE, 0.01)
+		assert_almost_eq(tile.scale.x * tile.texture.get_width(), cell, 0.01)
+		assert_almost_eq(tile.scale.y * tile.texture.get_height(), cell, 0.01)
 
 
 ## A tile with no land-facing side at all must be the real world's own
@@ -707,15 +714,33 @@ func test_the_hero_stops_rippling_once_it_holds_still_in_the_water():
 	diorama._enter_action(CharacterActionPicker.Action.FISH)
 	diorama.set("_action_time_remaining", 1000.0)
 	var previous_count := 0
+	var previous_position: Vector2 = diorama.character_view.position
 	var new_ripple_while_still := false
+	var held_still_in_water := false
 	for i in 300:
 		diorama._process(0.1)
 		var current_count: int = diorama.get("_water_shader")._disturbance_positions.size()
-		var arrived: bool = diorama.character_view.position.distance_to(fishing_spot) <= 2.5
-		if arrived and current_count > previous_count:
-			new_ripple_while_still = true
+		# "Holding still" means the hero did not MOVE this step -- not that
+		# it is within some tolerance of its target. A distance tolerance
+		# reads as "arrived" the instant the hero is that close, which at
+		# the shipped pond size is before it has even finished wading in:
+		# the wade spot sits 0.15 * pond_radius inside the rim, less than
+		# 2.5 world units, so a tolerance that size counts the deliberate
+		# entry splash (see _process's own "just_entered_water" branch) as
+		# a ripple made while standing still. This is the property the test
+		# was always about.
+		var still: bool = diorama.character_view.position == previous_position
+		var in_water: bool = (
+			diorama.character_view.movement_state == diorama.character_view.MovementState.SWIMMING
+		)
+		if still and in_water:
+			held_still_in_water = true
+			if current_count > previous_count:
+				new_ripple_while_still = true
 		previous_count = current_count
-	assert_false(new_ripple_while_still, "a new ripple was recorded while the hero was holding still, already arrived, in the water")
+		previous_position = diorama.character_view.position
+	assert_true(held_still_in_water, "precondition: the hero has to actually reach the water and stop in it")
+	assert_false(new_ripple_while_still, "a new ripple was recorded while the hero was holding still in the water")
 
 
 # -- incremental build ---------------------------------------------------
@@ -872,3 +897,238 @@ func test_ground_tiles_share_one_texture_per_distinct_variant():
 		)
 	)
 	assert_gt(textures.size(), 1, "sharing must not collapse the whole ground onto one variant")
+
+
+# -- the pond's silhouette resolves independently of how big it is --------
+#
+# The grid that renders the pond used to size its cells at one WORLD tile,
+# which made the pond's own shape depend on how big the pond happened to
+# be: the erosion pass that gives it an organic edge only has as much
+# detail as it has cells. At the halved footprint (see FOOTPRINT's own doc
+# comment) the whole pond came out 2 cells wide -- no interior left to keep
+# solid, nothing to erode, and a centre cell that bordered the shore on
+# every side. A fixed cell COUNT resolves the silhouette the same way at
+# any pond size.
+
+
+func test_the_pond_grid_resolves_at_a_fixed_cell_count_not_a_fixed_cell_size():
+	var layout = diorama.get("_layout")
+	assert_eq(
+		CharacterPreviewDioramaScript._pond_columns_for(layout),
+		CharacterPreviewDioramaScript.POND_GRID_COLUMNS
+	)
+	# ...and a pond of a completely different size resolves at the same
+	# count, which is the whole point.
+	var bigger = CharacterPreviewLayout.generate(42, Vector2(400, 200))
+	assert_eq(
+		CharacterPreviewDioramaScript._pond_columns_for(bigger),
+		CharacterPreviewDioramaScript.POND_GRID_COLUMNS
+	)
+
+
+## Cells stay square whatever the pond's aspect ratio, so the erosion noise
+## reads the same along both axes -- a grid of tall thin cells would nibble
+## the top and bottom edges visibly harder than the sides.
+func test_pond_cells_are_square_at_any_aspect_ratio():
+	for footprint in [Vector2(96, 48), Vector2(400, 200), Vector2(120, 120)]:
+		var layout = CharacterPreviewLayout.generate(7, footprint)
+		var cell: float = CharacterPreviewDioramaScript._pond_cell_world_size(layout)
+		var rows: int = CharacterPreviewDioramaScript._pond_rows_for(layout)
+		var covered_height := float(rows) * cell
+		assert_almost_eq(
+			covered_height / (layout.pond_half_size.y * 2.0), 1.0, 0.2,
+			"rows x cell size should cover the pond's own height at %s" % footprint
+		)
+
+
+## Enough cells, at the shipped footprint, for the erosion pass to have a
+## solid core AND a rim to nibble -- the property the organic silhouette
+## actually needs, checked against the real pond rather than the constant.
+func test_the_shipped_pond_has_both_a_solid_core_and_an_eroded_rim():
+	var layout = diorama.get("_layout")
+	var columns: int = CharacterPreviewDioramaScript._pond_columns_for(layout)
+	var rows: int = CharacterPreviewDioramaScript._pond_rows_for(layout)
+	assert_gte(columns, 6, "columns")
+	assert_gte(rows, 4, "rows")
+	var kept: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(columns, rows, 42)
+	assert_gt(kept.size(), 0)
+	assert_lt(kept.size(), columns * rows, "a pond that keeps every cell is a rectangle again")
+
+
+# -- staging: the hero is the subject, the rest is scenery ----------------
+
+
+## Two of the three rendered seeds put the hero half outside the frame --
+## clipped by the left edge on one and the right on the other -- because
+## every stroll target was sampled from the WHOLE footprint while the hero
+## is drawn around that point, not at it. The lane it walks is inset by its
+## own drawn extent now (CharacterPreviewLayout.hero_bounds).
+func test_no_stroll_target_can_put_the_hero_out_of_frame():
+	var lane: Rect2 = CharacterPreviewLayout.hero_bounds(CharacterPreviewDioramaScript.FOOTPRINT)
+	for attempt in 200:
+		var target: Vector2 = diorama._pick_new_target()
+		assert_true(
+			lane.has_point(target) or target == diorama.character_view.position,
+			"target %s is outside the hero's lane %s" % [target, lane]
+		)
+
+
+## Walked for real, not just sampled: the hero's own body stays inside the
+## frame for every step of a long stroll.
+func test_the_hero_never_walks_out_of_frame():
+	var footprint: Vector2 = CharacterPreviewDioramaScript.FOOTPRINT
+	var half_width := CharacterPreviewLayout.hero_drawn_width() * 0.5
+	var head := CharacterPreviewLayout.hero_drawn_height()
+	diorama._enter_action(CharacterActionPicker.Action.WANDER)
+	diorama.set("_action_time_remaining", 10000.0)
+	for step in 600:
+		diorama._process(0.1)
+		var at: Vector2 = diorama.character_view.position
+		assert_between(at.x, half_width - 0.01, footprint.x - half_width + 0.01, "step %d: x" % step)
+		assert_between(at.y, head - 0.01, footprint.y + 0.01, "step %d: y" % step)
+
+
+## A portrait is not a fight. The ambient boar is a real CreatureMarker, so
+## it arrives wearing the world's combat UI -- a red health bar floating
+## over the scenery in every rendered seed.
+func test_the_ambient_boar_wears_no_combat_ui():
+	for child in diorama.boar_node.get_children():
+		if child is ColorRect:
+			assert_false(child.visible, "a %s bar is showing over the diorama" % child.name)
+
+
+## The subject has to read as the subject. Measured (tools/probe_diorama_
+## subject_sizes.gd): the boar drew 46.5 world units tall against the
+## hero's 19.8 -- more than twice the height and three times the width, in
+## a panel whose whole job is to show the hero.
+func test_the_hero_reads_taller_than_the_ambient_boar():
+	# get_used_rect, NOT the texture's own height: every illustrated animal
+	# frame is composited onto one shared 340x330 canvas with its feet on a
+	# shared baseline (IllustratedAnimalSprite.CANVAS_SIZE/BASELINE_Y), so
+	# the texture is mostly transparent padding and its height says nothing
+	# about how big the animal reads. Measuring the canvas is how the first
+	# version of this test passed while the boar was still visibly dwarfing
+	# the hero in a rendered frame.
+	# Measured in WORLD space after the scene has been running, not off the
+	# marker's own local scale at the instant it was built. A CreatureMarker
+	# owns its scale: it recomputes it from its species profile and its
+	# current growth on every animation step (_apply_action_scale), so a
+	# value written to it from outside survives exactly until the marker's
+	# next frame -- which is why the first version of this passed while the
+	# boar still visibly dwarfed the hero in a rendered frame.
+	# The BOAR's own _process, called directly the way the real SceneTree
+	# calls it every frame in a live game -- the same convention
+	# test_fish_move_through_their_own_real_process uses. The diorama's own
+	# _process does not drive it (it is an independent node in the tree),
+	# so stepping only the diorama leaves the marker frozen on the scale it
+	# was built with and measures nothing.
+	# The marker is made to do the exact thing that broke this in a real
+	# rendered frame: write its own scale. _apply_action_scale recomputes it
+	# from the species profile on every animation step, so whatever the
+	# diorama wrote at build time lasted until the marker's next frame --
+	# measured live at 29.4 x 19.9 world units against the hero's 19.6
+	# (tools/probe_diorama_render.gd), while this assertion passed.
+	#
+	# Forced here rather than reached through _process, because which of
+	# _process's early-return branches a world-less marker takes is the
+	# marker's business and not what this test is about. What it IS about
+	# is that the staged size survives it.
+	diorama.boar_node.scale = Vector2.ONE * 4.0
+	for step in 5:
+		diorama._process(0.1)
+	var drawn: Rect2i = diorama.boar_node.texture.get_image().get_used_rect()
+	var boar_height: float = float(drawn.size.y) * diorama.boar_node.global_scale.y
+	assert_lt(
+		boar_height,
+		CharacterPreviewLayout.hero_drawn_height(),
+		"the ambient boar is drawn %.1f world units tall against the hero's %.1f" % [
+			boar_height, CharacterPreviewLayout.hero_drawn_height()
+		]
+	)
+
+
+## A fish asks whether the TILE it is over is water (FishMarker.
+## _compute_is_water_tile), and at the shipped scene the whole pond is
+## smaller than one real world tile -- so a centre-of-tile test answers
+## "grassland" for a fish swimming happily in the middle of the water, and
+## the fish stops dead. The pond was two tiles wide before the footprint
+## halved, which is the only reason this ever worked.
+func test_a_pond_smaller_than_a_world_tile_still_reads_as_water_to_a_fish():
+	var layout = diorama.get("_layout")
+	var tile_size: float = CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE
+	assert_lt(
+		layout.pond_half_size.x * 2.0, tile_size * 2.0,
+		"precondition: the shipped pond really is about one world tile across"
+	)
+	# Every point a fish can actually REACH, not just where it spawned: the
+	# fish checks the tile it wants to step onto before committing to it
+	# (FishMarker._compute_is_water_tile), so one land-reading tile inside
+	# its own wander circle is enough to freeze it where it floats.
+	var reach: float = layout.pond_radius * CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION
+	for step in 24:
+		var angle := TAU * float(step) / 24.0
+		var point: Vector2 = layout.pond_center + Vector2(cos(angle), sin(angle)) * reach
+		var tile := Vector2i(floori(point.x / tile_size), floori(point.y / tile_size))
+		assert_eq(
+			diorama.biome_at_global(tile.x, tile.y), "ocean",
+			"a fish can swim to %s, over tile %s, which reads as land" % [point, tile]
+		)
+
+
+## The other side of the same rule: a tile the pond does not reach at all
+## is still land, so the fish stays confined to the water.
+func test_a_tile_the_pond_does_not_reach_is_still_land():
+	assert_eq(diorama.biome_at_global(-100, -100), CharacterPreviewDioramaScript.GROUND_BIOME)
+	var layout = diorama.get("_layout")
+	var tile_size: float = CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE
+	var far_tile := Vector2i(
+		floori((layout.pond_center.x + tile_size * 4.0) / tile_size),
+		floori(layout.pond_center.y / tile_size)
+	)
+	assert_eq(diorama.biome_at_global(far_tile.x, far_tile.y), CharacterPreviewDioramaScript.GROUND_BIOME)
+
+
+## The creator opens on a composed frame, not on wherever a seed happened
+## to drop the hero. The first thing a player sees is this panel's still
+## first frame, and the hero was spawned at a random clear point across the
+## whole footprint -- which rendered, on one seed, as a hero tucked into
+## the left edge with the middle of the panel empty beside it. It starts
+## centre-stage in its own lane now and strolls out from there.
+func test_the_hero_opens_centre_stage():
+	var lane: Rect2 = CharacterPreviewLayout.hero_bounds(CharacterPreviewDioramaScript.FOOTPRINT)
+	for seed_value in [1, 42, 99, 1234, 4021]:
+		var staged = CharacterPreviewDioramaScript.new()
+		add_child(staged)
+		staged.build(seed_value)
+		assert_almost_eq(
+			staged.character_view.position.x, lane.get_center().x, 0.01,
+			"seed %d opened at %s" % [seed_value, staged.character_view.position]
+		)
+		assert_true(lane.has_point(staged.character_view.position), "seed %d" % seed_value)
+		remove_child(staged)
+		staged.free()
+
+
+## ...facing the camera while it does. This panel is a character portrait
+## before it is anything else, and the opening frame caught the hero from
+## behind whenever its first stroll target happened to lie upstage.
+func test_the_hero_opens_facing_the_camera():
+	for seed_value in [1, 42, 99, 1234, 4021]:
+		var staged = CharacterPreviewDioramaScript.new()
+		add_child(staged)
+		staged.build(seed_value)
+		var opened_at: Vector2 = staged.character_view.position
+		# Stepped, not just built: the opening frame a player sees is a few
+		# process calls in, and the hero turned upstage the moment its first
+		# stroll target happened to lie that way (seen in a rendered
+		# opening frame, tools/probe_diorama_render.gd). The hero holds a
+		# beat facing the camera before it goes about its business.
+		for step in 8:
+			staged._process(0.1)
+		assert_eq(
+			staged.character_view.facing, staged.character_view.Facing.DOWN,
+			"seed %d opened facing %s" % [seed_value, staged.character_view.facing]
+		)
+		assert_eq(staged.character_view.position, opened_at, "seed %d walked off its mark" % seed_value)
+		remove_child(staged)
+		staged.free()
