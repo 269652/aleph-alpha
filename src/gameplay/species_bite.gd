@@ -211,6 +211,13 @@ const PROFILES := {
 	"lion": {"real_top_speed_kmh": 80.0, "windup_seconds": 0.60, "sense_radius_tiles": 9.0, "tenacity": 0.20},
 	"venomous_snake": {"real_top_speed_kmh": 11.0, "windup_seconds": 0.25, "sense_radius_tiles": 3.0, "tenacity": 0.15},
 	"jaguar": {"real_top_speed_kmh": 65.0, "windup_seconds": 0.45, "sense_radius_tiles": 6.0, "tenacity": 0.40},
+	# The Curupira (docs/concept/monsters.md): it senses further than any
+	# animal because it is not tracking you, it has already decided about
+	# you -- at the engine caution radius itself, the furthest anything in
+	# the game may sense (test_nothing_senses_further_than_the_engines_
+	# caution_radius); and it holds on past the health a hunting animal quits at,
+	# because a grievance is not hunger.
+	"curupira": {"real_top_speed_kmh": 45.0, "windup_seconds": 0.50, "sense_radius_tiles": 10.0, "tenacity": 0.08},
 	"mountain_lion": {"real_top_speed_kmh": 80.0, "windup_seconds": 0.45, "sense_radius_tiles": 6.0, "tenacity": 0.40},
 	"wolf": {"real_top_speed_kmh": 50.0, "windup_seconds": 0.40, "sense_radius_tiles": 9.0, "tenacity": 0.25},
 	"lynx": {"real_top_speed_kmh": 64.0, "windup_seconds": 0.35, "sense_radius_tiles": 6.0, "tenacity": 0.40},

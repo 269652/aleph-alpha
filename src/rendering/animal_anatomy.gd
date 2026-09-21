@@ -45,7 +45,7 @@ const NECK_LOW := "low"
 const SPECIES := [
 	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep", "alpaca",
 	"boar", "tapir", "bear",
-	"wolf", "lynx", "jaguar", "predator",
+	"wolf", "lynx", "jaguar", "predator", "curupira",
 	"jackal", "arctic_fox", "mountain_lion", "lion",
 	"mouse", "squirrel",
 	"venomous_snake", "nonvenomous_snake",
@@ -291,6 +291,19 @@ const _PROFILES := {
 		"leg_length": 0.24, "leg_thickness": 0.058,
 		"tail": TAIL_FLOWING, "tail_length": 0.24,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# The Curupira: small, upright-carried and long-limbed rather than
+	# low and level like a cat -- the silhouette has to read as a figure
+	# in the trees, not as another carnivore.
+	"curupira": {
+		"barrel_squareness": 0.2,
+		"world_scale": 0.8,
+		"body_length": 0.34, "body_height": 0.26, "body_y": 0.46, "shoulder_hump": 0.02,
+		"neck_length": 0.09, "neck_thickness": 0.09, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.15, "head_height": 0.16, "muzzle": 0.18, "ear_size": 0.30,
+		"leg_length": 0.34, "leg_thickness": 0.045,
+		"tail": TAIL_NONE, "tail_length": 0.0,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
 	},
 	"predator": {
 		"barrel_squareness": 0.3,

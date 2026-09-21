@@ -432,7 +432,11 @@ func test_rainforest_biome_promotes_tapirs_and_jaguars():
 	assert_true(predator_species.has("jaguar"), "rainforest should promote jaguars")
 	for species in predator_species:
 		assert_true(
-			species in ["jaguar", "venomous_snake"], "unexpected predator-role species: %s" % species
+			# curupira joined this pool with docs/concept/monsters.md's entry 5
+			# -- rare (one slot against three jaguars) and rainforest-only,
+			# both pinned by test_curupira.gd.
+			species in ["jaguar", "venomous_snake", "curupira"],
+			"unexpected predator-role species: %s" % species
 		)
 
 

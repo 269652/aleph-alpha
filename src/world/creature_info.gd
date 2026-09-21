@@ -63,6 +63,10 @@ const MAX_HEALTH_BY_SPECIES := {
 	"arctic_fox": 24.0,
 	"tapir": 27.0,
 	"jaguar": 34.0,
+	# The Curupira (docs/concept/monsters.md, entry 5): a rainforest
+	# guardian, not an apex predator. Its threat is that it has already
+	# decided about you -- see EcologicalGrudge.
+	"curupira": 42.0,
 	"goat": 20.0,
 	"sheep": 18.0,
 	"alpaca": 20.0,
@@ -129,6 +133,7 @@ const MAX_STAMINA_BY_SPECIES := {
 	"arctic_fox": 30.0,
 	"tapir": 25.0,
 	"jaguar": 25.0,
+	"curupira": 35.0,
 	"goat": 30.0,
 	"sheep": 22.0,
 	"alpaca": 24.0,
@@ -170,6 +175,8 @@ const MAX_MANA_BY_SPECIES := {
 	"arctic_fox": 10.0,
 	"tapir": 5.0,
 	"jaguar": 10.0,
+	# The one predator with a real pool: it is a spirit of the forest.
+	"curupira": 30.0,
 	"goat": 5.0,
 	"sheep": 5.0,
 	"alpaca": 5.0,
@@ -207,6 +214,7 @@ const DIET_BY_SPECIES := {
 	"arctic_fox": "Hunter",
 	"tapir": "Grazer",
 	"jaguar": "Hunter",
+	"curupira": "Guardian",
 	"goat": "Grazer",
 	"sheep": "Grazer",
 	"alpaca": "Grazer",
@@ -246,6 +254,7 @@ const TEMPERAMENT_BY_SPECIES := {
 	"arctic_fox": "aggressive",
 	"tapir": "calm",
 	"jaguar": "aggressive",
+	"curupira": "aggressive",
 	"goat": "calm",
 	"sheep": "calm",
 	"alpaca": "calm",
@@ -299,6 +308,7 @@ const PREDATOR_SPECIES := {
 	"jackal": true,
 	"arctic_fox": true,
 	"jaguar": true,
+	"curupira": true,
 	"mountain_lion": true,
 	"bear": true,
 	"lion": true,

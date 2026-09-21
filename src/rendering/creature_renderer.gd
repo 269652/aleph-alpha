@@ -112,7 +112,7 @@ const PREDATOR_SPECIES_POOL_BY_BIOME := {
 	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "bear"],
 	"desert": ["jackal", "jackal", "jackal", "lion", "venomous_snake"],
 	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "bear"],
-	"rainforest": ["jaguar", "jaguar", "jaguar", "venomous_snake"],
+	"rainforest": ["jaguar", "jaguar", "jaguar", "venomous_snake", "curupira"],
 	"mountain": ["mountain_lion", "mountain_lion", "mountain_lion"],
 }
 

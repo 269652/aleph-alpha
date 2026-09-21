@@ -242,7 +242,17 @@ func _will_fight(context: Dictionary) -> bool:
 ## real hit. `.get(..., false)` defaults both new keys to "ordinary
 ## creature" so a context dict built before this feature existed (as every
 ## test predating it does) keeps behaving exactly as it always did.
+## A GRUDGE-BEARER is the same shape as a world boss and for the opposite
+## reason: it perceives nothing until something provokes it. The Curupira
+## (docs/concept/monsters.md, entry 5) ignores a player who hunts
+## sustainably, and an ordinary predator perceives every threat always -- so
+## without this gate it would be a jaguar that happens to be red. What
+## flips it is not a hit but a FOOTPRINT: EcologicalGrudge, read off the
+## ecosystem simulation by CreatureMarker.
 func _perceives_threats(context: Dictionary) -> bool:
-	if not context.get("is_world_boss", false):
+	if (
+		not context.get("is_world_boss", false)
+		and not context.get("bears_a_grudge", false)
+	):
 		return true
 	return context.get("is_aggroed", false)

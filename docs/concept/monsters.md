@@ -337,8 +337,61 @@ canvas — the slicer takes bands per row, so a per-row file with its own
 
 ## Status
 
-- ⬜ Nothing here is implemented. This is a design and art brief; no
-  `CreatureInfo` entry, `MythicRegion` roster line or sheet exists yet.
+- ✅ **Entry 5, the Curupira, is built** (2026-09-21) — the roster's first
+  real creature, and the one whose "one behaviour" needed no new state.
+  A real species in every table an ordinary species appears in
+  (`CreatureInfo` ×5, `CreatureMass`, `AnimalAnatomy`,
+  `ProceduralAnimalSprite`'s colour and shape family), one rare slot
+  against three jaguars in the rainforest pool and no other biome, and its
+  own `SpeciesBite` profile rather than the fallback.
+
+  **Its aggro table really is the ecosystem simulation.**
+  `EcologicalGrudge` reads `herbivore_population_at_chunk` against
+  `herbivore_capacity_at_chunk` — both already live — and the threshold is
+  **derived, not picked**: `PopulationModel.step` is logistic, and
+  `rate · P · (1 − P/K)` peaks at exactly `K/2`, which is maximum
+  sustainable yield. Above it a herd replaces itself fastest and the
+  taking is sustainable; below it the harvest has become extraction. A
+  test finds that peak in the real model and asserts the threshold sits on
+  it, so the game's own growth curve decides when a hunter has gone too
+  far.
+
+  It is **quiet until provoked**, which needed one gate:
+  `CreatureBehavior._perceives_threats` now treats a grudge-bearer the way
+  it already treats a world boss — perceives nothing until aggroed —
+  except that what flips it is a *footprint* rather than a hit. Without
+  that it would be a jaguar that happens to be red. Nothing else in the
+  game changes: an ordinary animal still perceives every threat, and a
+  context built before this existed behaves exactly as it did.
+  `CreatureMarker._refresh_grudge` re-reads rather than latches, so a
+  forest that recovers forgives.
+
+  It senses at **10 tiles** — the furthest anything in the game may, the
+  engine's own caution radius, which a pre-existing invariant test caught
+  when the first draft reached past it — and its tenacity is 0.08, so it
+  holds on past the health a hunting animal quits at, because a grievance
+  is not hunger.
+
+  Tests: `test_ecological_grudge.gd` 15, `test_curupira.gd` 16, green
+  alongside the 279-test creature-marker suite and the behaviour, renderer
+  and bite suites (492 in total). Verified live: it spawns, carries 63
+  health and 30 mana, and its grudge reads false for a whole forest and
+  true for a stripped one.
+
+  **It lives in rainforest**, which is a long way from a 48°N spawn — so
+  in ordinary play it is something to travel to, and `/arena curupira`
+  stages one for testing (docs/concept/arena.md).
+- ⬜ Entries 1–4 and 6–9 are unimplemented. Entry 3 (the Alp) is blocked
+  on a mechanic that does not exist: its whole behaviour is "approaches
+  only while you rest", and there is no sleep state on the player —
+  `SurvivalMeters.rest` is an amount, not a condition. Entry 9 (the
+  Wolpertinger) is by its own entry a harmless easter egg rather than a
+  threat. The remaining Tier C entries each still need their binding
+  predicate (a bog, a scree slope, a worked shaft).
+- ⬜ No `MythicRegion` roster line or illustrated sheet exists yet. The
+  Curupira draws on the procedural fallback (`lynx_shape`, red), which is
+  honest but is not the silhouette the art brief asks for — the reversed
+  feet, the thing that makes it legible, need real art.
 - ✅ **Attack/hurt/death rows are wired** — see "Which rows the engine
   consumes today". `attack` already resolves (to the walk cycle with no
   dedicated art); `hurt` and `death` are one-shot rows with a real state in

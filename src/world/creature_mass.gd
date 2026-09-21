@@ -73,6 +73,9 @@ const _REAL_MASS_KG := {
 	"sheep": 80.0,
 	"boar": 90.0,
 	"jaguar": 90.0,
+	# Child-sized, in the folklore -- small, and that is the point: it is
+	# not dangerous because it is big.
+	"curupira": 30.0,
 	"reindeer": 150.0,
 	"lion": 180.0,
 	"tapir": 250.0,

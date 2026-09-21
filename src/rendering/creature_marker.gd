@@ -36,6 +36,8 @@ const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+const EcologicalGrudge = preload("res://src/gameplay/ecological_grudge.gd")
+const Discovery = preload("res://src/gameplay/discovery.gd")
 ## The play-scale tile in pixels, for converting a species profile's
 ## tiles-per-second pace into this scene's own pixel speeds. Restated
 ## rather than preloading TerrainRenderer (a creature does not otherwise
@@ -1065,6 +1067,7 @@ func _process(frame_delta: float) -> void:
 	# it fresh every frame is what makes the walk read as smooth rather than
 	# stepping toward a stale point.
 	var courting_partner := courtship_partner()
+	_refresh_grudge()
 	var decision := _behavior.decide(_decision_context(courting_partner))
 
 	_apply_decision(decision, delta)
@@ -2190,8 +2193,31 @@ func _decision_context(partner: Node) -> Dictionary:
 		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),
 		"is_world_boss": info.is_world_boss,
 		"is_aggroed": info.is_aggroed,
+		"bears_a_grudge": EcologicalGrudge.BEARS_A_GRUDGE.has(info.species),
 		"stimuli": stimuli,
 	}
+
+
+## A grudge-bearer's aggro, read off the live ecosystem simulation
+## (docs/concept/monsters.md, entry 5 -- the Curupira, "the ecosystem sim is
+## the aggro table").
+##
+## The only creature in the game whose hostility is a fact about the REGION
+## rather than about the player's position: it is quiet while the local herd
+## is above maximum sustainable yield and hostile once somebody has hunted
+## it below (EcologicalGrudge, whose threshold is the peak of the very
+## logistic curve PopulationModel runs). Re-read rather than latched, so a
+## forest that recovers forgives.
+func _refresh_grudge() -> void:
+	if info == null or not EcologicalGrudge.BEARS_A_GRUDGE.has(info.species):
+		return
+	if _world == null or not _world.has_method("herbivore_population_at_chunk"):
+		return
+	var chunk := Discovery.chunk_of(_current_tile())
+	info.is_aggroed = EcologicalGrudge.is_provoked(
+		_world.herbivore_population_at_chunk(chunk),
+		_world.herbivore_capacity_at_chunk(chunk)
+	)
 
 
 ## This individual's genome: the stored one when it has one (a bred or
