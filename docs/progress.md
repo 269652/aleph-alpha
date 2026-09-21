@@ -481,6 +481,80 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **A blow lands, and the exchange reads** (2026-09-21) — see
+  `concept/feedback.md`. Three silences closed at once, all of them named
+  in that doc's own opening diagnosis and still true months later.
+
+  **Being hurt answered with nothing.** A bear could close, bite and take a
+  fifth of the health bar with no sound, no flash, no number and no line.
+  `Player.take_damage` raises the `hurt` row now, and what floats is what
+  the blow really *cost* — after block, shield and armour — because a
+  receipt that disagrees with the health bar teaches a player to distrust
+  both. Raised from `take_damage` and deliberately not from `_suffer`,
+  which the damage-over-time ticks share; a test pins that `_suffer` stays
+  silent.
+
+  Its interval is the reflex floor, and that is **provable** rather than
+  taste: the gate on being hurt is how fast something can bite you, and the
+  fastest real bite among every species a biome pool can promote is the
+  arctic fox at **0.533 s**, against a floor of 0.210 s. A test sweeps the
+  live pools, so a future species that could bite faster than the player
+  can be told about it goes red instead of shipping.
+
+  **The flash did not exist anywhere.** `grep -rni "hit_flash|damage_flash|
+  flash_timer"` over `src/`, `scenes/` and `tests/` returned zero hits, and
+  `World._on_player_answered` had been reading a row's `message` and
+  `float_text` and throwing the third field away. Now the **screen** tints
+  toward `UiTheme.NEGATIVE` scaled by a new `severity` field (how much of
+  the whole bar that blow took, which only the character can know) and
+  fades over the same interval the answer is gated at — and the **creature**
+  leans toward the same red.
+
+  The creature half was the hard one, and an adversarial read of the
+  rendering layer is what made it safe. A `CreatureMarker` *is* the
+  `Sprite2D`, and its `modulate` already had two owners: a one-shot coat
+  tint in `_ready`, and a disease tint rewritten every stepped frame for
+  anything not `SUSCEPTIBLE`. So the flash **composes** instead of
+  replacing — `HitFlash.tint` returns the base exactly once the clock runs
+  out, so there is no restore branch to get wrong — and it steps *after*
+  `_disease_step`, because a flash written before it is silently swallowed
+  on every sick creature in the game.
+
+  **And a real bug had to be fixed before it could exist at all.**
+  `HEALTHY_MODULATE_COLOR` was `Color.WHITE`, so the first time an animal
+  recovered from a disease its coat tell was erased for the rest of its
+  life; a flash restoring the same white would have done it on every blow.
+  `CreatureMarker.base_modulate()` names the baseline nothing in this
+  codebase could name before, and both the disease tint and the flash read
+  it.
+
+  **The fourth damage-over-time caller.** The pass that split blows from
+  ticks found three and there were four: `_step_bramble_thorns` still went
+  through `take_damage`, so a thicket crossing cost **60 health a second**
+  at 60 fps whatever its own derived rate said — and once `hurt` existed it
+  would have floated a receipt every fifth of a second for the whole
+  crossing. A test now walks all four steps by name.
+
+  Tests: `test_answerback.gd` 55, `test_player_answerback.gd` 15,
+  `test_hurt_flash.gd` 9, `test_creature_hit_flash.gd` 12,
+  `test_world_hurt_flash_wiring.gd` 5, `test_player_damage_over_time.gd` 9,
+  `test_creature_marker.gd` 293, `test_blackberry_bramble.gd` 24 — green.
+
+  **Deliberately not in this pass, with reasons rather than silence:** a
+  creature's call at the moment it commits to a bite looked like a
+  three-line change and is not.
+  `concept/creature_and_footstep_audio.md`'s pillar 4 forbids
+  world-simulation code calling into audio at all; the twelve real clips
+  are full-length field recordings, so a wolf howl fired at a bite is still
+  sounding many seconds later; and the call pool is four round-robin voices
+  with no still-playing check, so bite calls would cut ambient ones off.
+  That doc has to be extended first. Player knockback on a bite is **not**
+  the safety risk it was flagged as — the arithmetic was worked out and
+  reproduced: a wolf re-closes 51.5 px inside one bite cooldown and a lion
+  90.5 px, against a player's own sword shove of 60 px — so it is a real
+  follow-up rather than a rejected one, and it would revive the dead
+  `knockback_resist` skill stat.
+
 - ✅ **Kills pay: a body for every species, worth what the animal is**
   (2026-09-21) — see `concept/carrion.md`. `LootTable._DROPS` was a
   four-row authored table (`herbivore`/`boar`/`predator`/`lynx`) and two of

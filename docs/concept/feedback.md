@@ -160,6 +160,37 @@ no reason to give). Refusals share `REFUSAL_INTERVAL_SECONDS` —
 deliberately the deliberate interval, not the reflex one, because a player
 holding a key against a wall should hear *one* "no", not forty.
 
+### Being hurt is a verb too — the one the player does not press
+
+Every row above answers a key. `hurt` answers the one thing in this game
+that happens **to** the character, and it was the loudest silence left:
+measured on 2026-09-21, a bear could close, bite, and take a fifth of the
+player's health with no sound, no flash, no number and no line. The health
+bar moved. That was all.
+
+It is an `UNBOUND_VERB`, alongside `craft` and `level_up` — a real
+world-changing event that reaches the player through something other than a
+key — so the two-way drift test covers it exactly as it covers those.
+
+**Its interval is the reflex floor, and that is provably transparent.**
+Pillar 5 sets an answer's gate to the rate limit the verb already has; for
+being hurt, that gate is *how fast something can bite you*. Measured across
+every species a biome pool can promote, the fastest real bite in the game
+is the **arctic fox at 0.533 s** (`SpeciesBite.bite_cooldown_seconds_for`,
+derived from body mass), and `REFLEX_INTERVAL_SECONDS` is 0.210 s — so the
+limiter sits at less than half the fastest blow the world can land and can
+never swallow one. That is not an assumption: a test sweeps the live spawn
+pools and asserts it, so a future species that bites faster than the player
+can be told about it fails the suite instead of shipping silently.
+
+**Continuous harm is deliberately not a blow.** Venom, a mushroom toxin and
+a spell debuff tick every frame through `Player.take_tick_damage`, and a
+receipt per frame is a buzz, not an answer — the exact failure
+`REFLEX_INTERVAL_SECONDS` exists to name. A poison is a **condition**, and
+this HUD already shows conditions as chips (`HudReadouts.condition_chips`).
+So `hurt` fires on the discrete blow and nothing else, and the chip carries
+the rest.
+
 ### The three intervals
 
 | constant | value | what it is |
@@ -272,7 +303,84 @@ the suite goes red before it can ship.
 - ⬜ **The sounds themselves.** Every `sound` id but the footsteps names a
   clip that does not exist yet. The table is the commissioning list; the
   clips are a separate pass.
-- ⬜ **The wiring.** Nothing calls `Answerback` yet — the flash, the
-  floating text node and the toast are `World`/`Player`'s to build, and
-  `Player.gain_experience`'s discarded return value is the first caller
-  that should change. Named follow-ups, not silent gaps.
+- ✅ **Being hurt answers** (2026-09-21). The loudest silence left: a bear
+  could close, bite and take a fifth of the health bar with no sound, no
+  flash, no number and no line. `Player.take_damage` raises the `hurt` row
+  now, and what floats is what the blow really **cost** — health actually
+  lost, after block, shield and armour have each had their say — because a
+  receipt that disagrees with the health bar teaches a player to distrust
+  both. Raised from `take_damage` and deliberately **not** from `_suffer`,
+  which the damage-over-time ticks share; a test pins that `_suffer` stays
+  silent (`test_player_answerback.gd`, 15).
+
+  The interval is `REFLEX_INTERVAL_SECONDS`, and that is provable rather
+  than taste: the gate on being hurt is how fast something can bite you,
+  and the fastest real bite among every species a biome pool can promote is
+  the **arctic fox at 0.533 s**, against a floor of 0.210 s. A test sweeps
+  the live spawn pools and asserts it, so a species that could bite faster
+  than the player can be told about it fails the suite instead of shipping.
+
+- ✅ **A row says how big the act was, not only what kind** (2026-09-21).
+  `severity`, a 0–1 fraction of whatever bar the act moved, supplied by the
+  caller because the table has no idea how big anybody's bar is. A flash
+  that is the same red for a scratch and for a near-killing blow is a
+  warning light, not a reading.
+
+- ✅ **The flash exists** (2026-09-21) — the third thing every row said,
+  which `World._on_player_answered` had been reading and throwing away. It
+  is now two real things:
+
+  **The screen** (`HurtFlash`, `World._flash_screen`) tints toward
+  `UiTheme.NEGATIVE` at the instant a blow lands and fades to nothing over
+  `Answerback.REFLEX_INTERVAL_SECONDS` — the same interval the hurt answer
+  is gated at, so one flash is always gone before the next can start and
+  two can never stack into a wall of red. How red is the row's own
+  `severity`. **Only `hurt` tints the screen**: four rows carry `FLASH_HIT`
+  and three of them (`attack`, `kick`, `destroy`, `cast`) are harm the
+  player *dealt*, and a screen that goes red when you chop a tree teaches a
+  player that red means nothing.
+
+  **The creature** (`HitFlash`, `CreatureMarker._hit_flash_step`) leans
+  toward the same red for the same interval. It **composes** rather than
+  replaces, which is the whole difficulty: a `CreatureMarker` *is* the
+  `Sprite2D`, and its `modulate` already had two owners — a one-shot coat
+  tint written in `_ready`, and a disease tint rewritten every stepped
+  frame for anything not `SUSCEPTIBLE`. So the flash steps *after*
+  `_disease_step` (a flash written before it is silently swallowed on every
+  sick creature), and it blends only `PEAK_BLEND` of the way, because an
+  animal repainted flat red has lost its silhouette, its coat tell and its
+  pallor in the same frame.
+
+  **A real bug had to be fixed before the flash could exist at all**:
+  `HEALTHY_MODULATE_COLOR` was `Color.WHITE`, so the first time a creature
+  recovered from a disease its coat tell was erased for the rest of its
+  life — and a flash restoring the same white would have done it on every
+  blow. `CreatureMarker.base_modulate()` names the baseline nothing in this
+  codebase could name before, and both the disease tint and the flash read
+  it (`test_creature_hit_flash.gd`, 12).
+
+- ✅ **The fourth damage-over-time caller** (2026-09-21). The pass that
+  split blows from ticks found three and there were four:
+  `_step_bramble_thorns` still went through `take_damage`, so a thicket
+  crossing cost **60 health a second** at 60 fps whatever
+  `BlackberryBramble`'s own derived rate said — and once `hurt` existed it
+  would have floated a receipt every fifth of a second for the whole
+  crossing. A test now walks all four steps by name rather than trusting
+  the next reader to find them.
+
+- ⬜ **The sounds themselves**, still. Every `sound` id but the footsteps
+  names a clip that does not exist, `hurt` included. The table is the
+  commissioning list.
+- ⬜ **A creature's call at the moment it commits to a bite.** Real clips
+  exist (`assets/audio/creatures/`, twelve of them) and
+  `InteractionSfxPlayer.play_creature_call` already drives a positional
+  pool — but this is not the three-line change it looks like, and the
+  reasons are written down rather than discovered later:
+  [creature_and_footstep_audio.md](creature_and_footstep_audio.md)'s
+  pillar 4 forbids world-simulation code calling into audio at all (the
+  simulation states facts; `World` decides the sound); the clips are
+  full-length field recordings, so a wolf howl fired at a bite is still
+  sounding many seconds later and needs the footstep path's own playback
+  cap; and the call pool is four round-robin voices with no
+  still-playing check, so bite calls would cut ambient ones off. It needs
+  that doc extended first.

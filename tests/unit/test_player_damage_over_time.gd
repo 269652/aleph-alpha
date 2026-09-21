@@ -132,3 +132,55 @@ func test_being_venomed_behind_a_guard_does_not_destroy_the_weapon():
 		sword.wear, wear_before, 0.001,
 		"a tick is not a parry -- it must not wear the weapon at all, let alone 120 times"
 	)
+
+
+# -- the fourth caller, missed the first time round -----------------------
+
+
+
+## `_step_bramble_thorns` is a damage-over-time step exactly like the other
+## three -- it passes `thorn_damage_per_second(...) * delta` -- and it was
+## still calling `take_damage`. The original pass found three callers and
+## there were four, so standing in a thicket cost 60 health a second at 60
+## fps whatever `BlackberryBramble` said it should.
+##
+## Driven through the source rather than a live bramble tile, because the
+## rule is which function the thorns go through, and a chunk manager with
+## real bramble in it is a world fixture this suite deliberately does not
+## build.
+func test_the_thorns_go_through_the_tick_path_not_the_blow_path():
+	var body := _function_body("_step_bramble_thorns")
+	assert_false(body.is_empty(), "precondition: the step was found")
+	assert_true(body.contains("take_tick_damage("), "thorns are continuous harm")
+	assert_false(
+		body.contains("\ttake_damage("),
+		"a per-frame fraction through the blow path is the armour-floor bug"
+	)
+
+
+## And therefore it raises no receipt either: a bramble crossing lasts
+## seconds, and a float every fifth of a second is a buzz rather than an
+## answer (docs/concept/feedback.md).
+func test_every_damage_over_time_step_uses_the_tick_path():
+	for step in [
+		"_venom_step",
+		"_mushroom_toxin_step",
+		"_spell_status_step",
+		"_step_bramble_thorns",
+	]:
+		var body := _function_body(step)
+		assert_false(body.is_empty(), "precondition: %s was found" % step)
+		assert_false(
+			body.contains("\ttake_damage("),
+			"%s is continuous harm and must not take the blow path" % step
+		)
+
+
+func _function_body(name: String) -> String:
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	var start := source.find("func %s(" % name)
+	if start < 0:
+		return ""
+	var rest := source.substr(start)
+	var next := rest.find("\nfunc ")
+	return rest if next < 0 else rest.substr(0, next)

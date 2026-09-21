@@ -1109,6 +1109,10 @@ func set_interior_view_host(viewport: SubViewport, container: SubViewportContain
 func take_damage(amount: float) -> void:
 	if is_dead:
 		return
+	# What was swung, before block/shield/armour whittle `amount` down --
+	# the question "was this a blow at all" is separate from "what did it
+	# cost", and only the first decides whether there is anything to answer.
+	var incoming := amount
 	# The single interruption rule (docs/concept/sleep.md): anything that
 	# damages you wakes you. It is what a monster's drain hooks -- a drain
 	# that wakes you is a drain you can answer.
@@ -1129,7 +1133,35 @@ func take_damage(amount: float) -> void:
 	# reduces a hit to nothing -- at least MIN_ARMORED_DAMAGE always lands.
 	if amount > 0.0:
 		amount = maxf(MIN_ARMORED_DAMAGE, amount - equipment.total_armor())
+	var health_before := health
 	_suffer(amount)
+	# The one answer in this game for something that happens TO the
+	# character rather than because they pressed something
+	# (docs/concept/feedback.md). What floats is what the blow really COST --
+	# health actually lost, after block, shield and armour have each had
+	# their say -- rather than what the animal swung, because a receipt that
+	# disagrees with the health bar teaches a player to distrust both. A
+	# struck-and-absorbed hit still answers with the sound and the flash: it
+	# floats nothing, which is the table's own rule for a number that is
+	# zero, but the player still learns they were hit.
+	#
+	# Raised HERE and deliberately not in _suffer, which the damage-over-time
+	# ticks also route through: a venom tick fires every frame, and a receipt
+	# per frame is a buzz rather than an answer. A poison is a condition, and
+	# the HUD already carries conditions as chips.
+	if incoming > 0.0:
+		var really_lost := health_before - health
+		answer(
+			Answerback.HURT,
+			{
+				"damage": really_lost,
+				# How much of the WHOLE bar that took, so the screen can
+				# answer a scratch differently from a near-killing blow
+				# (see HurtFlash). Only the character knows this: the
+				# feedback table has no idea how big anybody's bar is.
+				"severity": really_lost / maxf(max_health, 1.0),
+			}
+		)
 
 
 ## Damage that is already inside you: venom, a swallowed toxin, burning.
@@ -2945,7 +2977,14 @@ func _step_bramble_thorns(delta: float) -> void:
 	var tile := current_tile()
 	if not _chunk_manager.is_bramble_at_global(tile.x, tile.y):
 		return
-	take_damage(
+	# The tick path, not the blow path. This is the fourth damage-over-time
+	# step in this file and the original pass that split the two found three
+	# -- so a thicket crossing was still being lifted to MIN_ARMORED_DAMAGE
+	# every frame, costing 60 health a second at 60 fps whatever
+	# BlackberryBramble's own derived rate says. It also means the thorns
+	# raise no hurt receipt: a crossing lasts seconds, and a float every
+	# fifth of a second is a buzz rather than an answer.
+	take_tick_damage(
 		BlackberryBramble.thorn_damage_per_second(
 			max_health, float(TerrainRenderer.TILE_SIZE), BASE_SPEED
 		) * delta

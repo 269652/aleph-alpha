@@ -38,6 +38,7 @@ const Taming = preload("res://src/gameplay/taming.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const EcologicalGrudge = preload("res://src/gameplay/ecological_grudge.gd")
 const NightMare = preload("res://src/gameplay/night_mare.gd")
+const HitFlash = preload("res://src/rendering/hit_flash.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
 ## The play-scale tile in pixels, for converting a species profile's
 ## tiles-per-second pace into this scene's own pixel speeds. Restated
@@ -585,7 +586,8 @@ func _ready() -> void:
 	# keyed off wander_seed, so it's deterministic and reproducible from the
 	# same individual across sessions, just like every other AnimalFitness
 	# trait this seed already drives.
-	modulate = coat_tint_for(_fitness.phenotype_for(wander_seed)["coat_vibrancy"])
+	_coat_tint = coat_tint_for(_fitness.phenotype_for(wander_seed)["coat_vibrancy"])
+	modulate = _coat_tint
 
 	_health_bar_bg = ColorRect.new()
 	_health_bar_bg.color = HEALTH_BAR_BG_COLOR
@@ -908,6 +910,10 @@ func _process(frame_delta: float) -> void:
 	_disease_step(delta)
 	if _death_has_begun():
 		return  # died of disease this frame -- nothing below has a live marker to act on
+	# AFTER _disease_step, deliberately: that rewrites modulate every stepped
+	# frame for anything not SUSCEPTIBLE, so a flash stepped before it would
+	# be silently swallowed on every sick creature in the game.
+	_hit_flash_step(delta)
 
 	# Same "runs unconditionally, ahead of every early-return" reasoning as
 	# disease above: an ignited/blighted creature keeps burning no matter
@@ -3351,6 +3357,47 @@ func _nearest_node(nodes: Array) -> Node:
 ## no health lost, no aggro gained, nothing else in this function runs.
 ## Once aggroed, or for any non-boss species, damage always applies exactly
 ## as before this feature existed.
+## This creature's own coat, remembered rather than written once and
+## forgotten -- the tint it should be wearing whenever nothing is happening
+## to it (see coat_tint_for, docs/concept/animal_genetics.md).
+##
+## Measured: nothing in this codebase could name a creature's baseline tint,
+## which is why HEALTHY_MODULATE_COLOR was a flat Color.WHITE and why the
+## first time an animal recovered from a disease its coat tell was erased
+## for the rest of its life. A hit flash restoring the same WHITE would have
+## done it on every blow, so the fix and the feature are one change.
+var _coat_tint := Color.WHITE
+
+## Seconds left on the flash a blow lit (see HitFlash). Counted down in
+## _process, AFTER _disease_step, because the disease tint rewrites modulate
+## on every stepped frame for anything not SUSCEPTIBLE and would otherwise
+## swallow the blow.
+var _hit_flash_remaining := 0.0
+
+
+func base_modulate() -> Color:
+	return _coat_tint
+
+
+## One frame of a struck body being lit. Written unconditionally rather than
+## only while a flash is running: HitFlash.tint returns the base exactly once
+## the clock is out, so there is no "restore" branch to get wrong, and an
+## infected creature's per-frame tint is leaned rather than fought.
+func _hit_flash_step(delta: float) -> void:
+	if _hit_flash_remaining <= 0.0:
+		return
+	_hit_flash_remaining = maxf(0.0, _hit_flash_remaining - delta)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining)
+
+
+## What this creature would be wearing with no flash on it: its pallor if it
+## is visibly sick, its own coat otherwise.
+func _disease_aware_base() -> Color:
+	if disease_state == DiseaseModel.State.INFECTED:
+		return SICK_MODULATE_COLOR
+	return base_modulate()
+
+
 func take_damage(amount: float) -> void:
 	if info == null or _dying:
 		return  # already dead, just not finished falling over -- a corpse
@@ -3369,8 +3416,15 @@ func take_damage(amount: float) -> void:
 		        # is the one that plays, and only one can play at a time
 	# A survivable hit flinches -- one pass of the hurt row, then straight
 	# back to whatever the AI was doing. A no-op for every species without
-	# hurt art, which today is all of them (see _begin_one_shot).
+	# hurt art, which today is all of them (see _begin_one_shot), which is
+	# exactly why the flash below is what a player actually sees.
 	_begin_one_shot("hurt")
+	# And it lights up (docs/concept/feedback.md). Set here rather than in
+	# _process because take_damage is called from OUTSIDE the step -- a
+	# player's swing, a predator's bite -- so this is the only place that
+	# knows a blow just landed.
+	_hit_flash_remaining = HitFlash.SECONDS
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining)
 
 
 ## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
@@ -3762,10 +3816,13 @@ func _disease_step(delta: float) -> void:
 ## reuses Sprite2D's own `modulate` rather than a new rendering system --
 ## same reasoning as the taming sick pip, but shown on EVERY infected
 ## creature, tamed or wild, not just ones the player has a stake in.
+## A creature that is NOT visibly sick goes back to being ITSELF -- its own
+## coat -- not to flat white. Measured bug: HEALTHY_MODULATE_COLOR is
+## Color.WHITE and this runs on every stepped frame for anything not
+## SUSCEPTIBLE, so the first time an animal recovered, the coat tell
+## AnimalFitness gave it was erased permanently.
 func _update_disease_tint() -> void:
-	modulate = (
-		SICK_MODULATE_COLOR if disease_state == DiseaseModel.State.INFECTED else HEALTHY_MODULATE_COLOR
-	)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining)
 
 
 ## Herd (foot-and-mouth-like) proximity transmission: an infected herbivore

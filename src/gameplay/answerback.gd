@@ -143,6 +143,31 @@ const GENERIC_REFUSAL := "Not now"
 # audio layer owes each verb, so the gap is written down in one place
 # instead of being invisible.
 
+## The one verb in this table nobody presses: a blow landing on the player.
+##
+## Measured on 2026-09-21, with the fight only just made loseable: a bear
+## could close, bite, and take a fifth of the character's health with no
+## sound, no flash, no number and no line. The health bar moved, and that
+## was all. Named here rather than written as a literal at both ends so the
+## raiser and the table cannot drift.
+##
+## Its interval is REFLEX_INTERVAL_SECONDS and that choice is provable
+## rather than taste: pillar 5 sets an answer's gate to the rate limit the
+## verb already has, and the gate on being hurt is how fast something can
+## bite you. The fastest real bite among every species a biome pool can
+## promote is the arctic fox at 0.533 s (SpeciesBite.bite_cooldown_seconds_
+## for, derived from body mass); the reflex floor is 0.210 s, less than
+## half of it, so the limiter can never swallow a blow the world really
+## landed. test_nothing_in_this_world_bites_faster_than_the_answer_to_
+## being_bitten sweeps the live pools and holds it.
+##
+## Deliberately NOT raised by continuous harm. Venom, a mushroom toxin and
+## a spell debuff tick every frame through Player.take_tick_damage, and a
+## receipt per frame is a buzz rather than an answer -- the exact failure
+## the reflex floor exists to name. A poison is a CONDITION, and this HUD
+## already shows conditions as chips (HudReadouts.condition_chips).
+const HURT := "hurt"
+
 const FEEDBACK := {
 	# The feet. The one verb this game already answers, and the reason the
 	# floor interval is what it is.
@@ -220,6 +245,9 @@ const FEEDBACK := {
 	# Unbound: Player.gain_experience already returns this and nobody reads
 	# it. The single most valuable discarded fact in the codebase.
 	"level_up": {"sound": "level_up", "flash": FLASH_LEVEL, "floats": FLOAT_LEVEL, "message": "Level {level}", "interval": DELIBERATE_INTERVAL_SECONDS},
+	# Unbound, and the only row in this table for something that happens TO
+	# the player rather than because they pressed something. See HURT.
+	HURT: {"sound": "hurt", "flash": FLASH_HIT, "floats": FLOAT_DAMAGE, "message": "", "interval": REFLEX_INTERVAL_SECONDS},
 }
 
 
@@ -265,6 +293,13 @@ static func flash_color_for(flash_kind: String) -> Color:
 ## caller already knows: damage, item/count, coins, xp, level, target,
 ## failed, reason.
 ##
+## `severity` is how BIG the act was: the fraction of whatever bar it moved,
+## 0..1, which only the caller can know. A flash that is the same red for a
+## scratch and for a near-killing blow is a warning light rather than a
+## reading, so the kind of answer and its size are two different facts. Zero
+## for every caller that does not say, and for a refusal whatever it was
+## going to cost.
+##
 ## A FAILED action answers differently from a successful one, and that is
 ## the whole point of the branch: today `Player.activate_item_id` returns
 ## false and the bool is dropped on the floor, so a press that could not do
@@ -286,6 +321,7 @@ static func for_action(action_id: String, context: Dictionary) -> Dictionary:
 			"message": reason if not reason.is_empty() else GENERIC_REFUSAL,
 			"float_text": "",
 			"interval": REFUSAL_INTERVAL_SECONDS,
+			"severity": 0.0,
 			"failed": true,
 		}
 	var row: Dictionary = FEEDBACK[action_id]
@@ -298,6 +334,7 @@ static func for_action(action_id: String, context: Dictionary) -> Dictionary:
 		"message": _fill(String(row["message"]), context),
 		"float_text": floating_text_for(action_id, context),
 		"interval": float(row["interval"]),
+		"severity": clampf(float(context.get("severity", 0.0)), 0.0, 1.0),
 		"failed": false,
 	}
 

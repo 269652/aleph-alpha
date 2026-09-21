@@ -156,6 +156,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
+const HurtFlash = preload("res://src/ui/hurt_flash.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
 const Arena = preload("res://src/gameplay/arena.gd")
 const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
@@ -2278,6 +2279,40 @@ func _on_player_answered(feedback: Dictionary) -> void:
 	var float_text := String(feedback.get("float_text", ""))
 	if float_text != "":
 		_float_answer_text(float_text, Color(feedback.get("flash_color", Color.WHITE)))
+	# The third thing every row says, and the one this handler used to throw
+	# away: the "flash" kind (docs/concept/feedback.md). WHO flashes is the
+	# module's decision, not a species of if-statement written again here --
+	# four rows carry FLASH_HIT and three of them are harm the player DEALT,
+	# so asking the kind alone would turn the screen red every time you
+	# chopped a tree.
+	if not bool(feedback.get("failed", false)) and HurtFlash.flashes_for(
+		String(feedback.get("action", ""))
+	):
+		_flash_screen(HurtFlash.peak_colour_for(float(feedback.get("severity", 0.0))))
+
+
+## The screen's own answer to a blow landing on the character: a full tint
+## at the instant it lands, fading to nothing over HurtFlash.SECONDS.
+##
+## Drawn and then GONE. A full-screen ColorRect left parented to the UI is
+## not a flash, it is a colour filter over every window for the rest of the
+## session -- so it frees itself on the tween's own tail rather than being
+## kept and re-shown, which also means two overlapping blows really are two
+## flashes rather than one restarted one.
+##
+## MOUSE_FILTER_IGNORE for the obvious reason: a rectangle over the whole
+## screen that eats clicks would make being bitten a UI lockout.
+func _flash_screen(colour: Color) -> void:
+	if _ui == null:
+		return
+	var tint := ColorRect.new()
+	tint.color = colour
+	tint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(tint)
+	var fade := create_tween()
+	fade.tween_property(tint, "color:a", 0.0, HurtFlash.SECONDS)
+	fade.tween_callback(tint.queue_free)
 
 
 ## One rising, fading label over the player: the receipt for an act, gone

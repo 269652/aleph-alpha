@@ -73,11 +73,13 @@ const VIEW_ONLY_ACTIONS := [
 ]
 
 ## World-changing acts that reach the player through something other than a
-## key: `craft` is CraftingWindow.craft_requested -> Player.craft, and
+## key: `craft` is CraftingWindow.craft_requested -> Player.craft,
 ## `level_up` is the return value of Player.gain_experience that nobody
-## currently reads. These get rows, and must NOT be bound actions -- see
+## currently reads, and `hurt` is the only one that is not an act of the
+## player's at all -- it is what a bite landing on them answers with. These
+## get rows, and must NOT be bound actions -- see
 ## test_the_unbound_verbs_are_really_unbound.
-const UNBOUND_VERBS := ["craft", "level_up"]
+const UNBOUND_VERBS := ["craft", "level_up", Answerback.HURT]
 
 
 func _bound_actions() -> Array:
@@ -529,3 +531,91 @@ func test_a_very_short_card_still_gets_the_shared_sentence_floor():
 		Answerback.DELIBERATE_INTERVAL_SECONDS,
 		0.0001
 	)
+
+
+# -- the verb the player does not press -----------------------------------
+
+const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+
+
+## The loudest silence left in the game on 2026-09-21: a bear could close,
+## bite, and take a fifth of the player's health with no sound, no flash, no
+## number and no line. The health bar moved, and that was all.
+func test_a_blow_landing_on_the_player_answers():
+	var row: Dictionary = Answerback.for_action(Answerback.HURT, {"damage": 12.0})
+	assert_false(row.is_empty(), "being bitten answers with something")
+	assert_ne(String(row.get("sound", "")), "", "a bite makes a noise")
+	assert_eq(String(row.get("flash", "")), Answerback.FLASH_HIT, "and it reads as harm")
+
+
+## What floats is what changed, with its sign (pillar 4). A bite is a loss.
+func test_the_blow_floats_what_it_took():
+	assert_eq(Answerback.floating_text_for(Answerback.HURT, {"damage": 12.0}), "-12")
+
+
+## A blow that took nothing -- fully blocked, or a tick rounded away -- is a
+## non-event, the same rule every other float source already follows.
+func test_a_blow_that_took_nothing_floats_nothing():
+	assert_eq(Answerback.floating_text_for(Answerback.HURT, {"damage": 0.0}), "")
+
+
+## Pillar 5, pointed at a verb nobody presses: the gate on being hurt is how
+## fast something can bite you. Swept across every species a real biome pool
+## can promote, so this cannot be true only of the roster that happened to
+## exist the day it was written -- a future species that bites faster than
+## the player can be TOLD about it fails here instead of shipping silently.
+func test_nothing_in_this_world_bites_faster_than_the_answer_to_being_bitten():
+	var seen := {}
+	for table in [
+		CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME,
+		CreatureRenderer.PREDATOR_SPECIES_POOL_BY_BIOME,
+	]:
+		for biome in table:
+			for species in table[biome]:
+				seen[species] = true
+	assert_gt(seen.size(), 0, "precondition: the world really spawns creatures")
+	for species in seen:
+		var cooldown := SpeciesBite.bite_cooldown_seconds_for(species)
+		if cooldown <= 0.0:
+			continue  # a grazer does not bite at all
+		assert_gt(
+			cooldown, Answerback.interval_for(Answerback.HURT),
+			"%s bites faster than the player can be told about it" % species
+		)
+
+
+# -- how big the act was, not only what kind --------------------------------
+
+## A flash that is the same red for a scratch and for a near-killing blow is
+## a warning light, not a reading. So a row carries the SIZE of the act as
+## well as its kind: a fraction of whatever bar the act moved, which the
+## caller is the only one who can know.
+func test_a_row_carries_how_big_the_act_was():
+	var row: Dictionary = Answerback.for_action(
+		Answerback.HURT, {"damage": 40.0, "severity": 0.4}
+	)
+	assert_almost_eq(float(row["severity"]), 0.4, 0.0001)
+
+
+## Every caller that predates it, and every act with no bar to speak of,
+## reports nothing rather than a number nobody meant.
+func test_severity_is_zero_when_the_caller_does_not_say():
+	var row: Dictionary = Answerback.for_action("attack", {"damage": 12.0})
+	assert_almost_eq(float(row["severity"]), 0.0, 0.0001)
+
+
+## It is a fraction, and it stays one however a caller mis-measures.
+func test_severity_never_leaves_its_range():
+	var over: Dictionary = Answerback.for_action(Answerback.HURT, {"severity": 9.0})
+	var under: Dictionary = Answerback.for_action(Answerback.HURT, {"severity": -3.0})
+	assert_almost_eq(float(over["severity"]), 1.0, 0.0001)
+	assert_almost_eq(float(under["severity"]), 0.0, 0.0001)
+
+
+## A refusal is a refusal whatever it was going to cost.
+func test_a_refusal_reports_no_size():
+	var row: Dictionary = Answerback.for_action(
+		Answerback.HURT, {"failed": true, "severity": 0.9}
+	)
+	assert_almost_eq(float(row["severity"]), 0.0, 0.0001)
