@@ -1436,10 +1436,17 @@ func test_update_character_view_passes_zero_depth_through_on_dry_ground():
 # docs/concept/survival.md's "Stamina scope: movement only, not combat" and
 # docs/concept/spell_runtime.md) --------------------------------------------
 
+## The lens is no longer the whole pool. `apply_class` ends by granting your
+## class's own start node, and the Mage wedge's is a `max_mana` node -- so
+## once that stat went live (concept/skill_payoff.md) a mage's pool became
+## the lens PLUS what the node hands them. Asserted against the web's own
+## grant rather than the sum, so re-tuning `mage_start` cannot make this lie;
+## the same rule is driven end-to-end in test_player_skill_payoff_wiring.gd.
 func test_apply_class_sets_max_mana_from_the_archetypes_bonus():
 	player.apply_class("mage", {"max_mana": 50.0})
-	assert_almost_eq(player.max_mana, 50.0, 0.001)
-	assert_almost_eq(player.mana, 50.0, 0.001, "a freshly applied class should start at full mana")
+	assert_almost_eq(player.max_mana, 50.0 + player.skill_bonus("max_mana"), 0.001)
+	assert_almost_eq(player.mana, player.max_mana, 0.001,
+		"a freshly applied class should start at full mana")
 
 
 func test_apply_class_gives_a_non_caster_class_zero_mana():
@@ -1454,14 +1461,16 @@ func test_mana_never_goes_negative_even_with_a_large_negative_bonus():
 
 func test_spend_mana_succeeds_when_affordable():
 	player.apply_class("mage", {"max_mana": 50.0})
+	var pool: float = player.max_mana
 	assert_true(player.spend_mana(20.0))
-	assert_almost_eq(player.mana, 30.0, 0.001)
+	assert_almost_eq(player.mana, pool - 20.0, 0.001)
 
 
 func test_spend_mana_fails_and_changes_nothing_when_unaffordable():
 	player.apply_class("mage", {"max_mana": 50.0})
 	assert_false(player.spend_mana(999.0))
-	assert_almost_eq(player.mana, 50.0, 0.001, "an unaffordable spend must not touch mana at all")
+	assert_almost_eq(player.mana, player.max_mana, 0.001,
+		"an unaffordable spend must not touch mana at all")
 
 
 func test_mana_regenerates_over_time():
@@ -1477,7 +1486,7 @@ func test_mana_regenerates_over_time():
 func test_mana_regeneration_never_exceeds_max_mana():
 	player.apply_class("mage", {"max_mana": 50.0})
 	player._regen_mana(10000.0)
-	assert_almost_eq(player.mana, 50.0, 0.001)
+	assert_almost_eq(player.mana, player.max_mana, 0.001)
 
 
 ## Pins MANA_REGEN_PER_SECOND against the real cost of the cheapest example
@@ -1736,15 +1745,21 @@ func test_casting_a_known_spell_spends_mana_and_hits_a_nearby_creature():
 	player.apply_class("mage", {"max_mana": 50.0})
 	var target := _creature_at("herbivore", Vector2(10, 0))
 	var health_before: float = target.info.health
+	var mana_before: float = player.mana
 
 	assert_true(player.cast_spell("fire_bolt"))
 
-	assert_lt(player.mana, 50.0, "casting must spend real mana")
+	assert_lt(player.mana, mana_before, "casting must spend real mana")
 	assert_lt(target.info.health, health_before, "Fire Bolt must actually damage the nearby target")
 
 
+## Drained rather than born poor: a mage's pool can no longer be squeezed
+## below their start node's grant through the class lens (`apply_class`
+## floors it at what `mage_start` hands them, and that affords Fire Bolt),
+## so the condition this test is named for is now arranged by spending.
 func test_casting_without_enough_mana_fails_and_sets_a_message():
-	player.apply_class("mage", {"max_mana": 0.1})
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.spend_mana(player.mana - 0.1), "precondition: drained to 0.1")
 
 	assert_false(player.cast_spell("fire_bolt"))
 
@@ -1752,7 +1767,8 @@ func test_casting_without_enough_mana_fails_and_sets_a_message():
 
 
 func test_casting_without_enough_mana_spends_nothing():
-	player.apply_class("mage", {"max_mana": 0.1})
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.spend_mana(player.mana - 0.1), "precondition: drained to 0.1")
 	player.cast_spell("fire_bolt")
 	assert_almost_eq(player.mana, 0.1, 0.001)
 
@@ -1760,7 +1776,7 @@ func test_casting_without_enough_mana_spends_nothing():
 func test_casting_an_unknown_spell_id_does_nothing_and_fails():
 	player.apply_class("mage", {"max_mana": 50.0})
 	assert_false(player.cast_spell("not_a_real_spell"))
-	assert_almost_eq(player.mana, 50.0, 0.001)
+	assert_almost_eq(player.mana, player.max_mana, 0.001)
 
 
 func test_casting_a_self_delivery_spell_heals_the_caster():
@@ -1779,8 +1795,9 @@ func test_casting_with_nothing_in_range_still_spends_mana():
 	# touch/projectile with no target nearby is a real, resolved cast that
 	# simply hits nothing, not a refusal.
 	player.apply_class("mage", {"max_mana": 50.0})
+	var mana_before: float = player.mana
 	assert_true(player.cast_spell("fire_bolt"))
-	assert_lt(player.mana, 50.0)
+	assert_lt(player.mana, mana_before)
 
 
 # -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----
@@ -1868,7 +1885,8 @@ func test_a_catalogue_spell_you_have_not_learned_is_not_castable():
 
 	assert_false(player.cast_spell("minor_heal"))
 
-	assert_almost_eq(player.mana, 50.0, 0.001, "a spell you do not know must spend nothing")
+	assert_almost_eq(player.mana, player.max_mana, 0.001,
+		"a spell you do not know must spend nothing")
 
 
 func test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana():

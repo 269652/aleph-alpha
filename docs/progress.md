@@ -632,10 +632,48 @@ and most species have no loot row so they vanish on death.
   rendered by calling the real cost function twice, over the spell the
   spell bar has loaded.
 
-  Tests: `test_player_skill_payoff_wiring.gd` 6 (new),
+  **A consequence this slice shipped without noticing, caught on the merge
+  to `main` and fixed there** (2026-09-21). `apply_class` ends by granting
+  your class's own start node, and the Mage wedge's start node *is* a
+  `max_mana` node (`mage_start`, +5). The instant the stat went live, a
+  mage's starting pool stopped being the class lens alone — 50 became 55 —
+  and **ten assertions across nine tests in `test_player.gd` that had
+  pinned the bare lens went red**, two of them meaningfully: a pool set to
+  `max_mana: 0.1` to stage "not enough mana" is floored at the start node's
+  grant, which affords Fire Bolt, so those two tests had stopped testing
+  their own names.
+
+  The stacking itself is the established design, not a side effect —
+  `_grant_class_start_node` documents that it runs after `apply_class` "has
+  just RESET max_health to its class base", and `warrior_start`'s
+  `max_health` bonus has always landed on top of that reset. So the
+  implementation stands and the assertions were re-pinned: against
+  `player.max_mana` and `skill_bonus("max_mana")` rather than the literal
+  50, so re-tuning `mage_start` cannot break them again, and the two
+  "without enough mana" tests now *drain* the pool, which is what their
+  names said all along.
+
+  **Why it escaped the slice.** Every test in
+  `test_player_skill_payoff_wiring.gd` set `max_mana` directly and never
+  went through `apply_class` — the back door, where the start node never
+  fires. Three tests were added that use the real one (a mage's pool is the
+  lens *plus* the web's own grant; a warrior's is still exactly nothing;
+  and all three classes whose start node grants `max_mana` start deeper),
+  and confirmed red at `e181d0c`, the commit before the wiring: **50 where
+  the web granted 5**. Measured, the change raised three starting pools,
+  not one: **mage 50→55, herbalist 30→35, overseer 15→20**. The other half of the escape is recorded honestly
+  below — `test_player.gd` OOMs as a whole suite and was verified in
+  name-filtered subsets, and the four filters chosen (`damage`, `hurt`,
+  `health`, `venom`) did not include `mana` or `spell`.
+
+  Tests: `test_player_skill_payoff_wiring.gd` 9 (new),
   `test_node_payoff.gd` 28, `test_skill_web.gd` 65,
   `test_spell_executor.gd` 13, `test_spell_cost.gd` 28,
-  `test_player_spell_slots.gd` 10, `test_player_spell_weaving.gd` 20 —
+  `test_player_spell_slots.gd` 10, `test_player_spell_weaving.gd` 20,
+  `test_player.gd` filters `mana` 13 and `spell` 14, plus every other suite
+  that calls `apply_class` (`test_interior_avatar.gd` 14,
+  `test_player_persistence.gd` 16, `test_player_skill_web.gd` 26,
+  `test_skill_progression_loop.gd` 3, `test_spell_atom_effects.gd` 13) —
   green.
 
   Named next: **19 stats remain inert**, and `max_stamina` is the one to

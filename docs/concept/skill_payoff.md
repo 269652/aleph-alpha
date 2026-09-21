@@ -264,6 +264,34 @@ are named as such below.
   stat could not pass unnoticed, and it asserted the payoff row said
   `wired: false`; both had to be inverted deliberately, and the inert count
   recomputed from the live web rather than edited by hand.
+
+  **Wiring a stat moves the character it is granted to, including at
+  creation.** `Player.apply_class` ends by granting the class's own start
+  node, and the Mage wedge's start node is itself a `max_mana` node
+  (`mage_start`, +5). So a mage's starting pool is the class lens **plus**
+  that grant — 55, not the 50 `ClassArchetype` authors — exactly as a
+  warrior's bar has always been the lens plus `warrior_start`'s
+  `max_health`. Ten assertions in `test_player.gd` had pinned the bare lens
+  and went red on the merge to `main`; they are re-pinned against
+  `player.max_mana` and `skill_bonus("max_mana")` so re-tuning the node
+  cannot break them again.
+
+  Two of those ten were not merely stale. A pool staged at
+  `max_mana: 0.1` to make Fire Bolt unaffordable is now floored at the
+  start node's grant, which affords it — so they had quietly stopped
+  testing their own names. **The lesson for the 19 stats still below: a
+  stat that appears on a start node changes character creation the moment
+  it is wired, and any test that stages a shortage through the class lens
+  has to stage it by spending instead.**
+
+  It is also wider than the Mage wedge. `mage_start`, `herbalist_start` and
+  `overseer_start` all grant `max_mana`, so **three of the seven classes**
+  had their starting pool raised by 5 in this one change — the mage to 55,
+  the herbalist to 35, the overseer to 20. And three start nodes still
+  grant a stat nothing reads (`ranger_start` and `artisan_start` on
+  `max_stamina`, `beastmaster_start` on `pet_loyalty`), so the next wiring
+  of either will move character creation again, for those classes, on the
+  same day it lands.
 - ⬜ **19 stats still inert.** This module reports them; it does not read
   them. Each is a separate change in its own system. `max_stamina` is the
   next one worth naming, and it is *not* a `+=`: stamina is a 0–1 meter

@@ -25,6 +25,7 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const SpellBook = preload("res://src/gameplay/spell_book.gd")
 const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
+const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 
 var player
 
@@ -112,6 +113,78 @@ func test_a_trained_mage_spends_less_mana_on_the_same_spell():
 
 	assert_gt(plain, 0.0, "precondition: casting really costs something")
 	assert_lt(discounted, plain, "the three nodes a mage spent must buy something")
+
+
+# -- through the real door, not the back one ------------------------------
+
+## Every test above sets `max_mana` directly, and that is exactly how the
+## consequence below went unnoticed until the suite was re-run against
+## `main`: `apply_class` ends by granting your class's own start node, and
+## the Mage wedge's start node IS a `max_mana` node (`mage_start`, +5). The
+## moment that stat went live, a mage's starting pool stopped being the
+## class lens alone, and nine tests in `test_player.gd` that had pinned the
+## bare lens went red.
+##
+## The stacking is the established design rather than a side effect:
+## `_grant_class_start_node` documents that it runs after apply_class "has
+## just RESET max_health to its class base", and `warrior_start`'s
+## `max_health` bonus has always landed on top of that reset. This pins a
+## mage's pool to the same rule -- and pins it against the web's own grant,
+## not against the arithmetic's answer, so re-tuning `mage_start` cannot
+## make this test lie.
+func test_a_freshly_made_mage_owns_the_mana_their_start_node_grants():
+	var fresh = PlayerScene.instantiate()
+	add_child(fresh)
+	fresh.apply_class("mage", {"max_mana": 50.0})
+
+	var granted: float = fresh.skill_bonus("max_mana")
+	assert_gt(granted, 0.0, "precondition: the Mage wedge's start node really grants mana")
+	assert_almost_eq(
+		fresh.max_mana, 50.0 + granted, 0.0001,
+		"a mage's pool is the class lens PLUS the start node they are handed"
+	)
+	assert_almost_eq(
+		fresh.mana, fresh.max_mana, 0.0001,
+		"and a character who has just been made is full"
+	)
+	fresh.queue_free()
+
+
+## The same door, for the class that is not a caster: a warrior's start node
+## grants `max_health`, so their pool must still be exactly nothing. Without
+## this, a `max_mana` branch that fired for every archetype would pass the
+## test above and hand every warrior a mana bar.
+func test_a_freshly_made_warrior_still_has_no_pool_at_all():
+	var fresh = PlayerScene.instantiate()
+	add_child(fresh)
+	fresh.apply_class("warrior", {"max_mana": 0.0})
+	assert_almost_eq(fresh.max_mana, 0.0, 0.0001, "a warrior buys health, not mana")
+	fresh.queue_free()
+
+
+## And it is wider than the Mage wedge, which is the part a reader of
+## skill_payoff.md is owed as a measurement rather than a claim:
+## `mage_start`, `herbalist_start` and `overseer_start` ALL grant
+## `max_mana`, so wiring the stat raised three classes' starting pools at
+## once. Each is checked against `ClassArchetype`'s own lens plus the web's
+## own grant, so the doc's numbers stay honest if either is re-tuned.
+func test_every_class_whose_start_node_grants_mana_starts_deeper():
+	var archetype := ClassArchetype.new()
+	var casters := 0
+	for class_name_value in ["mage", "herbalist", "overseer"]:
+		var fresh = PlayerScene.instantiate()
+		add_child(fresh)
+		var lens: float = float(archetype.stats_for(class_name_value).get("max_mana", 0.0))
+		fresh.apply_class(class_name_value, archetype.stats_for(class_name_value))
+		var granted: float = fresh.skill_bonus("max_mana")
+		assert_gt(granted, 0.0, "%s's start node must really grant mana" % class_name_value)
+		assert_almost_eq(
+			fresh.max_mana, lens + granted, 0.0001,
+			"%s's pool is the lens plus the start node" % class_name_value
+		)
+		casters += 1
+		fresh.queue_free()
+	assert_eq(casters, 3, "precondition: all three were driven")
 
 
 # -- and the tooltip stops calling them declared --------------------------
