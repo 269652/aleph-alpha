@@ -315,6 +315,45 @@ and most species have no loot row so they vanish on death.
   `--solo` run, not only in tests: the chip renders *"The Hearth  -  home
   -  1 known"*, visible.
 
+- ✅ **A way to battletest the spell and skill layers** (2026-09-21) — see
+  `concept/arena.md`. Asked for directly. Measured before building anything:
+  `test_battle_loop.gd` (8, new) asks end to end, with no mocks, the only
+  question a player has — weave a spell, press the key with something in
+  front of you, does it die? It does. A woven spell damages a real boar, a
+  two-atom weave lands, the learned spell lands, repeated casting really
+  kills (the loop terminates), and a real predator really damages the player
+  through its own attack path for its own profile's figure. **The machinery
+  was never the problem.**
+
+  Three deliberate decisions stand between a player and an encounter, and
+  each is right for the game and wrong for a test loop: a new character owns
+  **no motes** (only three of seven phenomena have call sites, one needing a
+  venomous snake 61 chunks out); **mana is entirely the class lens**, so a
+  warrior or artisan has `max_mana` 0.0 and can never cast anything; and the
+  **hearth is safe on purpose**, so the nearest ground where predators hunt
+  is 16 chunks out.
+
+  `/arena [species] [count]` stands beside all three without changing any of
+  them. Real creatures from the real renderer, on a ring derived from the
+  species' **own** `SpeciesBite.sense_radius_tiles` — inside it so they
+  notice you, outside `CreatureMarker.ATTACK_RANGE` so they are not already
+  biting, both ends swept across the whole roster by test. One of every atom
+  in the pouch, read from `SpellAtomCatalog.known_ids` so a new atom joins
+  the loadout the day it is added. And a lent mana pool for a class with
+  none, derived as six casts of the catalogue's dearest atom and
+  **announced** in the console line, because a tester who does not know
+  their mana was topped up will misread every result after it.
+
+  Tests: `test_arena.gd` 17/17 (new), `test_world_arena_command.gd` 10/10
+  (new), `test_battle_loop.gd` 8/8 (new). Verified in a running game as
+  well: a `--solo` launch invoking the command live reported 3 staged
+  wolves, **48** mana lent and **25** motes granted, with no errors.
+
+  Known gap, named: this makes no more encounters happen in ordinary play.
+  `concept/monsters.md`'s roster is designed and unbuilt, and the motes a
+  character can come by naturally are still the three phenomena with call
+  sites.
+
 
 ### Loose stone (see `docs/concept/stone.md`)
 
