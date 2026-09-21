@@ -47,13 +47,16 @@ const BETTER_LOWER := "lower"
 ## Every stat key this file can render through a real function, and the
 ## subset of those the LIVE game already feeds the web's bonus into.
 ##
-## The difference between the two lists is `spell_efficiency`, and it is not
-## an oversight: `SpellExecutor.cost_for(rule, governing_stat)` really takes
-## the stat and really discounts the cost, but `Player`'s only cast site calls
-## `cost_for(rule)` and lets the argument default to 0.0. So the sentence is
-## truthfully renderable and the effect is not yet real, which is exactly what
-## the row's `wired: false` says. test_node_payoff.gd reads scenes/player.gd
-## and holds both lists to what that file actually does.
+## The two lists are identical again as of 2026-09-21, and that is the point:
+## `spell_efficiency` spent a while in the first and not the second, because
+## `SpellExecutor.cost_for(rule, governing_stat)` really took the stat and
+## really discounted the cost while `Player`'s cast sites called
+## `cost_for(rule)` and let the argument default to 0.0 -- a sentence that
+## was true of the function and false of the game. Both cast sites pass it
+## now, and `max_mana` (six nodes, more than any other key in the web)
+## reached `_apply_skill_stat` in the same pass. test_node_payoff.gd reads
+## scenes/player.gd and holds both lists to what that file actually does, so
+## a stat cannot be listed as wired without the wiring.
 const CONSUMER_STATS := [
 	"max_health",
 	"attack_damage",
@@ -61,6 +64,7 @@ const CONSUMER_STATS := [
 	"carpentry_level",
 	"taming_affinity",
 	"spell_efficiency",
+	"max_mana",
 ]
 const WIRED_STATS := [
 	"max_health",
@@ -68,16 +72,20 @@ const WIRED_STATS := [
 	"meat_yield",
 	"carpentry_level",
 	"taming_affinity",
+	"spell_efficiency",
+	"max_mana",
 ]
 
-## The audit these figures come from (docs/concept/skill_payoff.md, 2026-09-20):
+## The audit these figures come from (docs/concept/skill_payoff.md,
+## 2026-09-20, inert count corrected 2026-09-21 when `max_mana` gained a
+## consumer):
 ## how many distinct stat keys the whole web grants, and how many of them
 ## nothing can render because nothing consumes them. Both are recomputed from
 ## the live SkillWeb by test_node_payoff.gd rather than trusted -- so adding a
 ## stat, or finally wiring one up, fails the suite until the number here (and
 ## the count in the doc that quotes it) is corrected.
 const WEB_STAT_COUNT_AT_AUDIT := 26
-const INERT_STAT_COUNT_AT_AUDIT := 20
+const INERT_STAT_COUNT_AT_AUDIT := 19
 
 ## `scenes/player.gd`'s own `const UNARMED_DAMAGE := 5.0`, restated here for
 ## the reason sprint_cost.gd restates its tile size: a pure rule module must
@@ -335,10 +343,10 @@ static func default_consumers(facts: Dictionary) -> Dictionary:
 
 	# spell_efficiency -> what your prepared spell costs to cast.
 	# SpellExecutor.cost_for really takes this stat and really discounts the
-	# cost through SpellCost.efficiency -- and Player's cast site does not
-	# pass it, so this is the one entry marked `wired: false`. Registered
-	# anyway: the sentence is true of the function, and the row saying so is
-	# the most useful bug report this module can file.
+	# cost through SpellCost.efficiency, and Player's two cast sites pass it
+	# now (2026-09-21) -- this entry spent a while marked `wired: false`
+	# precisely because they did not, which is the most useful bug report
+	# this module has filed.
 	var spell_rule: Dictionary = facts.get("spell_rule", {})
 	if not spell_rule.is_empty():
 		var executor := SpellExecutor.new()
@@ -347,9 +355,27 @@ static func default_consumers(facts: Dictionary) -> Dictionary:
 			"label": "%s mana cost" % spell_name,
 			"unit": "mana",
 			"better": BETTER_LOWER,
-			"wired": false,
+			"wired": true,
 			"evaluate": func(bonus: float) -> float:
 				return executor.cost_for(spell_rule, bonus),
+		}
+
+		# max_mana -> how many of that spell the pool now pays for. The
+		# sentence a mage can check: "+10 max_mana" is an accumulator slot,
+		# "Frost Lance casts: 3 -> 5" is the thing they watched happen.
+		# Registered only alongside a real prepared spell, for the same
+		# reason spell_efficiency is: the cost of a spell that does not
+		# exist is not a number to quote.
+		var base_mana := float(facts.get("base_max_mana", 0.0))
+		var efficiency := float(facts.get("spell_efficiency", 0.0))
+		var cost := maxf(executor.cost_for(spell_rule, efficiency), 0.001)
+		consumers["max_mana"] = {
+			"label": "%s casts from a full pool" % spell_name,
+			"unit": "casts",
+			"better": BETTER_HIGHER,
+			"wired": true,
+			"evaluate": func(bonus: float) -> float:
+				return floorf((base_mana + bonus) / cost),
 		}
 
 	return consumers

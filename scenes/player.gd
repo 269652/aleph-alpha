@@ -1645,6 +1645,19 @@ func _apply_skill_stat(stat_name: String, amount: float) -> void:
 	if stat_name == "max_health":
 		max_health += amount
 		health += amount
+	elif stat_name == "max_mana":
+		# Six nodes of the Mage wedge -- more than any other key in the web
+		# -- and nothing added this to anything, so every point a mage spent
+		# on their own resource pool did nothing at all
+		# (docs/concept/skill_payoff.md).
+		#
+		# Fills what it added, exactly the courtesy max_health already pays:
+		# a node that raised your ceiling and left you short of it would
+		# read as a downgrade. It is the new headroom, not a free refill --
+		# a mage who was already spent comes out of it still spent, with
+		# more room.
+		max_mana += amount
+		mana += amount
 	elif stat_name == "attack_damage":
 		_skill_attack_bonus += amount
 
@@ -3617,11 +3630,11 @@ func cast_woven() -> bool:
 	if rule == null:
 		return false
 	var context := {"wielder": {"mana": mana, "health": health}}
-	if not _spell_executor.can_cast(rule, mana, context):
+	if not _spell_executor.can_cast(rule, mana, context, skill_bonus("spell_efficiency")):
 		cast_message = "Not enough mana."
 		_cast_message_timer = CAST_MESSAGE_DURATION
 		return false
-	spend_mana(_spell_executor.cost_for(rule))
+	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 	answer("cast", {})
 	# The same resolution an authored spell gets -- one pipeline, one
@@ -3663,12 +3676,12 @@ func cast_spell(spell_id: String) -> bool:
 		return false
 
 	var context := {"wielder": {"mana": mana, "health": health}}
-	if not _spell_executor.can_cast(rule, mana, context):
+	if not _spell_executor.can_cast(rule, mana, context, skill_bonus("spell_efficiency")):
 		cast_message = "Not enough mana."
 		_cast_message_timer = CAST_MESSAGE_DURATION
 		return false
 
-	spend_mana(_spell_executor.cost_for(rule))
+	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 
 	var delivery := _spell_executor.delivery_for(rule)

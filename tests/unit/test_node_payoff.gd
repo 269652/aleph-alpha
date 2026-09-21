@@ -141,9 +141,13 @@ func test_a_spell_node_is_rendered_as_the_mana_the_spell_costs():
 	assert_almost_eq(float(row["before"]), executor.cost_for(rule, 0.0), 0.0001)
 	assert_almost_eq(float(row["after"]), executor.cost_for(rule, 8.0), 0.0001)
 	assert_eq(row["better"], "lower", "mana spent going down is good news")
-	assert_false(
+	# This assertion was `assert_false` for as long as the consumer existed
+	# and the cast site did not pass the stat -- the row said `wired: false`
+	# and that was the honest thing to say. Both cast sites pass it as of
+	# 2026-09-21, so the honest thing to say has changed.
+	assert_true(
 		bool(row["wired"]),
-		"the function takes the stat but Player's cast site passes 0.0 -- say so, do not pretend"
+		"Player's cast sites pass this stat now -- the row must stop apologising for them"
 	)
 
 
@@ -231,10 +235,18 @@ func test_the_stats_claimed_wired_are_really_read_by_the_live_game():
 			read_via_bonus or read_via_apply,
 			"%s is claimed wired but nothing in player.gd reads it" % stat_key
 		)
-	assert_false(
-		source.contains("spell_efficiency"),
-		"player.gd now mentions spell_efficiency -- if it is wired, move it into WIRED_STATS "
-		+ "and correct docs/concept/skill_payoff.md's count"
+	# The inverse of the assertion this used to make. It read
+	# `assert_false(source.contains("spell_efficiency"))` while the stat was
+	# declared-but-unwired, so that wiring it up could not pass unnoticed.
+	# It is wired now, and the guard points the other way: unwiring it, or
+	# leaving the cast sites paying the undiscounted price, fails here.
+	assert_true(
+		source.contains('cost_for(rule, skill_bonus("spell_efficiency"))'),
+		"a cast must pay the price this character actually pays"
+	)
+	assert_true(
+		source.contains('can_cast(rule, mana, context, skill_bonus("spell_efficiency"))'),
+		"and must be refused against that same price, not the undiscounted one"
 	)
 
 

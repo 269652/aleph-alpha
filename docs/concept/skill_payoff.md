@@ -14,15 +14,19 @@ stat keys**. Of those, **5** are read by anything in the running game —
 `meat_yield` (`Player._butcher_step` → `Butchering.meat_count`),
 `carpentry_level` (`Player._meets_required_skill` and the saw gate), and
 `taming_affinity` (`Player`'s restrain call → `Taming.break_free_chance`).
-One more, `spell_efficiency`, has a real consumer function that takes it
-(`SpellExecutor.cost_for(rule, governing_stat)`) and is **never given
-it** — `Player`'s only cast site calls `cost_for(rule)` and lets the
-argument default to `0.0`. The remaining **20 stat keys are inert**:
-`spell_power`, `spell_atom_tier`, `pet_loyalty`, `pet_health`,
-`mining_yield`, `smelting_yield`, `ore_yield`, `craft_quality`,
-`wound_recovery`, `disease_resistance`, `venom_resistance`,
-`knockback_resist`, `scent_range`, `throw_force`, `stamina_regen`,
-`max_mana`, `max_stamina`, `hire_capacity`, `contract_throughput`,
+One more, `spell_efficiency`, had a real consumer function that took it
+(`SpellExecutor.cost_for(rule, governing_stat)`) and was **never given
+it** — `Player`'s cast sites called `cost_for(rule)` and let the argument
+default to `0.0`.
+
+**Corrected 2026-09-21**: both cast sites pass it now, and `max_mana` —
+six nodes, more than any other key in the whole web — reached
+`_apply_skill_stat` in the same pass, so the count is **7 read** and
+**19 inert**: `spell_power`, `spell_atom_tier`, `pet_loyalty`,
+`pet_health`, `mining_yield`, `smelting_yield`, `ore_yield`,
+`craft_quality`, `wound_recovery`, `disease_resistance`,
+`venom_resistance`, `knockback_resist`, `scent_range`, `throw_force`,
+`stamina_regen`, `max_stamina`, `hire_capacity`, `contract_throughput`,
 `trade_margin`. They are summed into `Player.skill_bonus` correctly,
 forever, and nothing on Earth reads them.
 
@@ -127,7 +131,8 @@ compute:
 | `meat_yield` | `Butchering.meat_count` | meat from one carcass | ✅ |
 | `carpentry_level` | `CraftingRecipeBook.recipe_required_skill` | recipes the gate now lets through | ✅ |
 | `taming_affinity` | `Taming.break_free_chance` | escape chance of the animal on your rope | ✅ |
-| `spell_efficiency` | `SpellExecutor.cost_for` | mana your spell costs | ❌ function exists, live cast site passes `0.0` |
+| `spell_efficiency` | `SpellExecutor.cost_for` | mana your spell costs | ✅ (2026-09-21 — both cast sites pass it, and `can_cast` is asked against the same discounted price so a mage is never refused a spell they can afford) |
+| `max_mana` | `SpellExecutor.cost_for` over the pool | casts of that spell from a full pool | ✅ (2026-09-21 — `+10 max_mana` is an accumulator slot; *"Frost Lance casts: 3 → 5"* is the thing a mage watched happen) |
 
 `facts` carries the character's own live numbers (their un-bonused base
 health, their held weapon, the species in front of them, the parsed
@@ -246,7 +251,22 @@ are named as such below.
   asserted only that an arrow was present, which a key mismatch passes
   happily. It now asserts the two SIDES DIFFER, which a key mismatch
   cannot.
-- ⬜ **20 stats still inert.** This module reports them; it does not
-  read them. Each is a separate change in its own system, and
-  `spell_efficiency` is the cheapest of them by a distance — the
-  function already takes the argument.
+- ✅ **`spell_efficiency` and `max_mana` are read** (2026-09-21). The
+  cheapest two, exactly as this doc predicted: the efficiency function
+  already took the argument and both cast sites now pass it (and
+  `can_cast` is asked against the same discounted price, so a mage is never
+  refused a spell they can afford), while `max_mana` needed one
+  `_apply_skill_stat` branch. That is nine nodes of the Mage wedge — three
+  focus, six attunement — which had bought literally nothing.
+
+  The drift test earned its keep in both directions. It asserted
+  `assert_false(source.contains("spell_efficiency"))` so that wiring the
+  stat could not pass unnoticed, and it asserted the payoff row said
+  `wired: false`; both had to be inverted deliberately, and the inert count
+  recomputed from the live web rather than edited by hand.
+- ⬜ **19 stats still inert.** This module reports them; it does not read
+  them. Each is a separate change in its own system. `max_stamina` is the
+  next one worth naming, and it is *not* a `+=`: stamina is a 0–1 meter
+  with no maximum, so the stat has to mean "your bar drains slower"
+  (`SprintCost.stamina_for_seconds`) and wants a derivation before it wants
+  a branch.

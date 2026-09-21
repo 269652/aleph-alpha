@@ -481,6 +481,55 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **Nine nodes of the Mage wedge that bought nothing** (2026-09-21) —
+  see `concept/skill_payoff.md`.
+
+  That doc's own audit: the skill web grants **26 distinct stat keys** and
+  the running game read **five** of them. `Player._apply_skill_stat` has
+  exactly two branches, and the other twenty-one keys are summed faithfully
+  into `Player.skill_bonus` and read by nothing.
+
+  The two cheapest are now read, and the doc had already named the first as
+  *"the cheapest of them by a distance"*:
+
+  - **`spell_efficiency`** (3 nodes). `SpellExecutor.cost_for(rule,
+    governing_stat)` really took the stat and really discounted the cost
+    through `SpellCost.efficiency` — and both of `Player`'s cast sites
+    called `cost_for(rule)` and let the argument default to 0.0. The
+    consumer existed; the argument did not. `can_cast` is asked against the
+    same discounted price now, so a mage is never refused a spell they can
+    actually afford.
+  - **`max_mana`** (6 nodes — more than any other key in the whole web).
+    Nothing added it to anything, so every point a mage spent on their own
+    resource pool did nothing at all. It fills what it adds, exactly the
+    courtesy `max_health` already pays, but it is the new headroom and not
+    a free refill: a mage who was already spent comes out still spent, with
+    more room.
+
+  **The drift test earned its keep in both directions**, which is the part
+  worth recording. `test_node_payoff.gd` asserted
+  `assert_false(source.contains("spell_efficiency"))` so that wiring the
+  stat could not pass unnoticed, and asserted the tooltip row said
+  `wired: false`. Both had to be inverted *deliberately*, and the inert
+  count is recomputed from the live web rather than edited by hand — so
+  claiming a stat is wired without the wiring still fails.
+
+  And the tooltip stops being a noun: `+10 max_mana` is an accumulator
+  slot, *"Frost Lance casts: 3 → 5"* is the thing a mage watched happen —
+  rendered by calling the real cost function twice, over the spell the
+  spell bar has loaded.
+
+  Tests: `test_player_skill_payoff_wiring.gd` 6 (new),
+  `test_node_payoff.gd` 28, `test_skill_web.gd` 65,
+  `test_spell_executor.gd` 13, `test_spell_cost.gd` 28,
+  `test_player_spell_slots.gd` 10, `test_player_spell_weaving.gd` 20 —
+  green.
+
+  Named next: **19 stats remain inert**, and `max_stamina` is the one to
+  watch because it is *not* a `+=` — stamina is a 0–1 meter with no
+  maximum, so the stat has to mean "your bar drains slower" and wants a
+  derivation before it wants a branch.
+
 - ✅ **A predator could never start a fight** (2026-09-21) — see
   `concept/predator_profiles.md`.
 
