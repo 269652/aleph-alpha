@@ -76,11 +76,12 @@ const VIEW_ONLY_ACTIONS := [
 ## World-changing acts that reach the player through something other than a
 ## key: `craft` is CraftingWindow.craft_requested -> Player.craft,
 ## `level_up` is the return value of Player.gain_experience that nobody
-## currently reads, and `hurt` is the only one that is not an act of the
-## player's at all -- it is what a bite landing on them answers with. These
-## get rows, and must NOT be bound actions -- see
+## currently reads, `hurt` is the only one that is not an act of the
+## player's at all -- it is what a bite landing on them answers with -- and
+## `mote_found` is what living through something teaches (Player.witness).
+## These get rows, and must NOT be bound actions -- see
 ## test_the_unbound_verbs_are_really_unbound.
-const UNBOUND_VERBS := ["craft", "level_up", Answerback.HURT]
+const UNBOUND_VERBS := ["craft", "level_up", Answerback.HURT, Answerback.MOTE_FOUND]
 
 
 func _bound_actions() -> Array:
@@ -641,3 +642,16 @@ func test_no_row_floats_a_number_in_invisible_ink():
 			colour.a, 0.0,
 			"%s floats a receipt in a colour nobody can see" % action
 		)
+
+
+## The third unbound verb, and the one that was raised before it existed:
+## `Player.witness` has called `answer("mote_found", ...)` since the
+## witness layer shipped, and `has_feedback` returned false for it -- so
+## every mote a character earned by living through something was granted in
+## total silence. The call was there; the row was not.
+func test_finding_a_mote_is_answered():
+	var row: Dictionary = Answerback.for_action(
+		Answerback.MOTE_FOUND, {"item": "Frost", "count": 1}
+	)
+	assert_false(row.is_empty(), "learning an atom is an event")
+	assert_string_contains(String(row["float_text"]), "Frost")

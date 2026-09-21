@@ -168,6 +168,18 @@ const GENERIC_REFUSAL := "Not now"
 ## already shows conditions as chips (HudReadouts.condition_chips).
 const HURT := "hurt"
 
+## What living through something teaches (Player.witness,
+## docs/concept/spell_weaving.md): the first frost a character feels hands
+## them the frost atom, and they never learn it twice.
+##
+## Unbound like `craft` and `level_up`, and raised before it existed:
+## `Player.witness` has called `answer("mote_found", ...)` since the witness
+## layer shipped and `has_feedback` returned false for it, so every atom a
+## character earned by living through something was granted in TOTAL
+## SILENCE. The call was there; the row was not. Named here so the raiser
+## and the table cannot drift again.
+const MOTE_FOUND := "mote_found"
+
 const FEEDBACK := {
 	# The feet. The one verb this game already answers, and the reason the
 	# floor interval is what it is.
@@ -267,6 +279,10 @@ const FEEDBACK := {
 	# Unbound, and the only row in this table for something that happens TO
 	# the player rather than because they pressed something. See HURT.
 	HURT: {"sound": "hurt", "flash": FLASH_HIT, "floats": FLOAT_DAMAGE, "message": "", "interval": REFLEX_INTERVAL_SECONDS},
+	# Unbound: what living through something taught. A deliberate interval,
+	# because it is a sentence-sized event a player should stop and read --
+	# the first frost is the whole acquisition story for that atom.
+	MOTE_FOUND: {"sound": "mote_found", "flash": FLASH_GAIN, "floats": FLOAT_ITEM, "message": "Learned {item}", "interval": DELIBERATE_INTERVAL_SECONDS},
 }
 
 

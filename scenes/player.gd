@@ -3422,7 +3422,7 @@ func witness(phenomenon: String) -> bool:
 		return false
 	_witnessed[phenomenon] = true
 	grant_mote(atom)
-	answer("mote_found", {"item": SpellMote.display_name_for(atom), "count": 1})
+	answer(Answerback.MOTE_FOUND, {"item": SpellMote.display_name_for(atom), "count": 1})
 	return true
 
 

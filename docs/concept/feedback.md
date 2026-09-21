@@ -420,6 +420,17 @@ the suite goes red before it can ship.
   3 exists to prevent. Each half still rate-limits itself, so holding a key
   against a wall hears one *"no"* rather than forty.
 
+- ✅ **A mote granted in silence** (2026-09-21). `Player.witness` had
+  called `answer("mote_found", …)` since the witness layer shipped, and
+  `Answerback.has_feedback` returned false for it — so every atom a
+  character earned by living through something (their first frost, their
+  first storm) was granted with no sound, no flash, no number and no line.
+  The call was there; the **row** was not, which is the one failure mode
+  this table's two-way drift test cannot catch on its own: it checks that
+  every row is a real verb and that every bound verb has a row, and
+  `mote_found` was neither until now. It is an `UNBOUND_VERB` beside
+  `craft`, `level_up` and `hurt`.
+
 - ⬜ **The sounds themselves**, still. Every `sound` id but the footsteps
   names a clip that does not exist, `hurt` included. The table is the
   commissioning list.

@@ -209,3 +209,26 @@ func test_two_refusals_inside_the_interval_still_answer_once():
 	player.answer("attack", {"failed": true, "reason": "Nothing in reach."})
 	player.answer("attack", {"failed": true, "reason": "Nothing in reach."})
 	assert_eq(seen.size(), 1)
+
+
+## And the real witness path raises it, rather than a test hook: living
+## through the cold hands you frost, once, out loud.
+func test_learning_an_atom_by_living_through_something_answers():
+	const SpellMote = preload("res://src/gameplay/spell_mote.gd")
+	var seen := _answers()
+	assert_true(
+		player.witness(SpellMote.PHENOMENON_FROZE),
+		"precondition: the first frost really teaches something"
+	)
+	assert_eq(seen.size(), 1, "a granted atom is an event")
+	assert_eq(String(seen[0]["action"]), Answerback.MOTE_FOUND)
+	assert_ne(String(seen[0]["message"]), "", "and it says what was learned")
+
+
+## The second time teaches nothing, so it says nothing.
+func test_living_through_the_same_thing_twice_answers_once():
+	const SpellMote = preload("res://src/gameplay/spell_mote.gd")
+	player.witness(SpellMote.PHENOMENON_FROZE)
+	var seen := _answers()
+	assert_false(player.witness(SpellMote.PHENOMENON_FROZE))
+	assert_eq(seen.size(), 0)
