@@ -1129,6 +1129,37 @@ func take_damage(amount: float) -> void:
 	# reduces a hit to nothing -- at least MIN_ARMORED_DAMAGE always lands.
 	if amount > 0.0:
 		amount = maxf(MIN_ARMORED_DAMAGE, amount - equipment.total_armor())
+	_suffer(amount)
+
+
+## Damage that is already inside you: venom, a swallowed toxin, burning.
+##
+## A tick is NOT a blow, and routing one through `take_damage` was a real,
+## measured bug rather than a tidiness question. Every damage-over-time step
+## calls its tick with a per-frame FRACTION (`dps * delta`), and
+## `take_damage` ends with `maxf(MIN_ARMORED_DAMAGE, ...)` -- which is
+## exactly right for a hit and catastrophic for a fraction. At 60 fps
+## venom's 1.5 dps arrived as 0.025 a frame, the floor lifted every one of
+## them to 1.0, and the real rate was SIXTY damage a second. Measured: one
+## second of venom dealt 60.0 and a full three-stack dose dealt 481, so a
+## single snake bite killed a hundred-health character in under two seconds
+## instead of costing the 36 health its own model specifies.
+##
+## The same path also called `_wear_equipped_item()` once per frame while
+## blocking, so being venomed behind a raised guard destroyed a weapon in
+## seconds.
+##
+## So a tick bypasses block, shield, armour and the floor entirely. Nothing
+## stops poison by holding a sword up, and nothing should scale a fraction
+## against a number designed for a whole blow.
+func take_tick_damage(amount: float) -> void:
+	if is_dead or amount <= 0.0:
+		return
+	_suffer(amount)
+
+
+## The one place health really goes down, and the death it can cause.
+func _suffer(amount: float) -> void:
 	health = _health.take_damage(health, amount)
 	if _health.is_dead(health):
 		is_dead = true
@@ -1901,7 +1932,7 @@ func apply_venom() -> void:
 func _venom_step(delta: float) -> void:
 	var stacks := _debuff_stack.stacks_of(active_venom_debuffs, VenomModel.DEBUFF_ID)
 	if stacks > 0:
-		take_damage(_venom_model.damage_per_second(stacks) * delta)
+		take_tick_damage(_venom_model.damage_per_second(stacks) * delta)
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
 
 
@@ -1947,7 +1978,7 @@ func apply_mushroom_toxin(species_id: String) -> void:
 func _mushroom_toxin_step(delta: float) -> void:
 	var stacks := _debuff_stack.stacks_of(active_mushroom_toxin_debuffs, MushroomToxin.DEBUFF_ID)
 	if stacks > 0:
-		take_damage(_mushroom_toxin.damage_per_second(stacks, _mushroom_toxin_species) * delta)
+		take_tick_damage(_mushroom_toxin.damage_per_second(stacks, _mushroom_toxin_species) * delta)
 	active_mushroom_toxin_debuffs = _debuff_stack.advance(active_mushroom_toxin_debuffs, delta)
 
 
@@ -1996,7 +2027,7 @@ func _spell_status_step(delta: float) -> void:
 	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
 		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
 		if stacks > 0:
-			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+			take_tick_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
 	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
 
 
