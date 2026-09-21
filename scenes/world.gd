@@ -157,6 +157,7 @@ const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
+const Arena = preload("res://src/gameplay/arena.gd")
 const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
 const ArrivalBriefing = preload("res://src/gameplay/arrival_briefing.gd")
 const SpellWeaveWindow = preload("res://scenes/spell_weave_window.gd")
@@ -486,6 +487,13 @@ const KEYBINDINGS_PATH := "user://keybindings.cfg"
 ## little around the player rather than stacking exactly on top of each
 ## other or one another.
 const MAX_SPAWN_COUNT := 10
+
+## What /arena stages when told nothing: a wolf is the reference species
+## SpeciesBite derives every other bite from, and three is enough to be a
+## fight rather than a duel. The count itself is capped by
+## Arena.MAX_OPPONENTS, not here.
+const ARENA_DEFAULT_SPECIES := "wolf"
+const ARENA_DEFAULT_COUNT := 3
 const SPAWN_SCATTER := 20.0
 ## /give caps how many of an item one command can hand out.
 const MAX_GIVE_COUNT := 99
@@ -5115,7 +5123,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
 					+ "  /quests <entity_id>  /emergence"
-					+ "  /spawn <species> [count]  /give <item_id> [count]"
+					+ "  /spawn <species> [count]  /arena [species] [count]"
+					+ "  /give <item_id> [count]"
 					+ "  /craft <recipe_id>  /gold <amount>  /learn [spell_id]"
 					+ "  /village  /river  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
@@ -5192,6 +5201,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_ecotest_command(args)
 		"spawn":
 			_handle_spawn_command(args, local_player)
+		"arena":
+			_handle_arena_command(args, local_player)
 		"give":
 			_handle_give_command(args, local_player)
 		"craft":
@@ -5655,6 +5666,55 @@ func _handle_spawn_command(args: Array, local_player: Player) -> void:
 			_creatures, species, local_player.position + offset, _chunk_manager, TerrainRenderer.TILE_SIZE
 		)
 	_dev_console.log_line("Spawned %d %s." % [count, species])
+
+
+## /arena [species] [count] -- stages a real fight around the player, so the
+## spell and skill layers can be battletested without first arranging the
+## circumstances that would produce one (docs/concept/arena.md).
+##
+## Measured before it existed (test_battle_loop.gd): the combat machinery is
+## sound end to end. What is missing is the ENCOUNTER, and three deliberate
+## decisions stand in the way -- a new character owns no motes, mana is
+## entirely the class lens (a warrior has 0.0 and can never cast), and the
+## hearth is safe on purpose so the nearest real fight is 16 chunks out.
+## This works around all three without changing any of them.
+##
+## Reuses /spawn's own species resolution (friendly aliases and all) and the
+## same CreatureRenderer.spawn_single, so the opposition is real creatures
+## and not a second kind of thing.
+func _handle_arena_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to stage a fight around.")
+		return
+
+	var typed := String(args[0]) if args.size() >= 1 else ARENA_DEFAULT_SPECIES
+	var species := ConsoleSpecies.resolve(typed)
+	if species == "":
+		_dev_console.log_line(
+			"Unknown species '%s'. Try: %s" % [typed, ", ".join(ConsoleSpecies.spawnable())]
+		)
+		return
+
+	var count := ARENA_DEFAULT_COUNT
+	if args.size() >= 2:
+		count = int(args[1])
+	var offsets := Arena.ring_offsets(count, Arena.ring_radius_px_for(species))
+	for offset in offsets:
+		_creature_renderer.spawn_single(
+			_creatures, species, local_player.position + offset,
+			_chunk_manager, TerrainRenderer.TILE_SIZE
+		)
+
+	# Both halves of "you can actually test a spell now": one of every atom
+	# in the pouch, and a pool to spend if this character's class gave them
+	# none. mana_pool_for only ever fills a vacuum -- a mage keeps their own.
+	for atom_id in Arena.loadout_motes():
+		local_player.grant_mote(String(atom_id))
+	var lent := local_player.max_mana <= 0.0
+	local_player.max_mana = Arena.mana_pool_for(local_player.max_mana)
+	local_player.mana = local_player.max_mana
+
+	_dev_console.log_line(Arena.report_line(species, offsets.size(), lent))
 
 
 func _handle_give_command(args: Array, local_player: Player) -> void:
