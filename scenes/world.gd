@@ -1256,6 +1256,7 @@ func _ready() -> void:
 	_build_land_sense_label()
 	_build_creature_panels_container()
 	_build_condition_chips()
+	_build_place_card()
 	_build_survival_bar()
 	_build_world_clock_card()
 	_build_karma_display()
@@ -2315,6 +2316,17 @@ const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
 var _discovery_banner: PanelContainer
 var _discovery_card_seconds_left := 0.0
 
+## The permanent place reading (see _build_place_card) and its last text, so
+## a frame that has not moved rebuilds nothing.
+var _place_card: PanelContainer
+var _place_card_text := ""
+
+## The tile the arrival card was read from, so "has the character moved" is
+## measured from the greeting rather than from the origin. See
+## _expire_arrival_card.
+var _arrival_tile := Vector2i.ZERO
+var _arrival_tile_known := false
+
 
 ## One footfall, every client frame (docs/concept/discovery.md).
 ##
@@ -2418,12 +2430,36 @@ func _show_arrival_briefing(local_player: Player) -> void:
 		return
 	_set_message_banner(_arrival_banner, card)
 	_arrival_card_seconds_left = Answerback.seconds_to_read(card)
+	# Where it was read from, so the countdown starts on the first step
+	# rather than on the first frame (see _expire_arrival_card).
+	_arrival_tile = player_tile
+	_arrival_tile_known = true
 
 
-func _expire_arrival_card(delta: float) -> void:
+## The arrival card does not start expiring until the character has taken a
+## step.
+##
+## Measured after "no card or XP visible": the card really was raised, and it
+## really said "You are on the Isar, in spring." -- for 1.51 s, which is
+## Answerback.seconds_to_read of six words, while the loading overlay was
+## still fading. A greeting nobody can read is not a greeting, and this is
+## the one moment a new player is listening. Standing still reads it for as
+## long as they like; moving says they are done.
+func _expire_arrival_card(delta: float, has_moved: bool) -> void:
+	if not has_moved:
+		return
 	_arrival_card_seconds_left = _expire_card(
 		_arrival_banner, _arrival_card_seconds_left, delta
 	)
+
+
+## Whether the character has left the tile they were greeted on. False until
+## a card has actually been raised, so a session with no briefing never
+## counts as "moved" and never touches the timer.
+func _has_left_the_arrival_tile(local_player: Player) -> bool:
+	if not _arrival_tile_known or local_player == null:
+		return false
+	return local_player.current_tile() != _arrival_tile
 
 
 ## The nearest settlement this world has actually founded, as `{id, tile}`,
@@ -3362,6 +3398,53 @@ func _update_condition_chips(local_player: Player) -> void:
 		_apply_scaled_font(label, UiTheme.BASE_FONT_SIZE - 2)
 		card.add_child(label)
 		_condition_chips_row.add_child(card)
+
+
+## Where this character is on their journey, permanently
+## (docs/concept/discovery.md): the ring, how far out that is at walking
+## scale, and how much ground they have recorded.
+##
+## Reported after the first build of the discovery layer: *"no card or XP
+## visible"*. Instrumenting a `--solo` launch showed the wiring was fine --
+## frame one paid its 2 XP and produced the float -- and that EVERYTHING it
+## fed was transient: a ~1 s receipt that only re-fires after 512 px of
+## walking, and a crossing card six chunks out. A player who wanders inside
+## their spawn chunk met the whole layer once, during the loading fade.
+##
+## So it gets a surface that never goes away, in the same bottom-left column
+## as the condition chips. The "known" count ticking up every chunk is the
+## visible proof that walking records ground, which is the thing that could
+## not be spotted at all before.
+func _build_place_card() -> void:
+	_place_card = PanelContainer.new()
+	_place_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place_card.visible = false
+	var label := Label.new()
+	_apply_scaled_font(label, UiTheme.BASE_FONT_SIZE - 2)
+	_place_card.add_child(label)
+	_add_hud_card(_hud_bottom_left_column, _place_card)
+
+
+## Every client frame, guarded on the text actually changing -- the reading
+## only moves when the player crosses a chunk edge, so this is a string
+## compare on all but a handful of frames.
+##
+## Hidden entirely until the world knows where home is: a distance of -1 is
+## "no spawn yet", and a chip that guessed would be claiming the origin is
+## home.
+func _update_place_card(local_player: Player) -> void:
+	if _place_card == null or local_player == null or _chunk_manager == null:
+		return
+	var distance := _chunk_manager.chunks_from_spawn(local_player.current_tile())
+	if distance < 0:
+		_place_card.visible = false
+		return
+	var text := Discovery.place_chip(distance, _chunk_manager.explored_chunks().size())
+	_place_card.visible = true
+	if text == _place_card_text:
+		return
+	_place_card_text = text
+	(_place_card.get_child(0) as Label).text = text
 
 
 ## What is in hand and how close it is to breaking (docs/concept/hud.md "The
@@ -8184,7 +8267,8 @@ func _client_process(delta: float) -> void:
 	# Before the minimap, so the ground under the player is on the explored
 	# record the same frame it is walked (docs/concept/discovery.md).
 	_discovery_step(local_player, delta)
-	_expire_arrival_card(delta)
+	_update_place_card(local_player)
+	_expire_arrival_card(delta, _has_left_the_arrival_tile(local_player))
 	if _perf_report != null:
 		perf_started = _perf_section("cli_discovery", perf_started)
 	_update_minimap(player_tile, delta)

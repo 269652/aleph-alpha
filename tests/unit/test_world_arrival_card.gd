@@ -124,3 +124,41 @@ func test_an_empty_briefing_raises_no_card():
 		"nothing known is nothing shown"
 	)
 	assert_eq(ArrivalBriefing.card_text({}), "", "and the module agrees")
+
+
+# -- and it waits to be read ---------------------------------------------
+#
+# Measured by instrumenting a --solo launch after "no card or XP visible":
+# the card really was raised, and it really said "You are on the Isar, in
+# spring." -- for Answerback.seconds_to_read of six words, 1.51 s, while the
+# loading overlay was still fading. A greeting nobody can read is not a
+# greeting, and this is the ONE moment a new player is listening.
+
+func test_the_arrival_card_waits_until_the_character_moves():
+	var body := _function_body("_expire_arrival_card")
+	assert_false(body.is_empty())
+	assert_true(
+		body.contains("has_moved") or body.contains("_arrival_tile"),
+		"the countdown does not start while the player is still standing and reading"
+	)
+
+
+func test_the_frame_loop_tells_it_whether_the_character_has_moved():
+	assert_true(
+		_function_body("_client_process").contains("_expire_arrival_card"),
+		"it still has to tick"
+	)
+	var call_line := _world_source()
+	assert_true(
+		call_line.contains("_expire_arrival_card(delta,"),
+		"and it is told, rather than guessing"
+	)
+
+
+## Where the character was standing when they were greeted, so "moved" is
+## measured from the greeting rather than from the origin.
+func test_the_standing_spot_is_remembered_when_the_card_is_raised():
+	assert_true(
+		_function_body("_show_arrival_briefing").contains("_arrival_tile"),
+		"the card records where it was read from"
+	)

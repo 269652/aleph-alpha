@@ -1676,6 +1676,20 @@ var _last_footfall_chunk := Vector2i.ZERO
 var _last_footfall_distance := Discovery.NO_PREVIOUS_DISTANCE
 
 
+## How many chunks `player_global_tile` is from home, Chebyshev -- the same
+## distance `RegionDifficulty` tiers by and `record_footfall` reports from.
+##
+## `-1` when no spawn has been set yet, which the caller must render as "not
+## known" rather than as zero: a world that has not decided where home is
+## would otherwise be claiming the origin is home.
+func chunks_from_spawn(player_global_tile: Vector2i) -> int:
+	if not _spawn_configured:
+		return -1
+	return JourneyRing.distance_chunks(
+		Discovery.chunk_of(player_global_tile), _spawn_chunk_coord
+	)
+
+
 ## One footfall: the player is standing on `player_global_tile`.
 ##
 ## Marks the chunk underfoot on the SAME `ExploredTiles` `/map` and

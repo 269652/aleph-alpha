@@ -189,3 +189,36 @@ static func report_for(from_distance: int, to_distance: int, is_new_ground: bool
 		"message": crossing_card(crossing, outward),
 		"float_text": ("%s  +%d XP" % [NEW_GROUND_LABEL, xp]) if xp > 0 else "",
 	}
+
+
+## The one reading of the journey that never goes away: where you are, how
+## far out that is, and how much ground you have recorded.
+##
+## Measured by instrumenting a `--solo` launch, after the report *"no card or
+## XP visible"*: the wiring was fine -- frame one paid its 2 XP and produced
+## the float -- but everything this module fed was TRANSIENT. The receipt
+## lasts `Answerback.DELIBERATE_INTERVAL_SECONDS` (~1 s) and only re-fires
+## after a whole chunk of walking (512 px, ~13 s in a straight line at
+## `Player.BASE_SPEED`); the crossing card needs six chunks, over a minute
+## one way. A player who wanders inside their spawn chunk meets the whole
+## journey layer once, for one second, during the loading fade.
+##
+## So it gets a permanent surface. This is the "HUD place chip naming the
+## ring" docs/concept/journey_rings.md has listed as unbuilt since the rings
+## shipped, and it is what makes walking legible: the known count ticks up
+## every chunk, which is the visible proof that ground is being recorded.
+##
+## The distance is the PLAY scale (`JourneyRing.walking_metres_from_spawn`),
+## never the map's kilometres -- so "411 m out" and `SprintCost`'s "one burst
+## carries 80 m" are numbers about the same world. Standing at home reports
+## no distance at all rather than "0 m", the same rule
+## `ArrivalBriefing.distance_phrase` already keeps.
+static func place_chip(distance: int, explored_count: int) -> String:
+	var ring := JourneyRing.ring_at(distance)
+	var parts: Array[String] = [String(ring.get("name", ""))]
+	if distance > 0:
+		parts.append("%d m out" % int(roundf(JourneyRing.walking_metres_from_spawn(distance))))
+	else:
+		parts.append("home")
+	parts.append("%d known" % maxi(0, explored_count))
+	return "  -  ".join(parts)

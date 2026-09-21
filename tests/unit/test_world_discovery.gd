@@ -169,3 +169,48 @@ func test_home_is_known_before_the_first_chunk_is_loaded():
 		spawn_index, load_index,
 		"an unset spawn makes every chunk HARD while the world streams in"
 	)
+
+
+# -- the permanent reading -----------------------------------------------
+#
+# Reported after the first build: "no card or XP visible". Instrumenting a
+# --solo launch showed the wiring was fine and the FEEDBACK was the problem
+# -- one ~1 s float on frame one, then nothing for 512 px of walking. A
+# journey needs something that is simply always on screen.
+
+func test_the_hud_carries_a_permanent_place_card():
+	assert_false(_function_body("_build_place_card").is_empty(), "the card must exist")
+	assert_true(
+		_function_body("_build_hud").contains("_build_place_card")
+		or _function_body("_ready").contains("_build_place_card"),
+		"and be built with the rest of the HUD"
+	)
+
+
+func test_the_place_card_is_refreshed_every_client_frame():
+	assert_true(
+		_function_body("_client_process").contains("_update_place_card"),
+		"a readout that stops updating is worse than no readout"
+	)
+
+
+func test_the_place_card_reads_the_shared_rule_rather_than_composing_its_own():
+	var body := _function_body("_update_place_card")
+	assert_true(body.contains("Discovery.place_chip"), "one wording, in the pure module")
+	assert_false(body.contains("JourneyRing.ring_at"), "World does not name rings itself")
+
+
+## The count is the live explored record -- the same one /map reads -- so
+## the number ticking up IS the proof that walking records ground.
+func test_the_place_card_counts_the_live_explored_record():
+	assert_true(_function_body("_update_place_card").contains("explored_chunks"))
+
+
+## Before the world knows where home is there is no distance to report, and
+## a chip claiming one would be claiming the origin is home.
+func test_the_place_card_says_nothing_until_home_is_known():
+	var body := _function_body("_update_place_card")
+	assert_true(
+		body.contains("< 0") or body.contains("<= -1") or body.contains("== -1"),
+		"an unknown distance hides the card rather than guessing"
+	)

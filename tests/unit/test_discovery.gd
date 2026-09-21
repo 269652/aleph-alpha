@@ -339,3 +339,80 @@ func test_every_real_crossing_card_is_readable_and_none_becomes_furniture():
 				seconds < Answerback.MAX_CARD_SECONDS,
 				"%s has become a HUD element rather than a message" % ring["name"]
 			)
+
+
+# -- the one reading that does not vanish --------------------------------
+#
+# Measured by instrumenting a --solo launch, after the report "no card or XP
+# visible": the wiring was fine -- frame 1 paid 2 XP and produced the float
+# -- but EVERYTHING built here was transient. The receipt lasts
+# DELIBERATE_INTERVAL_SECONDS (~1.0 s) and only re-fires after a whole chunk
+# of walking (512 px, ~13 s in a straight line at BASE_SPEED); the crossing
+# card needs six chunks, over a minute of walking one way. A player who
+# wanders inside their spawn chunk sees the journey layer exactly once, for
+# one second, during the loading fade.
+#
+# So the journey needs a reading that is simply always on screen. This is
+# the "HUD place chip naming the ring" that docs/concept/journey_rings.md
+# has listed as unbuilt since the rings shipped.
+
+func test_the_place_chip_names_the_ring_you_are_standing_in():
+	for index in JourneyRing.RINGS.size():
+		var ring: Dictionary = JourneyRing.RINGS[index]
+		var chip := Discovery.place_chip(_distance_in_ring(index), 1)
+		assert_true(
+			chip.contains(String(ring["name"])),
+			"%s must say where you are" % ring["name"]
+		)
+
+
+## In metres a player can compare with something they know -- the same play
+## scale SprintCost measures a burst in, so "410 m from home" and "one burst
+## carries 80 m" are numbers about the same world.
+func test_the_distance_is_the_walking_scale_not_the_map_scale():
+	var distance := 9
+	var walking := JourneyRing.walking_metres_from_spawn(distance)
+	assert_true(
+		Discovery.place_chip(distance, 1).contains("%d m" % int(roundf(walking))),
+		"the chip reports %d m" % int(roundf(walking))
+	)
+	assert_false(
+		Discovery.place_chip(distance, 1).contains(
+			"%d m" % int(roundf(JourneyRing.metres_from_spawn(distance)))
+		),
+		"never the planet's own kilometres -- that is the map's scale, not the legs'"
+	)
+
+
+## Standing at home there is no distance to report, and "0 m from home" is
+## the kind of line ArrivalBriefing.distance_phrase already refuses to print.
+func test_standing_at_home_says_home_rather_than_zero_metres():
+	var chip := Discovery.place_chip(0, 1)
+	assert_false(chip.contains("0 m"), "no zero distances")
+	assert_true(chip.contains(String(JourneyRing.RINGS[0]["name"])))
+
+
+## The visible proof that walking records ground: a number that ticks up
+## every chunk, which is the evidence a player was missing entirely.
+func test_the_chip_reports_how_much_ground_is_known():
+	assert_true(Discovery.place_chip(9, 14).contains("14"))
+	assert_ne(Discovery.place_chip(9, 14), Discovery.place_chip(9, 15))
+
+
+func test_the_chip_is_never_empty_at_any_distance():
+	for distance in [0, 1, 5, 6, 15, 16, 30, 31, 60, 61, 400]:
+		assert_false(
+			Discovery.place_chip(distance, 0).is_empty(),
+			"a permanent readout must always have something to read at %d" % distance
+		)
+
+
+## It is a chip, not a paragraph: it sits in the HUD's bottom-left column
+## beside the condition chips, and a line that wraps there is a line that
+## covers the world.
+func test_the_chip_stays_short_enough_to_be_a_chip():
+	for distance in [0, 6, 16, 31, 61, 400]:
+		assert_lt(
+			Discovery.place_chip(distance, 9999).length(), 60,
+			"the chip is one short line at %d chunks out" % distance
+		)
