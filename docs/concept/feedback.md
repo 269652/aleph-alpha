@@ -135,13 +135,17 @@ in one place rather than being invisible.
 
 - **`for_action(action_id, context)`** — the resolved feedback for this
   press. `context` carries only what the caller already knows: `damage`,
-  `item_id`/`item_count`, `xp`, `levels`, `target`, `failed`, `reason`. An
-  action with no row returns an empty dictionary (a real answer: "this verb
-  answers with nothing", which is correct for a window toggle).
+  `item`/`count`, `coins`, `xp`, `level`, `severity`, `target`, `failed`,
+  `reason`. An action with no row returns an empty dictionary (a real
+  answer: "this verb answers with nothing", which is correct for a window
+  toggle). The resolved answer it hands back is a different shape from the
+  row: `action`, `sound`, `flash`, `flash_color`, `message`, `float_text`,
+  `interval`, `severity`, `failed`.
 - **`floating_text_for(action_id, context)`** — the number or word that
-  floats, or `""`. Precedence when a context carries several: damage, then
-  the item, then XP, then levels — the most physical fact first. A failed
-  action floats nothing; a refusal is *said*, not scored.
+  floats, or `""`. Precedence when a context carries several
+  (`FLOAT_PRECEDENCE`): damage, then the item, then coins, then XP, then
+  the level — the most physical fact first. A failed action floats nothing;
+  a refusal is *said*, not scored.
 - **`should_play(action_id, last_played_seconds, now_seconds)`** — pure
   rate limiting. True when at least `interval_for(action_id)` has passed. A
   never-played action (negative `last_played_seconds`) is always true, and
@@ -358,6 +362,45 @@ the suite goes red before it can ship.
   blow. `CreatureMarker.base_modulate()` names the baseline nothing in this
   codebase could name before, and both the disease tint and the flash read
   it (`test_creature_hit_flash.gd`, 12).
+
+- ✅ **And a tick is not a blow on the creature's side either**
+  (2026-09-21). Found by reading this change adversarially rather than by
+  reading the old code: `CreatureMarker._spell_status_step` calls
+  `take_damage` with a per-frame fraction every stepped frame, so the
+  moment the flash existed an ignited animal would relight it sixty times a
+  second and sit pinned at peak red for the whole burn — a creature
+  permanently the colour of *just hit*, which tells a player nothing about
+  when it was hit. `CreatureMarker.take_tick_damage` now mirrors the
+  player's own split: no flash, no flinch row, nobody to be angry at, and
+  the world-boss threshold still filtering, so a burn cannot whittle a
+  sleeping boss down without ever waking it.
+
+- ✅ **How hard reads too, on both sides** (2026-09-21). The creature flash
+  scales with the fraction of *its own* bar the blow took, the mirror of
+  the `severity` the player's screen reads, so a scratch and a
+  near-killing blow no longer light an animal identically. And the killing
+  blow is lit **before** the death branch: it would otherwise be the one
+  blow in a fight that never reads.
+
+  A measurement worth keeping: a coat tint can boost a channel above 1.0,
+  so leaning such a coat toward `UiTheme.NEGATIVE` (whose own red is 0.85)
+  *lowers* the red channel while plainly reddening the animal. The first
+  draft of the test asserted `.r` and was wrong for exactly that reason;
+  it measures distance toward the flash colour now.
+
+- ✅ **A receipt nobody could see** (2026-09-21). `flash_color` doubles as
+  the floating text's own colour, and `flash_color_for(FLASH_NONE)` is
+  fully transparent — so the `fish` row, which floated an item while
+  declaring no flash kind, drew *"+1 Trout"* in invisible ink for as long
+  as it had existed. A landed fish is a gain like any other. The invariant
+  is a test now: no row may float a receipt in a colour nobody can see.
+
+- 🚧 **A distant creature's flash stretches.** `take_damage` writes the
+  tint immediately, but `_hit_flash_step` only runs when the marker's LOD
+  gate lets a step through — up to `SimulationLod.MAX_INTERVAL_SECONDS`
+  (2.0 s) away from the player. The flash is not lost, it is *held*: it
+  fades on the next coarse step. Named rather than discovered later; at
+  that distance nobody is reading it anyway.
 
 - ✅ **The fourth damage-over-time caller** (2026-09-21). The pass that
   split blows from ticks found three and there were four:

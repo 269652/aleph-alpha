@@ -895,6 +895,11 @@ func _process(frame_delta: float) -> void:
 		_step_one_shot(delta)
 		if is_queued_for_deletion():
 			return  # the row finished this step and _finish_dying took it
+		# The one exception to "a collapsing body does nothing else": the
+		# blow that killed it lit a flash, and a body that kept it lit for
+		# the whole death row would make the killing blow the one blow in
+		# the fight that never stops reading.
+		_hit_flash_step(delta)
 		_animation_step()
 		_sync_grounded_children()
 		return
@@ -3374,6 +3379,11 @@ var _coat_tint := Color.WHITE
 ## swallow the blow.
 var _hit_flash_remaining := 0.0
 
+## How much of its own health bar the blow that lit it cost, 0..1 -- the
+## mirror of the severity the player's own screen flash reads, so a scratch
+## and a near-killing blow do not light an animal identically.
+var _hit_flash_severity := 1.0
+
 
 func base_modulate() -> Color:
 	return _coat_tint
@@ -3387,7 +3397,7 @@ func _hit_flash_step(delta: float) -> void:
 	if _hit_flash_remaining <= 0.0:
 		return
 	_hit_flash_remaining = maxf(0.0, _hit_flash_remaining - delta)
-	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining, _hit_flash_severity)
 
 
 ## What this creature would be wearing with no flash on it: its pallor if it
@@ -3407,8 +3417,17 @@ func take_damage(amount: float) -> void:
 		if not _boss_aggro.deals_real_damage(amount, info.max_health):
 			return
 		info.is_aggroed = true
+	var health_before := info.health
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
+	# It lights up (docs/concept/feedback.md), and how hard says how much of
+	# its own bar that took -- the mirror of the severity the player's screen
+	# reads, so the exchange says the same thing in the same way both ways.
+	# Lit BEFORE the death branch so the killing blow is not the one blow in
+	# the fight that does not read. Set here rather than in _process because
+	# take_damage is called from OUTSIDE the step -- a player's swing, a
+	# predator's bite -- so this is the only place that knows one landed.
+	_light_hit_flash((health_before - info.health) / maxf(info.max_health, 1.0))
 	if _health.is_dead(info.health):
 		_aggressor = null
 		_die()
@@ -3417,14 +3436,46 @@ func take_damage(amount: float) -> void:
 	# A survivable hit flinches -- one pass of the hurt row, then straight
 	# back to whatever the AI was doing. A no-op for every species without
 	# hurt art, which today is all of them (see _begin_one_shot), which is
-	# exactly why the flash below is what a player actually sees.
+	# exactly why the flash above is what a player actually sees.
 	_begin_one_shot("hurt")
-	# And it lights up (docs/concept/feedback.md). Set here rather than in
-	# _process because take_damage is called from OUTSIDE the step -- a
-	# player's swing, a predator's bite -- so this is the only place that
-	# knows a blow just landed.
+
+
+## Damage that is already inside this animal: an ignite or a blight tick
+## (docs/concept/spell_runtime.md).
+##
+## A tick is NOT a blow, the same split `Player.take_tick_damage` already
+## draws, and the reason is visible here rather than arithmetic: every
+## damage-over-time step passes a per-frame FRACTION, so routing one through
+## `take_damage` relights the hit flash sixty times a second and pins a
+## burning animal at peak red for the whole burn. A creature permanently the
+## colour of "just hit" tells a player nothing about when it was hit.
+##
+## So: no flash, no flinch row, and nothing to be angry at -- a burn has
+## nobody to blame. Death still goes through the one `_die()` choke point.
+func take_tick_damage(amount: float) -> void:
+	if info == null or _dying or amount <= 0.0:
+		return
+	# The world-boss filter stays: a tick that does not clear BossAggro's
+	# real-damage threshold bounces off a sleeping boss exactly as a feeble
+	# blow does (docs/concept/worldbosses.md), so a burn cannot whittle one
+	# down without ever waking it.
+	if info.is_world_boss and not info.is_aggroed:
+		if not _boss_aggro.deals_real_damage(amount, info.max_health):
+			return
+		info.is_aggroed = true
+	info.health = _health.take_damage(info.health, amount)
+	_update_health_bar()
+	if _health.is_dead(info.health):
+		_aggressor = null
+		_die()
+
+
+## Lights the flash a blow just earned, at a depth that says how much of
+## this animal's own bar it cost.
+func _light_hit_flash(severity: float) -> void:
 	_hit_flash_remaining = HitFlash.SECONDS
-	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining)
+	_hit_flash_severity = clampf(severity, 0.0, 1.0)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining, _hit_flash_severity)
 
 
 ## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
@@ -3570,7 +3621,9 @@ func _spell_status_step(delta: float) -> void:
 	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
 		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
 		if stacks > 0:
-			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+			take_tick_damage(
+				_spell_status_effects.damage_per_second(debuff_id, stacks) * delta
+			)
 	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
 
 
@@ -3822,7 +3875,7 @@ func _disease_step(delta: float) -> void:
 ## SUSCEPTIBLE, so the first time an animal recovered, the coat tell
 ## AnimalFitness gave it was erased permanently.
 func _update_disease_tint() -> void:
-	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining, _hit_flash_severity)
 
 
 ## Herd (foot-and-mouth-like) proximity transmission: an infected herbivore

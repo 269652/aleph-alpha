@@ -140,3 +140,90 @@ func test_a_sick_creature_flashes_too():
 	marker.take_damage(1.0)
 	marker._process(0.0)
 	assert_ne(marker.modulate, sick, "the disease tint must not swallow the blow")
+
+
+# -- a tick is not a blow, on this side of the fight either ---------------
+
+const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
+
+
+## The mirror of the bug that was fixed on the player side, found by an
+## adversarial read of THIS change rather than of the old code:
+## `_spell_status_step` calls `take_damage` with a per-frame fraction every
+## stepped frame, so an ignited creature would relight its own flash sixty
+## times a second and sit pinned at peak red for the whole burn. A creature
+## permanently the colour of "just hit" tells the player nothing about when
+## it was actually hit.
+func test_an_ignited_creature_does_not_sit_pinned_at_peak_red():
+	marker.apply_spell_debuff(SpellStatusEffects.IGNITE, 10.0)
+	for _i in 20:
+		marker._spell_status_step(1.0 / 60.0)
+	assert_eq(marker.modulate, marker.base_modulate(), "a burn is a condition, not a blow")
+
+
+## And burning still really hurts -- the flash is what must not fire, not
+## the damage.
+func test_a_burn_still_burns():
+	marker.apply_spell_debuff(SpellStatusEffects.IGNITE, 10.0)
+	var before: float = marker.info.health
+	for _i in 60:
+		marker._spell_status_step(1.0 / 60.0)
+	assert_lt(marker.info.health, before, "ignite is real damage")
+
+
+## A tick does not make an animal angry at anybody either: nothing bit it.
+func test_a_burn_does_not_pick_a_fight():
+	marker.apply_spell_debuff(SpellStatusEffects.IGNITE, 10.0)
+	marker._spell_status_step(1.0 / 60.0)
+	assert_null(marker.aggressor(), "a burn has nobody to blame")
+
+
+# -- and the blow's SIZE reads too ----------------------------------------
+
+## The other half of "the exchange reads BOTH ways". The player's own screen
+## flash scales with how much of their bar a bite took; a creature's did
+## not, so a scratch and a near-killing blow lit an animal identically.
+func test_a_heavier_blow_lights_a_creature_harder():
+	var light := CreatureMarker.new()
+	light.wander_seed = 5
+	light.info = CreatureInfo.new("herbivore")
+	add_child_autofree(light)
+	light.take_damage(light.info.max_health * 0.05)
+	var faint: Color = light.modulate
+
+	var heavy := CreatureMarker.new()
+	heavy.wander_seed = 5
+	heavy.info = CreatureInfo.new("herbivore")
+	add_child_autofree(heavy)
+	heavy.take_damage(heavy.info.max_health * 0.6)
+
+	# Measured as distance toward the flash colour rather than "more red",
+	# and the difference matters: a coat tint can boost a channel ABOVE 1.0
+	# (see coat_tint_for), so leaning such a coat toward UiTheme.NEGATIVE --
+	# whose own red is 0.85 -- actually LOWERS the red channel while plainly
+	# reddening the animal. The first draft of this test asserted `.r` and
+	# was wrong for exactly that reason.
+	assert_lt(
+		_distance(heavy.modulate, HitFlash.colour()),
+		_distance(faint, HitFlash.colour()),
+		"how hard it was hit reads on the animal"
+	)
+
+
+func _distance(a: Color, b: Color) -> float:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+
+
+## The scale itself, on the pure rule: a scratch and a killing blow are two
+## different depths, and both are somewhere short of repainting the animal.
+func test_the_blend_runs_from_a_scratch_to_a_killing_blow():
+	assert_lt(HitFlash.FAINTEST_BLEND, HitFlash.PEAK_BLEND)
+	assert_gt(HitFlash.FAINTEST_BLEND, 0.0, "a scratch still shows")
+	assert_lt(HitFlash.PEAK_BLEND, 1.0, "and a killing blow still leaves an animal")
+
+
+func test_a_caller_with_no_size_to_report_still_gets_a_full_flash():
+	var coat := Color(0.4, 0.9, 0.6)
+	assert_eq(
+		HitFlash.tint(coat, HitFlash.SECONDS), HitFlash.tint(coat, HitFlash.SECONDS, 1.0)
+	)

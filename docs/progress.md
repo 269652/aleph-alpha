@@ -535,10 +535,32 @@ and most species have no loot row so they vanish on death.
   would have floated a receipt every fifth of a second for the whole
   crossing. A test now walks all four steps by name.
 
-  Tests: `test_answerback.gd` 55, `test_player_answerback.gd` 15,
-  `test_hurt_flash.gd` 9, `test_creature_hit_flash.gd` 12,
+  **Three more, found by reading this change adversarially rather than by
+  reading the old code.** `CreatureMarker._spell_status_step` calls
+  `take_damage` with a per-frame fraction, so the moment the flash existed
+  an ignited animal would have relit it sixty times a second and sat pinned
+  at peak red for the whole burn — the player-side split, reintroduced on
+  the creature side by the feature itself; `CreatureMarker.take_tick_damage`
+  now mirrors it. The creature flash had no size channel, so a scratch and
+  a near-killing blow lit an animal identically; it scales with the
+  fraction of its own bar now, and the killing blow is lit *before* the
+  death branch so it is not the one blow in a fight that never reads. And
+  the `fish` row floated *"+1 Trout"* in **invisible ink** — `flash_color`
+  doubles as the floating text's colour and `flash_color_for(FLASH_NONE)`
+  is fully transparent — which is now a two-way invariant rather than one
+  fixed row.
+
+  A measurement worth keeping: a coat tint can boost a channel above 1.0,
+  so leaning such a coat toward `UiTheme.NEGATIVE` (red 0.85) *lowers* the
+  red channel while plainly reddening the animal. The first draft of that
+  test asserted `.r` and was wrong for exactly that reason.
+
+  Tests: `test_answerback.gd` 56, `test_player_answerback.gd` 15,
+  `test_hurt_flash.gd` 9, `test_creature_hit_flash.gd` 18,
   `test_world_hurt_flash_wiring.gd` 5, `test_player_damage_over_time.gd` 9,
-  `test_creature_marker.gd` 293, `test_blackberry_bramble.gd` 24 — green.
+  `test_creature_marker.gd` 293, `test_world_boss.gd` 3,
+  `test_spell_status_effects.gd` 9, `test_blackberry_bramble.gd` 24 —
+  green.
 
   **Deliberately not in this pass, with reasons rather than silence:** a
   creature's call at the moment it commits to a bite looked like a

@@ -34,14 +34,18 @@ const Answerback = preload("res://src/gameplay/answerback.gd")
 const SECONDS := Answerback.REFLEX_INTERVAL_SECONDS
 
 ## How far toward the flash colour a struck body goes at the instant of the
-## blow. Deliberately NOT all the way, and pinned by test at both ends:
+## blow: FAINTEST_BLEND for a scratch, PEAK_BLEND for a blow that empties
+## the whole health bar, and a real scale between them -- the same shape
+## HurtFlash uses for the player's own screen, so the two halves of an
+## exchange say the same thing in the same way. Pinned by test at both ends:
 ##
-## - below 1.0, because a creature repainted flat red loses its silhouette,
-##   its coat tell and its disease pallor in the same frame, and a player
-##   who cannot tell WHICH animal they just hit has been handed a worse
-##   picture rather than a better one;
-## - above 0.0, because a flash nobody can see is the silence this whole
-##   mechanism exists to remove.
+## - the peak stays below 1.0, because a creature repainted flat red loses
+##   its silhouette, its coat tell and its disease pallor in the same frame,
+##   and a player who cannot tell WHICH animal they just hit has been handed
+##   a worse picture rather than a better one;
+## - the faintest stays above 0.0, because a flash nobody can see is the
+##   silence this whole mechanism exists to remove.
+const FAINTEST_BLEND := 0.25
 const PEAK_BLEND := 0.65
 
 
@@ -54,12 +58,18 @@ static func colour() -> Color:
 
 ## The tint a creature wears with `remaining_seconds` left on its flash,
 ## over `base` -- whatever it would be wearing otherwise: its own coat, or
-## its disease pallor.
+## its disease pallor -- for a blow that cost `severity` of its whole health
+## bar.
+##
+## `severity` defaults to 1.0 (the hardest a blow can read) so a caller with
+## no size to report still gets a visible flash rather than the faintest
+## one.
 ##
 ## Exactly `base` once the flash has run out, so a caller can write this
 ## unconditionally and never has to remember what to restore.
-static func tint(base: Color, remaining_seconds: float) -> Color:
+static func tint(base: Color, remaining_seconds: float, severity: float = 1.0) -> Color:
 	if remaining_seconds <= 0.0:
 		return base
-	var strength := clampf(remaining_seconds / SECONDS, 0.0, 1.0) * PEAK_BLEND
-	return base.lerp(colour(), strength)
+	var depth := lerpf(FAINTEST_BLEND, PEAK_BLEND, clampf(severity, 0.0, 1.0))
+	var fade := clampf(remaining_seconds / SECONDS, 0.0, 1.0)
+	return base.lerp(colour(), depth * fade)

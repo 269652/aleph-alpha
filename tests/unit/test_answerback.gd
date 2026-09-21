@@ -619,3 +619,24 @@ func test_a_refusal_reports_no_size():
 		Answerback.HURT, {"failed": true, "severity": 0.9}
 	)
 	assert_almost_eq(float(row["severity"]), 0.0, 0.0001)
+
+
+## A receipt nobody can see is not a receipt. `flash_color` doubles as the
+## FLOATING TEXT's own colour (World._float_answer_text), and
+## `flash_color_for(FLASH_NONE)` is `Color(1, 1, 1, 0)` -- fully
+## transparent -- so a row that floats a number while declaring no flash
+## kind draws that number at alpha zero.
+##
+## Measured when this test was written: the `fish` row did exactly that.
+## Reeling in a catch floated "+1 Trout" in invisible ink, which is the
+## same silence this whole module exists to remove, wearing a costume.
+func test_no_row_floats_a_number_in_invisible_ink():
+	for action in Answerback.answered_actions():
+		var row: Dictionary = Answerback.FEEDBACK[action]
+		if String(row["floats"]) == Answerback.FLOAT_NONE:
+			continue
+		var colour: Color = Answerback.flash_color_for(String(row["flash"]))
+		assert_gt(
+			colour.a, 0.0,
+			"%s floats a receipt in a colour nobody can see" % action
+		)

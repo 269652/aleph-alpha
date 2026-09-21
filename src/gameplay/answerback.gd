@@ -207,7 +207,12 @@ const FEEDBACK := {
 	"rest": {"sound": "rest", "flash": FLASH_NONE, "floats": FLOAT_NONE, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
 	# Cast and reel is a held level, polled every frame: slow interval for
 	# the same reason sprint's is.
-	"fish": {"sound": "cast_line", "flash": FLASH_NONE, "floats": FLOAT_ITEM, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
+	# FLASH_GAIN rather than FLASH_NONE, and not for symmetry: flash_color
+	# doubles as the floating text's own colour, and flash_color_for(
+	# FLASH_NONE) is fully transparent -- so this row floated "+1 Trout" in
+	# invisible ink for as long as it has existed. A landed fish is a gain
+	# like any other, which is what it should have said all along.
+	"fish": {"sound": "cast_line", "flash": FLASH_GAIN, "floats": FLOAT_ITEM, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
 
 	# Money moves in one direction per key, so each floats the side the
 	# player gained: goods when buying, coins when selling.
