@@ -3415,11 +3415,28 @@ func _scan_smoke_stimuli() -> Array:
 		return []
 	var stimuli: Array = []
 	for fire_position in _world.campfires_near(position, Olfaction.MAX_RANGE_TILES):
-		var distance_tiles := position.distance_to(fire_position) / _tile_size
+		var distance_px := position.distance_to(fire_position)
+		var distance_tiles := distance_px / _tile_size
 		stimuli.append({
 			"position": fire_position,
 			"features": {Ethogram.SMOKE: 1.0},
-			"strength": Olfaction.dilution(distance_tiles),
+			# On the SHARED ranking scale (Affinity.proximity, in pixels),
+			# attenuated by the smell's own dilution law rather than ranked
+			# by it. Measured before this line was a product: a strength of
+			# dilution(tiles) alone -- a 0..1 curve over twenty tiles --
+			# competed directly against every other stimulus's
+			# proximity(pixels) = 1/(1+px). A player two tiles away scored
+			# 0.0303 and a campfire ten tiles away scored 0.330, so the fire
+			# won by 10.9x and the crossover sat at 17.75 tiles. Since the
+			# fear wiring is the first rung of the mammal ladder and smoke's
+			# valence is negative, an aggressive predator two tiles from the
+			# player resolved that wiring on SMOKE and fled.
+			#
+			# A lit campfire was therefore a TWENTY-TILE no-predator zone --
+			# four times SENSE_RADIUS, twice CAUTION_RADIUS -- and a player
+			# who lit one at camp was untouchable inside 320 px. The whole
+			# danger gradient, switched off by the first fire.
+			"strength": Affinity.proximity(distance_px) * Olfaction.dilution(distance_tiles),
 		})
 	return stimuli
 

@@ -481,6 +481,50 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **A lit campfire was a twenty-tile no-predator zone** (2026-09-21) —
+  see `concept/olfaction.md` and `concept/ethogram.md`.
+
+  `BehaviorKernel` ranks every stimulus by
+  `Affinity.proximity(distance_in_PIXELS)` = 1/(1+px) — except one that
+  carries its own `strength`, which is used raw. Exactly one producer in
+  the game supplied a strength on a different curve:
+  `_scan_smoke_stimuli` reported `Olfaction.dilution(distance_in_TILES)`, a
+  0..1 falloff over twenty tiles. Nothing normalised between them, and no
+  test compared a strength-bearing stimulus with a distance-ranked one, so
+  every existing test was consistent with the bug.
+
+  **Measured:** a player standing two tiles away scores **0.0303**; a
+  campfire ten tiles away scores **0.330**. The fire wins by **10.9×**, and
+  the crossover is at 17.75 tiles. The fear wiring is the first rung of the
+  mammal ladder and smoke's valence is negative, so an aggressive predator
+  two tiles from the player resolved that wiring on SMOKE and returned
+  *flee*. A player who lit a campfire at camp cleared a **320 px radius**
+  of all mammal AI — four times `SENSE_RADIUS`, twice `CAUTION_RADIUS` —
+  and was untouchable inside it. The whole danger gradient this overhaul
+  exists to build, switched off by the first fire.
+
+  It compounded through the boldness gene, too:
+  `Ethogram.BOLDEST_FEAR_FLOOR` is `proximity(one tile)`, stated in pixel
+  units, so the boldest individual in the game — for whom a person had to
+  be inside one tile to register at all — still fled a fire sixteen tiles
+  off. The one knob meant to make an animal bold walked straight past
+  smoke.
+
+  The fix is one product: `proximity(px) × dilution(tiles)`. The smell's
+  own law attenuates the shared ranking instead of replacing it, and
+  `BehaviorKernel`'s header now states the unit requirement it could not
+  check. `test_stimulus_scale.gd` pins it in both directions — a person two
+  tiles away outranks a fire ten tiles away, a person outranks a smell at
+  equal range, and a fire is *still* what a creature avoids when nothing
+  else is near — driven through the **real producer** on a real marker
+  rather than a restatement of the formula, which is what made the first
+  draft of that suite pass over the bug.
+
+  Tests: `test_stimulus_scale.gd` 5, `test_behavior_kernel.gd` 26,
+  `test_creature_behavior.gd` 53, `test_ethogram.gd` 52,
+  `test_olfaction.gd` 14, `test_creature_marker.gd` 293,
+  `test_fight_is_loseable.gd` 6, `test_bite_telegraph.gd` 19 — green.
+
 - ✅ **A spell you chose, and mana on screen** (2026-09-21) — see
   `concept/spell_runtime.md`.
 
