@@ -53,6 +53,7 @@ const WORLD_CHANGING_ACTIONS := [
 	"primary_action", "secondary_action", "talk",
 	"build", "destroy", "plant", "cast",
 	"hotbar_1", "hotbar_2", "hotbar_3", "hotbar_4", "hotbar_5",
+	"spell_1", "spell_2", "spell_3", "spell_4",
 	# Resting hands the next several hours to the world and moves the shared
 	# clock (docs/concept/sleep.md) -- world-changing by any reading.
 	"rest",

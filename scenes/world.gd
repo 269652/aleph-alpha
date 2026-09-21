@@ -156,6 +156,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
+const SpellBook = preload("res://src/gameplay/spell_book.gd")
 const HurtFlash = preload("res://src/ui/hurt_flash.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
 const Arena = preload("res://src/gameplay/arena.gd")
@@ -893,6 +894,12 @@ var _charge_meter_fill: ColorRect
 
 var _hunger_fill: ColorRect
 var _hunger_label: Label
+## The one resource every cast spends, which had no readout at all: a grep
+## for "mana" in this file matched only the word "manager", so "Not enough
+## mana" was the first a player ever heard of it
+## (docs/concept/spell_runtime.md).
+var _mana_fill: ColorRect
+var _mana_label: Label
 var _thirst_fill: ColorRect
 var _thirst_label: Label
 var _stamina_fill: ColorRect
@@ -3093,6 +3100,12 @@ func _build_survival_bar() -> void:
 	var warmth := _make_survival_meter_row(container, Color(0.9, 0.45, 0.2))
 	_warmth_fill = warmth["fill"]
 	_warmth_label = warmth["label"]
+	# The same row widget as the four above, so a fifth meter cannot drift
+	# from them. A violet no other meter uses: thirst already owns the blue,
+	# and mana is the one reading here that is not about a body.
+	var mana := _make_survival_meter_row(container, Color(0.55, 0.4, 0.9))
+	_mana_fill = mana["fill"]
+	_mana_label = mana["label"]
 
 	_wallet_label = Label.new()
 	_scaled_font(_wallet_label, UiTheme.BASE_FONT_SIZE - 2)
@@ -6528,6 +6541,13 @@ func _update_survival_bar(local_player: Player) -> void:
 	_warmth_fill.size.x = _health_bar.fill_width(s.warmth, 1.0, SURVIVAL_BAR_WIDTH)
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
 	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
+	# A character with no mana pool at all (nothing has rolled their stats
+	# yet) reads as empty rather than dividing by zero.
+	var mana_fraction := (
+		local_player.mana / local_player.max_mana if local_player.max_mana > 0.0 else 0.0
+	)
+	_mana_fill.size.x = _health_bar.fill_width(mana_fraction, 1.0, SURVIVAL_BAR_WIDTH)
+	_mana_label.text = meter_label_text("Mana", mana_fraction)
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
 
 
@@ -7246,12 +7266,72 @@ func _on_hotbar_slot_dropped(index: int, payload: Dictionary) -> void:
 		local_player.assign_hotbar_slot(index, String(payload.get("item_id", "")))
 
 
-## A fixed row of locked placeholder slots for future abilities -- there is no
-## spell/ability system yet (see docs/progress.md), so these are an honest
-## stub, not fake functionality.
+## The four spells on keys 6-9 (docs/concept/spell_runtime.md). Built as
+## empty slots and filled from the character's own known spells by
+## _update_spell_bar, the same build-then-fill shape the hotbar uses.
+##
+## It was a row of locked placeholders under the comment "there is no
+## spell/ability system yet", which had been false for a long time: a
+## parser, an executor, a book of twenty-four authored spells and a guild
+## that teaches them were all already here, and the bar said none of it.
 func _build_spell_bar() -> void:
 	for i in SPELL_BAR_SLOT_COUNT:
-		_spell_bar.add_child(_make_hud_slot(HUD_SLOT_LOCKED_COLOR))
+		var slot := _make_hud_slot(HUD_SLOT_LOCKED_COLOR)
+		var label := Label.new()
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.theme = _ui_theme
+		slot.add_child(label)
+		_spell_bar.add_child(slot)
+
+
+## Fills each slot from the spell really behind it, and marks the one the
+## cast key would repeat.
+##
+## Reads Player.spell_in_slot / selected_spell_id rather than keeping a
+## second list: the row is a VIEW of what the character knows, so learning
+## one at a guild fills the next slot with no bookkeeping here.
+func _update_spell_bar(local_player: Player) -> void:
+	for index in SPELL_BAR_SLOT_COUNT:
+		if index >= _spell_bar.get_child_count():
+			return
+		var slot := _spell_bar.get_child(index) as PanelContainer
+		var label := slot.get_child(0) as Label
+		var spell_id := String(local_player.spell_in_slot(index))
+		label.text = _spell_slot_caption(index, spell_id)
+		var style := slot.get_theme_stylebox("panel") as StyleBoxFlat
+		if style == null:
+			continue
+		var loaded := spell_id != "" and spell_id == String(local_player.selected_spell_id())
+		style.border_color = UiTheme.ACCENT if loaded else Color(1, 1, 1, 0.2)
+		style.set_border_width_all(SPELL_SLOT_LOADED_BORDER_WIDTH if loaded else 1)
+
+
+## What one slot says: its key and the spell's own name, or just the key
+## when nothing has been learned for it yet. The key is drawn because the
+## row is four unlabelled boxes otherwise, and "which key casts this" is
+## the only question a player has of it.
+func _spell_slot_caption(index: int, spell_id: String) -> String:
+	var key := str(index + SPELL_SLOT_FIRST_KEY_DIGIT)
+	if spell_id == "":
+		return key
+	return "%s\n%s" % [key, _spell_book.name_for(spell_id)]
+
+
+## One shared book for the captions -- parsing twenty-four spells four
+## times a frame to print four names would be absurd, and SpellBook caches
+## its ASTs statically anyway.
+var _spell_book := SpellBook.new()
+
+## The digit the first spell slot answers to, so the caption and
+## Keybindings' own defaults (6-9) cannot disagree silently -- pinned by
+## test.
+const SPELL_SLOT_FIRST_KEY_DIGIT := 6
+
+## How thick a loaded slot's border is. Thicker than an idle slot's single
+## pixel, because "which spell is loaded" has to read at a glance from the
+## corner of the screen.
+const SPELL_SLOT_LOADED_BORDER_WIDTH := 2
 
 
 ## A HUD slot frame. `droppable` makes it a DragSlot (see drag_slot.gd) so
@@ -8381,6 +8461,7 @@ func _client_process(delta: float) -> void:
 	_update_crafting_window(local_player)
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
+	_update_spell_bar(local_player)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_windows", perf_started)
 	_update_creature_panels(local_player, delta)

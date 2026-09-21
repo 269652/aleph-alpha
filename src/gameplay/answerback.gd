@@ -250,6 +250,15 @@ const FEEDBACK := {
 	"hotbar_4": {"sound": "equip", "flash": FLASH_GAIN, "floats": FLOAT_NONE, "message": "{item}", "interval": SWING_INTERVAL_SECONDS},
 	"hotbar_5": {"sound": "equip", "flash": FLASH_GAIN, "floats": FLOAT_NONE, "message": "{item}", "interval": SWING_INTERVAL_SECONDS},
 
+	# The four spell slots (docs/concept/spell_runtime.md). Exactly the
+	# `cast` row's own answer, because pressing 7 and pressing the cast key
+	# do the same thing to the world -- what differs is which spell, not
+	# what happened.
+	"spell_1": {"sound": "spell_cast", "flash": FLASH_GAIN, "floats": FLOAT_DAMAGE, "message": "", "interval": SWING_INTERVAL_SECONDS},
+	"spell_2": {"sound": "spell_cast", "flash": FLASH_GAIN, "floats": FLOAT_DAMAGE, "message": "", "interval": SWING_INTERVAL_SECONDS},
+	"spell_3": {"sound": "spell_cast", "flash": FLASH_GAIN, "floats": FLOAT_DAMAGE, "message": "", "interval": SWING_INTERVAL_SECONDS},
+	"spell_4": {"sound": "spell_cast", "flash": FLASH_GAIN, "floats": FLOAT_DAMAGE, "message": "", "interval": SWING_INTERVAL_SECONDS},
+
 	# Unbound: reached through the crafting window's own button.
 	"craft": {"sound": "craft_done", "flash": FLASH_GAIN, "floats": FLOAT_ITEM, "message": "Crafted {item}", "interval": DELIBERATE_INTERVAL_SECONDS},
 	# Unbound: Player.gain_experience already returns this and nobody reads

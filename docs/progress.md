@@ -481,6 +481,55 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **A spell you chose, and mana on screen** (2026-09-21) — see
+  `concept/spell_runtime.md`.
+
+  `Player.cast_spell(spell_id)` accepted any known id and had exactly **one
+  caller**, which passed `DEFAULT_CAST_SPELL_ID`. So the cast key cast Fire
+  Bolt for ever and twenty-three authored spells were unreachable except by
+  weaving one from scratch. Meanwhile `World._build_spell_bar` filled four
+  slots with locked placeholders under the comment *"there is no
+  spell/ability system yet ... an honest stub, not fake functionality"* —
+  which had been false for a long time: a parser, an executor, a book of
+  twenty-four spells and a guild that teaches them were all already there,
+  and the bar said none of it.
+
+  **Four slots on keys 6–9**, symmetric with the hotbar's 1–5 for items.
+  The row is a **view** of `known_spell_ids()`, not a second list, so
+  learning one at a guild fills the next slot with no bookkeeping. Pressing
+  a key casts that spell *and* selects it, so the cast key then repeats the
+  choice — the deliberate act and the quick one are the same act. An empty
+  slot refuses with a sentence. The woven draft still wins when there is
+  one; the selection is what the key falls back to, which is exactly what
+  `DEFAULT_CAST_SPELL_ID` used to hardcode. A cycle key was rejected: with
+  four slots a direct key is one press instead of up to four, and cycling
+  answers *"which one is loaded"* no better without a readout anyway.
+
+  **The bar shows what is in each slot and which is loaded**, through a new
+  `SpellBook.name_for` that reads the spell's own declared name — every
+  entry already says `spell "Frost Lance" { … }` and the parser already
+  carried it, but nothing could ask, so the bar would have had to print
+  `frost_lance` or keep a second list of prettier strings.
+
+  **And mana is on screen at all.** `grep -n mana scenes/world.gd` matched
+  only the word *"manager"*: the one resource every cast spends was
+  invisible, and *"Not enough mana"* was the first a player ever heard of
+  it. It is a fifth meter in the same card and the same row widget as
+  hunger, thirst, stamina and warmth — a test counts five calls to that one
+  widget, so it cannot drift from them.
+
+  Tests: `test_player_spell_slots.gd` 10, `test_world_spell_hud.gd` 9,
+  `test_spell_book.gd` 9, `test_spell_tuition.gd` 43,
+  `test_player_spell_weaving.gd` 20, `test_answerback.gd` 56,
+  `test_keybindings.gd` 24, `test_world_hud.gd` 24,
+  `test_hud_readouts.gd` 40, `test_survival_meters.gd` 37 — green.
+
+  A lesson this suite has now taught twice, recorded so it is not learnt a
+  third time: a source-inspection test that reads a fixed window of
+  characters from a function declaration trips over the doc comment of the
+  function below it. Both now match the **call** rather than the
+  identifier, and extract the function's real body.
+
 - ✅ **The bite is telegraphed** (2026-09-21) — see
   `concept/predator_profiles.md`'s new "The telegraph, in the engine".
 

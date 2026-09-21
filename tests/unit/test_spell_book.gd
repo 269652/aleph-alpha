@@ -43,3 +43,28 @@ func test_ast_for_is_cached_across_calls():
 func test_known_ids_lists_every_source_spell():
 	assert_true(book.known_ids().size() >= 3)
 	assert_true(book.known_ids().has("fire_bolt"))
+
+
+## The name a player reads, from the spell's own source rather than from a
+## second table beside it.
+##
+## Every entry already declares one -- `spell "Frost Lance" { ... }` -- and
+## the parser already carries it on the AST, but nothing could ask for it:
+## the spell bar would have had to print `frost_lance` or keep its own list
+## of prettier strings, and a second list is how two names drift apart.
+func test_a_spell_knows_what_it_is_called():
+	assert_eq(SpellBook.new().name_for("frost_lance"), "Frost Lance")
+
+
+func test_every_authored_spell_has_a_real_name():
+	var book := SpellBook.new()
+	for spell_id in book.known_ids():
+		var spell_name: String = book.name_for(String(spell_id))
+		assert_ne(spell_name, "", "%s has no name" % spell_id)
+		assert_ne(spell_name, spell_id, "%s reads as its own id" % spell_id)
+
+
+## An id nobody authored reads as itself rather than as an empty box: a
+## caller that got here has a bug, and a blank slot hides it.
+func test_an_unknown_id_reads_as_itself():
+	assert_eq(SpellBook.new().name_for("not_a_spell"), "not_a_spell")

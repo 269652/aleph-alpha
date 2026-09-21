@@ -2588,6 +2588,7 @@ func _authority_step(delta: float) -> void:
 	_dodge_timers_step(delta)
 	_attack_step(delta)
 	_cast_step()
+	_spell_slot_step()
 	_dodge_step()
 	_rest_step()
 	_pickup_step(delta)
@@ -3063,11 +3064,11 @@ func _attack_step(delta: float) -> void:
 		_perform_attack()
 
 
-## Casts, on the rising edge, whichever spell the "cast" key is bound to.
-## No spell-selection UI exists yet (see docs/concept/spell_runtime.md's
-## fixed-spellbook scope), so this always casts the same one -- a real,
-## honestly-scoped placeholder for "which spell", not a limitation of
-## cast_spell itself, which already accepts any known spell id.
+## The spell every character begins knowing, and NOT what the cast key
+## casts any more (docs/concept/spell_runtime.md): that is the selected
+## slot now. Kept because SpellTuition's starting list must contain it --
+## a character whose only spell is one they were never taught has a dead
+## cast key -- and test_spell_tuition.gd pins the two together.
 const DEFAULT_CAST_SPELL_ID := "fire_bolt"
 
 
@@ -3207,7 +3208,91 @@ func _rest_step() -> void:
 func cast_held() -> bool:
 	if not SpellDraft.atoms_of(_woven_draft).is_empty():
 		return cast_woven()
-	return cast_spell(DEFAULT_CAST_SPELL_ID)
+	return cast_spell(selected_spell_id())
+
+
+# -- four spells on keys 6-9 (docs/concept/spell_runtime.md) ----------------
+#
+# Measured before this: cast_spell(spell_id) accepted any known id and had
+# exactly ONE caller, which passed DEFAULT_CAST_SPELL_ID -- so the cast key
+# cast Fire Bolt for ever and twenty-three authored spells were unreachable
+# except by weaving one from scratch. Meanwhile World._build_spell_bar
+# filled four slots with locked placeholders under the comment "there is no
+# spell/ability system yet", which had been false for a long time.
+
+## How many spells the bar holds. The HUD's own row has been this wide since
+## it was a stub, and the keys 6-9 are the first four digits the hotbar
+## leaves free. Pinned to World.SPELL_BAR_SLOT_COUNT by test.
+const SPELL_SLOT_COUNT := 4
+
+## Which slot the cast key falls back to. An INDEX rather than an id, so a
+## character who forgets nothing and learns more keeps pointing at the same
+## slot on the bar rather than at a name that may have moved.
+var _selected_spell_slot := 0
+
+
+func spell_slot_count() -> int:
+	return SPELL_SLOT_COUNT
+
+
+## The spell behind slot `index`, or "" for a slot nobody has filled yet.
+##
+## A VIEW of what this character really knows, not a second list that could
+## drift from it: learning one at a guild fills the next slot with no
+## bookkeeping of its own (docs/concept/mage_guild.md).
+func spell_in_slot(index: int) -> String:
+	if index < 0 or index >= SPELL_SLOT_COUNT or index >= _known_spell_ids.size():
+		return ""
+	return String(_known_spell_ids[index])
+
+
+## What the cast key will cast when no draft is woven.
+##
+## Falls back to the first spell this character knows rather than to a
+## constant: DEFAULT_CAST_SPELL_ID being the only reachable spell IS the bug
+## this exists to fix, and a selection pointing at an emptied slot must not
+## silently resurrect it.
+func selected_spell_id() -> String:
+	var chosen := spell_in_slot(_selected_spell_slot)
+	if chosen != "":
+		return chosen
+	return spell_in_slot(0)
+
+
+## Casts slot `index` and makes it the selection, so the deliberate act and
+## the quick one are the same act: press 7 for frost, then the cast key
+## repeats frost.
+##
+## An empty slot refuses with a sentence rather than doing nothing, the same
+## rule every other verb in this overhaul follows.
+func cast_spell_slot(index: int) -> bool:
+	var spell_id := spell_in_slot(index)
+	var action := "spell_%d" % (index + 1)
+	if spell_id == "":
+		answer(action, {
+			"failed": true,
+			"reason": "No spell in that slot yet -- a mage guild teaches them.",
+		})
+		return false
+	_selected_spell_slot = index
+	if not cast_spell(spell_id):
+		answer(action, {"failed": true, "reason": cast_message})
+		return false
+	answer(action, {})
+	return true
+
+
+func _spell_slot_step() -> void:
+	for index in SPELL_SLOT_COUNT:
+		var action := "spell_%d" % (index + 1)
+		var pressed := Input.is_action_pressed(action) if _controlled_locally() else false
+		var just_pressed := _rising_edge(action, pressed, _last_spell_slot_state[index])
+		_last_spell_slot_state[index] = pressed
+		if just_pressed:
+			cast_spell_slot(index)
+
+
+var _last_spell_slot_state := [false, false, false, false]
 
 
 ## Raises this act's answer (docs/concept/feedback.md): the sound, the

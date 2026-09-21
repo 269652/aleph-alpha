@@ -210,7 +210,37 @@ tested pure generation, matching this codebase's established boundary.
   the physical key-press itself (no artificial cooldown, unlike melee's
   `ATTACK_COOLDOWN` — mana affordability already throttles repeat casts, and
   melee has no "ammo" cost to do the same job).
-- No spell-selection UI exists yet, so the "cast" key always casts
-  `Player.DEFAULT_CAST_SPELL_ID` ("fire_bolt") — `cast_spell(spell_id)`
-  itself already accepts any known id; only the "which spell" binding is a
-  placeholder.
+- ✅ **A spell you chose** (2026-09-21). Measured before: `cast_spell`
+  accepted any known id and had exactly one caller, which passed
+  `Player.DEFAULT_CAST_SPELL_ID` — so the cast key cast Fire Bolt for ever
+  and twenty-three authored spells were unreachable except by weaving one
+  from scratch. Meanwhile `World._build_spell_bar` filled four slots with
+  locked placeholders under the comment *"there is no spell/ability system
+  yet"*, which had been false for a long time.
+
+  **Four slots on keys 6–9**, symmetric with the hotbar's 1–5 for items: a
+  number key activates a slot, and the bar has been four slots wide since
+  it was a stub. A slot holds the Nth entry of `known_spell_ids()`, so the
+  row grows as a guild teaches ([mage_guild.md](mage_guild.md)) rather than
+  being a second list to keep in step. Pressing its key **casts that spell
+  and selects it**; the `cast` key then repeats the selection, so the
+  deliberate act and the quick one are the same act.
+
+  A cycle key was rejected: with four slots a direct key is one press
+  instead of up to four, and cycling gives no answer to *"which one is
+  loaded right now"* without a readout anyway.
+
+  The woven draft still wins when there is one ([spell_weaving.md](spell_weaving.md)):
+  a character who has arranged atoms meant to cast *that*. The selection is
+  what the key falls back to, which is what `DEFAULT_CAST_SPELL_ID` used to
+  hardcode.
+
+  An empty slot refuses with a sentence rather than doing nothing, the same
+  rule every other verb in this overhaul follows
+  ([feedback.md](feedback.md)).
+
+- ✅ **Mana on screen** (2026-09-21). There was no mana readout anywhere:
+  the one resource every cast spends was invisible, and *"Not enough mana"*
+  was the first a player heard of it. It is now a meter in the same card as
+  hunger, thirst, stamina and warmth — the same row widget, so it cannot
+  drift from them — in a violet no other meter uses.

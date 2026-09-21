@@ -171,6 +171,24 @@ func known_ids() -> Array:
 ## The parsed AST for `spell_id` -- null for an unknown id, or for one whose
 ## fixed source text somehow fails to parse (a loud push_error rather than a
 ## silent uncastable spell, since this table is authored, not player input).
+## The name a player reads for `spell_id`.
+##
+## From the spell's OWN source -- every entry declares one,
+## `spell "Frost Lance" { ... }`, and the parser already carries it on the
+## AST -- rather than from a second table beside this one, which is how two
+## names drift apart. Without it the spell bar would have had to print
+## `frost_lance` or keep its own list of prettier strings.
+##
+## An id nobody authored reads as itself rather than as an empty box: a
+## caller that got here has a bug, and a blank slot hides it.
+func name_for(spell_id: String) -> String:
+	var ast = ast_for(spell_id)
+	if ast == null:
+		return spell_id
+	var spell_name := String(ast.get("name", ""))
+	return spell_name if spell_name != "" else spell_id
+
+
 func ast_for(spell_id: String):
 	if not _SOURCES.has(spell_id):
 		return null

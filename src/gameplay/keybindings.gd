@@ -102,6 +102,16 @@ const ACTIONS := [
 	{"action": "hotbar_3", "label": "Hotbar Slot 3", "default": KEY_3},
 	{"action": "hotbar_4", "label": "Hotbar Slot 4", "default": KEY_4},
 	{"action": "hotbar_5", "label": "Hotbar Slot 5", "default": KEY_5},
+	# Four spells on 6-9, symmetric with the hotbar's 1-5 for items: a
+	# number key activates a slot (docs/concept/spell_runtime.md). The spell
+	# bar has been four slots wide since it was a row of locked
+	# placeholders, and these are the first four digits the hotbar leaves
+	# free. A cycle key was rejected: with four slots a direct key is one
+	# press instead of up to four.
+	{"action": "spell_1", "label": "Spell Slot 1", "default": KEY_6},
+	{"action": "spell_2", "label": "Spell Slot 2", "default": KEY_7},
+	{"action": "spell_3", "label": "Spell Slot 3", "default": KEY_8},
+	{"action": "spell_4", "label": "Spell Slot 4", "default": KEY_9},
 	{"action": "toggle_inventory", "label": "Toggle Inventory", "default": KEY_I},
 	{"action": "toggle_crafting", "label": "Toggle Crafting", "default": KEY_C},
 	{"action": "toggle_quest_log", "label": "Toggle Quest Log", "default": KEY_U},
