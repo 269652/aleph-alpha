@@ -363,7 +363,7 @@ func test_forest_biome_is_boar_and_lynx_dominant():
 	assert_true(predator_species.has("lynx"), "forest should promote lynx")
 	for species in predator_species:
 		assert_true(
-			species in ["lynx", "wolf", "bear"], "unexpected predator-role species: %s" % species
+			species in ["lynx", "wolf", "bear" "alp"], "unexpected predator-role species: %s" % species
 		)
 
 

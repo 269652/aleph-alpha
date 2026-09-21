@@ -37,6 +37,7 @@ const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const EcologicalGrudge = preload("res://src/gameplay/ecological_grudge.gd")
+const NightMare = preload("res://src/gameplay/night_mare.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
 ## The play-scale tile in pixels, for converting a species profile's
 ## tiles-per-second pace into this scene's own pixel speeds. Restated
@@ -1068,6 +1069,7 @@ func _process(frame_delta: float) -> void:
 	# stepping toward a stale point.
 	var courting_partner := courtship_partner()
 	_refresh_grudge()
+	_alp_step(delta)
 	var decision := _behavior.decide(_decision_context(courting_partner))
 
 	_apply_decision(decision, delta)
@@ -2193,7 +2195,7 @@ func _decision_context(partner: Node) -> Dictionary:
 		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),
 		"is_world_boss": info.is_world_boss,
 		"is_aggroed": info.is_aggroed,
-		"bears_a_grudge": EcologicalGrudge.BEARS_A_GRUDGE.has(info.species),
+		"waits_for_its_moment": _waits_for_its_moment(),
 		"stimuli": stimuli,
 	}
 
@@ -2208,6 +2210,47 @@ func _decision_context(partner: Node) -> Dictionary:
 ## it below (EcologicalGrudge, whose threshold is the peak of the very
 ## logistic curve PopulationModel runs). Re-read rather than latched, so a
 ## forest that recovers forgives.
+## Whether this species perceives nothing until its own condition is met
+## (docs/concept/monsters.md -- the Curupira's footprint, the Alp's
+## sleeper). Everything else in the game perceives threats always.
+func _waits_for_its_moment() -> bool:
+	if info == null:
+		return false
+	return EcologicalGrudge.BEARS_A_GRUDGE.has(info.species) or info.species == ALP_SPECIES
+
+
+## The Alp, which is not an animal: it sits on a sleeper's chest and presses
+## (docs/concept/monsters.md entry 3, docs/concept/sleep.md). It is the
+## exact inverse of every other creature here -- dangerous while the player
+## is NOT -- so it neither hunts nor bites, and standing up is what makes a
+## character safe from it.
+const ALP_SPECIES := "alp"
+
+
+func _alp_step(delta: float) -> void:
+	if info == null or info.species != ALP_SPECIES:
+		return
+	var player := _cached_player
+	if player == null or not is_instance_valid(player):
+		return
+	if not player.has_method("is_resting"):
+		return
+	var dark := true
+	if _world != null and _world.has_method("current_sun_elevation_deg"):
+		dark = NightMare.is_dark(_world.current_sun_elevation_deg())
+	var its_moment: bool = NightMare.preys_on({"resting": player.is_resting(), "dark": dark})
+	info.is_aggroed = its_moment
+	if not its_moment:
+		return
+	if position.distance_to(player.position) > ATTACK_RANGE:
+		return
+	# The drain, and only the drain -- never health. It empties the bar the
+	# sleeper was resting to fill, so waking costs them the night and NOT
+	# waking costs them the morning.
+	if player.get("survival") != null:
+		NightMare.press(player.survival, delta)
+
+
 func _refresh_grudge() -> void:
 	if info == null or not EcologicalGrudge.BEARS_A_GRUDGE.has(info.species):
 		return

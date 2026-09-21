@@ -218,6 +218,15 @@ const PROFILES := {
 	# caution_radius); and it holds on past the health a hunting animal quits at,
 	# because a grievance is not hunger.
 	"curupira": {"real_top_speed_kmh": 45.0, "windup_seconds": 0.50, "sense_radius_tiles": 10.0, "tenacity": 0.08},
+	# The Alp (docs/concept/monsters.md entry 3) does not hunt and does not
+	# bite -- it sits on a sleeper's chest and presses (NightMare). It has
+	# a profile anyway, because test_every_spawnable_species_has_a_profile
+	# is right: a spawnable species without one falls back to the shared
+	# ATTACK_DAMAGE SILENTLY, which would give this thing a 6-damage bite
+	# nobody designed. Its own figures say what it is instead -- the
+	# feeblest bite in the game, from the lightest body, and it gives up
+	# at the first scratch because it was never going to fight you.
+	"alp": {"real_top_speed_kmh": 12.0, "windup_seconds": 0.90, "sense_radius_tiles": 5.0, "tenacity": 0.95},
 	"mountain_lion": {"real_top_speed_kmh": 80.0, "windup_seconds": 0.45, "sense_radius_tiles": 6.0, "tenacity": 0.40},
 	"wolf": {"real_top_speed_kmh": 50.0, "windup_seconds": 0.40, "sense_radius_tiles": 9.0, "tenacity": 0.25},
 	"lynx": {"real_top_speed_kmh": 64.0, "windup_seconds": 0.35, "sense_radius_tiles": 6.0, "tenacity": 0.40},

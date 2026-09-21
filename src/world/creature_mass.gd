@@ -76,6 +76,10 @@ const _REAL_MASS_KG := {
 	# Child-sized, in the folklore -- small, and that is the point: it is
 	# not dangerous because it is big.
 	"curupira": 30.0,
+	# Small and hunched; the folklore weight of a thing that sits on a chest.
+	# Light enough that its derived bite is the least of anything that
+	# hunts -- a first draft at 14 kg out-bit a jackal, which a test caught.
+	"alp": 7.0,
 	"reindeer": 150.0,
 	"lion": 180.0,
 	"tapir": 250.0,

@@ -143,6 +143,8 @@ that wakes you is a drain you can answer.
   moment this verb reached for R (which `primary_action` holds). Every
   letter A–Z is bound. `rest` takes `KEY_PERIOD`: a number would read as a
   sixth hotbar slot.
+- ✅ **The Alp** (2026-09-21). The creature this mechanic existed to
+  unblock; see [monsters.md](monsters.md) entry 3 and `night_mare.gd`.
 - ⬜ There is no visual for sleeping — no fade, no lying-down pose. The
   character simply stops and the sky runs.
 - ⬜ Nothing yet makes a night *worth* skipping beyond the cold: shelter,

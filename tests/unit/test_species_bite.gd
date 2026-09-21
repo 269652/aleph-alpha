@@ -444,7 +444,7 @@ func test_what_can_be_outrun_at_a_walk():
 		):
 			outwalked.append(species)
 	outwalked.sort()
-	assert_eq(outwalked, ["mouse", "nonvenomous_snake", "venomous_snake"])
+	assert_eq(outwalked, ["alp", "mouse", "nonvenomous_snake", "venomous_snake"])
 	var easy := _species_available_at(RegionDifficulty.Tier.EASY)
 	var easy_outwalked: Array = []
 	for species in outwalked:

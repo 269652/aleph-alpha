@@ -109,7 +109,7 @@ const HERBIVORE_SPECIES_POOL_BY_BIOME := {
 ## design decision, not a placeholder cleanup.
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
 	"grassland": ["jackal", "jackal", "jackal", "lynx", "lion"],
-	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "bear"],
+	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "bear", "alp"],
 	"desert": ["jackal", "jackal", "jackal", "lion", "venomous_snake"],
 	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "bear"],
 	"rainforest": ["jaguar", "jaguar", "jaguar", "venomous_snake", "curupira"],

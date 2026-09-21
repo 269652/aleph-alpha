@@ -381,17 +381,39 @@ canvas — the slicer takes bands per row, so a per-row file with its own
   **It lives in rainforest**, which is a long way from a 48°N spawn — so
   in ordinary play it is something to travel to, and `/arena curupira`
   stages one for testing (docs/concept/arena.md).
-- ⬜ Entries 1–4 and 6–9 are unimplemented. Entry 3 (the Alp) is blocked
-  on a mechanic that does not exist: its whole behaviour is "approaches
-  only while you rest", and there is no sleep state on the player —
-  `SurvivalMeters.rest` is an amount, not a condition. Entry 9 (the
+- ✅ **Entry 3, the Alp, is built** (2026-09-21) — the roster's one blocked
+  entry, unblocked by [sleep.md](sleep.md). `NightMare` is its rule and it
+  is the exact inverse of every other creature here: *only dangerous while
+  you are not.* It ignores a waking character entirely, comes only for a
+  sleeper **and only in the dark** (the same civil-twilight definition
+  everything else calls night), and **drains stamina, never health** — a
+  reflection test forbids every health-shaped method name in the module, so
+  a death with no counterplay cannot be added later by accident. Standing
+  up ends it, and the cost of standing up is the night you lose.
+
+  It reuses the gate the Curupira introduced, now honestly named
+  `waits_for_its_moment`: two creatures perceive nothing until their own
+  condition is met, neither flipped by being hit. Verified live: awake →
+  stamina 1.00, untouched; asleep → 0.75 after five seconds with health
+  still 100; woken → unchanged and no longer aggroed.
+
+  Three existing invariants caught mistakes on the way in, all of them
+  right. A spawnable species with **no** `SpeciesBite` profile falls back
+  to the shared `ATTACK_DAMAGE` silently, which would have given a
+  non-biting monster a 6-damage bite nobody designed — so it carries a
+  profile that says what it is. Its first mass out-bit a jackal. And it
+  belongs on the list of things a player can outrun at a walk, which is
+  exactly right for something you are safe from by standing up.
+- ⬜ Entries 1–2, 4 and 6–9 are unimplemented. Entry 9 (the
   Wolpertinger) is by its own entry a harmless easter egg rather than a
   threat. The remaining Tier C entries each still need their binding
   predicate (a bog, a scree slope, a worked shaft).
 - ⬜ No `MythicRegion` roster line or illustrated sheet exists yet. The
-  Curupira draws on the procedural fallback (`lynx_shape`, red), which is
-  honest but is not the silhouette the art brief asks for — the reversed
-  feet, the thing that makes it legible, need real art.
+  Curupira draws on the procedural fallback (`lynx_shape`, red) and the Alp
+  on the same family in grey, which is honest but is not the silhouette the
+  art brief asks for — the reversed feet and the too-many-joints hunch, the
+  things that make each legible, need real art. The Alp's *Alpkappe* and
+  the taming hook hanging off it are unbuilt.
 - ✅ **Attack/hurt/death rows are wired** — see "Which rows the engine
   consumes today". `attack` already resolves (to the walk cycle with no
   dedicated art); `hurt` and `death` are one-shot rows with a real state in

@@ -67,6 +67,10 @@ const MAX_HEALTH_BY_SPECIES := {
 	# guardian, not an apex predator. Its threat is that it has already
 	# decided about you -- see EcologicalGrudge.
 	"curupira": 42.0,
+	# The Alp (docs/concept/monsters.md, entry 3): a night-mare, not a
+	# carnivore. Frail -- it is never meant to be fought, only woken
+	# away from.
+	"alp": 18.0,
 	"goat": 20.0,
 	"sheep": 18.0,
 	"alpaca": 20.0,
@@ -134,6 +138,7 @@ const MAX_STAMINA_BY_SPECIES := {
 	"tapir": 25.0,
 	"jaguar": 25.0,
 	"curupira": 35.0,
+	"alp": 40.0,
 	"goat": 30.0,
 	"sheep": 22.0,
 	"alpaca": 24.0,
@@ -177,6 +182,7 @@ const MAX_MANA_BY_SPECIES := {
 	"jaguar": 10.0,
 	# The one predator with a real pool: it is a spirit of the forest.
 	"curupira": 30.0,
+	"alp": 45.0,
 	"goat": 5.0,
 	"sheep": 5.0,
 	"alpaca": 5.0,
@@ -215,6 +221,7 @@ const DIET_BY_SPECIES := {
 	"tapir": "Grazer",
 	"jaguar": "Hunter",
 	"curupira": "Guardian",
+	"alp": "Night-mare",
 	"goat": "Grazer",
 	"sheep": "Grazer",
 	"alpaca": "Grazer",
@@ -255,6 +262,7 @@ const TEMPERAMENT_BY_SPECIES := {
 	"tapir": "calm",
 	"jaguar": "aggressive",
 	"curupira": "aggressive",
+	"alp": "aggressive",
 	"goat": "calm",
 	"sheep": "calm",
 	"alpaca": "calm",
@@ -309,6 +317,7 @@ const PREDATOR_SPECIES := {
 	"arctic_fox": true,
 	"jaguar": true,
 	"curupira": true,
+	"alp": true,
 	"mountain_lion": true,
 	"bear": true,
 	"lion": true,

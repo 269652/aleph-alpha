@@ -45,7 +45,7 @@ const NECK_LOW := "low"
 const SPECIES := [
 	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep", "alpaca",
 	"boar", "tapir", "bear",
-	"wolf", "lynx", "jaguar", "predator", "curupira",
+	"wolf", "lynx", "jaguar", "predator", "curupira", "alp",
 	"jackal", "arctic_fox", "mountain_lion", "lion",
 	"mouse", "squirrel",
 	"venomous_snake", "nonvenomous_snake",
@@ -304,6 +304,18 @@ const _PROFILES := {
 		"leg_length": 0.34, "leg_thickness": 0.045,
 		"tail": TAIL_NONE, "tail_length": 0.0,
 		"headgear": HEADGEAR_NONE, "has_mane": true,
+	},
+	# The Alp: small, hunched, too many joints, an enormous flat head --
+	# the silhouette has to read as WRONG rather than as an animal.
+	"alp": {
+		"barrel_squareness": 0.5,
+		"world_scale": 0.6,
+		"body_length": 0.30, "body_height": 0.28, "body_y": 0.44, "shoulder_hump": 0.12,
+		"neck_length": 0.04, "neck_thickness": 0.12, "neck_carriage": NECK_LOW,
+		"head_length": 0.20, "head_height": 0.20, "muzzle": 0.10, "ear_size": 0.10,
+		"leg_length": 0.30, "leg_thickness": 0.030,
+		"tail": TAIL_NONE, "tail_length": 0.0,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	"predator": {
 		"barrel_squareness": 0.3,

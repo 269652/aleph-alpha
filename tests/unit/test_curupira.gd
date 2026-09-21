@@ -159,7 +159,7 @@ func _context(overrides: Dictionary) -> Dictionary:
 		"temperament": "aggressive",
 		"is_predator": true,
 		"health_fraction": 1.0,
-		"bears_a_grudge": true,
+		"waits_for_its_moment": true,
 		"is_aggroed": false,
 		"stimuli": [],
 	}
@@ -186,7 +186,7 @@ func test_it_comes_for_you_once_provoked():
 func test_an_ordinary_animal_is_unaffected():
 	assert_true(
 		CreatureBehavior.new()._perceives_threats(
-			_context({"species": REFERENCE, "bears_a_grudge": false})
+			_context({"species": REFERENCE, "waits_for_its_moment": false})
 		)
 	)
 	assert_true(
