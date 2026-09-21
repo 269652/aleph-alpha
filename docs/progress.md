@@ -516,11 +516,21 @@ and most species have no loot row so they vanish on death.
   `test_carcass.gd` 33, `test_huntable_quarry.gd` 37, `test_npc_economy.gd`
   84 and `test_creature_marker.gd` 293 — all green.
 
-  **Pre-existing red, found while running the blast radius and confirmed
-  against `HEAD` in a detached worktree so it is not this change's:**
-  `test_npc_marker_hunting.gd`'s `test_a_kill_pays_the_hunter_real_gold`
-  fails — a villager's kill puts real meat and a real hide in the market
-  but the purse stays at 0.0. Named here rather than left silent.
+  **A pre-existing red found while running the blast radius, and fixed
+  (✅).** `test_npc_marker_hunting.gd`'s
+  `test_a_kill_pays_the_hunter_real_gold` was failing — confirmed red at
+  `HEAD` in a detached worktree first, so it was not this change's. It
+  asserted a levy into the village purse, which was true when it was
+  written and stopped being true the day *gold got exactly one faucet*
+  (`0514f08`): `NpcEconomy._earn` minted a coin per food unit whether or
+  not anyone ever bought it, and it went, along with
+  `record_harvest_wage`. That commit rewrote eight tests in
+  `test_npc_economy.gd`; this ninth lives in another file and was missed,
+  so it has been red ever since. Rewritten to the rule that actually
+  holds, not deleted — a kill pays the village in **goods** and mints no
+  gold, and a second test takes the same kill through a real cartload sale
+  to show where the gold does come from. Both would catch the faucet
+  reopening. `test_npc_marker_hunting.gd` 33, green.
 
 
 ### Loose stone (see `docs/concept/stone.md`)

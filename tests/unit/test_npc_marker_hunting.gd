@@ -287,10 +287,37 @@ func test_a_leaner_animal_feeds_the_village_less():
 	assert_almost_eq(market.stock.get("meat", 0.0), float(expected), 0.0001)
 
 
-func test_a_kill_pays_the_hunter_real_gold():
+## A kill pays the village in GOODS, and in nothing else. This test used to
+## assert a levy into the purse, which was true when it was written and
+## stopped being true the day gold got exactly one faucet
+## (docs/concept/traveling_merchants.md, "the merchant is the ONLY faucet"):
+## `NpcEconomy._earn` minted a coin per food unit whether or not anyone ever
+## bought it, and it was removed along with `record_harvest_wage`. Eight
+## tests in `test_npc_economy.gd` were rewritten in that pass; this one
+## lives in another file and was missed, so it has been red on `main` ever
+## since. Rewritten rather than deleted, to the rule that actually holds --
+## it would now catch the faucet reopening.
+func test_a_kill_pays_the_village_in_goods_and_mints_no_gold():
+	var deer := _creature_at(Vector2(-20.0, 0.0))
+	var purse_before := NpcEconomy.purse_of(market)
+	_hunt_until_dead(deer)
+	assert_gt(market.total_stock(), 0.0, "precondition: the kill really reached the market")
+	assert_almost_eq(
+		NpcEconomy.purse_of(market), purse_before, 0.0001,
+		"a kill conjures no gold -- it makes goods a merchant can pay for"
+	)
+
+
+## And that is where the gold comes from: the same cartload sale every
+## other funded purse in this project goes through.
+func test_the_gold_arrives_when_a_merchant_buys_the_kill():
 	var deer := _creature_at(Vector2(-20.0, 0.0))
 	_hunt_until_dead(deer)
-	assert_gt(NpcEconomy.purse_of(market), 0.0, "the village takes its levy on a real kill")
+	var sale: Dictionary = MerchantVisit.purchase(market.stock)
+	for item_id in sale["bought"]:
+		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
+	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
+	assert_gt(NpcEconomy.purse_of(market), 0.0, "the one faucet really pays for a real kill")
 
 
 func test_a_hunter_working_real_quarry_does_not_also_conjure_regional_yield():
