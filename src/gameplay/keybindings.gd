@@ -25,6 +25,14 @@ const ACTIONS := [
 	# fish/lasso/mount already are. Doubles Player.BASE_SPEED back to the old
 	# flat SPRINT_SPEED while held (see Player.current_speed).
 	{"action": "sprint", "label": "Sprint", "default": KEY_SHIFT},
+	# The one unconditional answer to a blow (docs/concept/dodge.md). A
+	# combat verb has to be reachable by the hand already holding WASD, and
+	# the three keys in that reach are taken -- attack has Space, block has
+	# Ctrl, sprint has Shift. Every letter A-Z is bound (test_keybindings.gd
+	# caught `rest` reaching for one), and a number would read as a sixth
+	# hotbar slot. Tab is free, sits under the left hand, and is not a focus
+	# key in this project, whose UI is built rather than themed.
+	{"action": "dodge", "label": "Dodge", "default": KEY_TAB},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
 	# Deliberately its own action, not folded into "pickup" (E), matching
 	# every other verb's own dedicated action -- see docs/concept/

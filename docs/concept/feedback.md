@@ -411,6 +411,15 @@ the suite goes red before it can ship.
   crossing. A test now walks all four steps by name rather than trusting
   the next reader to find them.
 
+- ✅ **A refusal keeps its own clock** (2026-09-21). `Player._answered_at`
+  was keyed by action id alone, so a refusal and a success of the same verb
+  shared one cooldown. Giving the dodge a key found it: pressing dodge
+  again the instant after a roll — the commonest press that mechanic will
+  ever see — was muted by the roll that caused it, and a press that says
+  nothing teaches a player the key is broken, which is exactly what pillar
+  3 exists to prevent. Each half still rate-limits itself, so holding a key
+  against a wall hears one *"no"* rather than forty.
+
 - ⬜ **The sounds themselves**, still. Every `sound` id but the footsteps
   names a clip that does not exist, `hurt` included. The table is the
   commissioning list.

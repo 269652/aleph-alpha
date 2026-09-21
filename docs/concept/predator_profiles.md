@@ -256,13 +256,27 @@ before dying.
   slowing the lion to a boar's pace, dropping a species from the table,
   and collapsing bite damage back to a flat 6.0 each fail at least two
   tests.
-- ⬜ Wiring: `CreatureMarker` still reads its own flat `ATTACK_DAMAGE`/
-  `ATTACK_COOLDOWN`/`SENSE_RADIUS`/`HUNT_SPEED` and `CreatureBehavior`
-  still reads one `STRONG_HEALTH_FRACTION`. Nothing in the live game reads
-  this table yet.
+- 🚧 **Wiring, partly.** `CreatureMarker.bite_damage()` and
+  `bite_cooldown_seconds()` read this table now, and `pursuit_speed_tiles_
+  per_second` reaches `hunt_speed()`. Measured 2026-09-21, four columns are
+  still dead: **`windup_seconds`** (no telegraph exists — see below),
+  **`tenacity`** (`CreatureBehavior` still reads one shared
+  `STRONG_HEALTH_FRACTION`), **`release_distance_tiles`**, and
+  **`venom_damage`**. `sense_radius_tiles` is read by the player and by
+  `/arena`, never by the creature that owns it — a creature still senses at
+  one flat `SENSE_RADIUS`, so a bear's authored ten-tile nose changes
+  nothing about when the bear notices you.
+- ✅ **The dodge these numbers are authored against now exists**
+  (2026-09-21) — see [dodge.md](dodge.md). Until then this whole fairness
+  model rested on a verb the player could not perform: `Dodge` was a
+  complete, tested module with zero consumers outside this file's reading
+  of two of its constants, and `grep -rn "invulner\|invincib\|iframe"
+  scenes/player.gd` returned one comment.
 - ⬜ The windup needs an animation/telegraph to be *seen* — a profile that
   says 0.9s of rear-up is only fair once the player can watch it happen
   (see [combat.md](combat.md)'s Hammerwatch-style read-and-react feel).
+  With the dodge built and the telegraph not, the player has the answer
+  and no question: a bite still lands on the frame a creature is in range.
 - ⬜ Venom is counted in the threat score at one stack's full duration;
   `VenomModel.MAX_STACKS` (3) stacking behaviour is the live model's, not
   re-derived here.

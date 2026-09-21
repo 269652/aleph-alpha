@@ -181,3 +181,31 @@ func test_a_scratch_reports_a_smaller_share_than_a_maiming():
 	heavy_player.take_damage(heavy_player.max_health * 0.6)
 	assert_gt(float(heavy[0]["severity"]), light)
 	heavy_player.queue_free()
+
+
+# -- a refusal keeps its own clock ----------------------------------------
+
+## Found by giving the dodge a key. `_answered_at` was keyed by action id
+## alone, so a refusal and a success of the same verb shared one cooldown --
+## and pressing dodge again the instant after a roll, which is the
+## commonest press in the game, was muted by the roll that caused it.
+##
+## A press that says nothing teaches a player the key is broken, which is
+## the exact failure docs/concept/feedback.md's third pillar exists to
+## prevent: "a refusal is feedback too".
+func test_a_refusal_is_not_muted_by_the_success_that_caused_it():
+	var seen := _answers()
+	player.answer("attack", {"damage": 4.0})
+	player.answer("attack", {"failed": true, "reason": "Nothing in reach."})
+	assert_eq(seen.size(), 2, "the no is not swallowed by the yes")
+	assert_false(bool(seen[0]["failed"]))
+	assert_true(bool(seen[1]["failed"]))
+
+
+## And each half still rate-limits itself: holding a key against a wall
+## hears one "no", not forty.
+func test_two_refusals_inside_the_interval_still_answer_once():
+	var seen := _answers()
+	player.answer("attack", {"failed": true, "reason": "Nothing in reach."})
+	player.answer("attack", {"failed": true, "reason": "Nothing in reach."})
+	assert_eq(seen.size(), 1)

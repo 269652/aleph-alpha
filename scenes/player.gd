@@ -1109,6 +1109,13 @@ func set_interior_view_host(viewport: SubViewport, container: SubViewportContain
 func take_damage(amount: float) -> void:
 	if is_dead:
 		return
+	# The whole point of the dodge (docs/concept/dodge.md): a blow inside
+	# the window finds nothing to hit. Not softened -- refused, and with no
+	# receipt raised either, because nothing happened to answer for.
+	# Deliberately NOT in take_tick_damage: you cannot roll away from venom
+	# that is already in your blood.
+	if is_invincible():
+		return
 	# What was swung, before block/shield/armour whittle `amount` down --
 	# the question "was this a blow at all" is separate from "what did it
 	# cost", and only the first decides whether there is anything to answer.
@@ -2108,9 +2115,12 @@ var _knockback_remaining := Vector2.ZERO
 var _knockback_time_remaining := 0.0
 
 
-func apply_knockback(force: Vector2) -> void:
+## `duration` defaults to a shove's own length; a dodge passes the window it
+## is untouchable for instead, so "you are moving out of the way" and "you
+## cannot be hit" are one interval rather than two that could disagree.
+func apply_knockback(force: Vector2, duration: float = KNOCKBACK_DURATION) -> void:
 	_knockback_remaining = force
-	_knockback_time_remaining = KNOCKBACK_DURATION
+	_knockback_time_remaining = duration
 
 
 ## The velocity _authority_step should actually use this frame: a spell
@@ -2575,8 +2585,10 @@ func _authority_step(delta: float) -> void:
 	if _chunk_manager != null:
 		survival.regulate_temperature(_chunk_manager.ambient_warmth(position), wetness, delta)
 
+	_dodge_timers_step(delta)
 	_attack_step(delta)
 	_cast_step()
+	_dodge_step()
 	_rest_step()
 	_pickup_step(delta)
 	_kick_step()
@@ -3073,6 +3085,100 @@ func _cast_step() -> void:
 ## The rest key (docs/concept/sleep.md): lies down, or wakes a sleeper. One
 ## key for both, because the counterplay to being found asleep has to be the
 ## key already under the player's finger.
+# -- the dodge (docs/concept/dodge.md) --------------------------------------
+#
+# Measured before this: src/gameplay/dodge.gd was a complete, tested module
+# with ZERO consumers outside SpeciesBite reading two of its constants, and
+# this file did not mention it. Which means predator_profiles.md -- whose
+# two windup anchors are Dodge.INVINCIBLE_DURATION and
+# Dodge.COOLDOWN_DURATION by name -- had balanced the whole predator roster
+# against a verb the player could not perform.
+
+const Dodge = preload("res://src/gameplay/dodge.gd")
+
+var _dodge := Dodge.new()
+var _dodge_invincible_remaining := 0.0
+var _dodge_cooldown_remaining := 0.0
+var _last_dodge_input_state := false
+
+
+## Whether a blow would find nothing to hit right now.
+func is_invincible() -> bool:
+	return _dodge.is_invincible(_dodge_invincible_remaining)
+
+
+## The one unconditional answer to a blow: blocking reduces, armour soaks,
+## a dodge REFUSES. True when one really started.
+##
+## Every refusal is a sentence through the same feedback path every other
+## verb uses, because a press that could not do what it meant and says
+## nothing teaches a player that the key is broken.
+func dodge() -> bool:
+	var refusal := dodge_refusal()
+	if refusal != "":
+		answer("dodge", {"failed": true, "reason": refusal})
+		return false
+	var started: Dictionary = _dodge.start_dodge()
+	_dodge_invincible_remaining = float(started["invincible_time_remaining"])
+	_dodge_cooldown_remaining = float(started["cooldown_remaining"])
+	survival.spend_stamina(Dodge.stamina_cost())
+	# Where you are going, or where you were last going: a dodge with no
+	# direction would be a hop in place. Through the same
+	# displacement a shove uses -- an ease-out converted to a velocity so
+	# move_and_slide still resolves collision -- rather than a position jump
+	# that would put a rolling character inside a wall.
+	# `facing_direction()` holds the last real nonzero travel heading and
+	# never zeroes out at rest (its own doc comment), so it IS "where you
+	# are going, or where you were last going" in one read -- no second
+	# copy of the input vector to keep in step with it. Vector2.DOWN only
+	# for a character that has never moved at all.
+	var heading: Vector2 = facing_direction()
+	if heading.length() <= 0.01:
+		heading = Vector2.DOWN
+	apply_knockback(heading.normalized() * Dodge.distance_px(), Dodge.INVINCIBLE_DURATION)
+	answer("dodge", {})
+	return true
+
+
+## Why this character may not roll right now, or "" when they may. Asked by
+## `dodge` itself, so the explanation and the refusal can never disagree --
+## the same shape `craft_refusal` already keeps.
+func dodge_refusal() -> String:
+	if is_dead:
+		return "You are in no state to move."
+	if is_resting():
+		return "You are asleep."
+	if is_invincible():
+		return "You are already moving."
+	if not _dodge.can_dodge(_dodge_cooldown_remaining):
+		return "Not yet -- you are still recovering."
+	# "Exhausted" on the survival panel and "cannot dodge" are ONE fact
+	# (SprintCost.can_sprint reads SurvivalMeters.EXHAUSTED_THRESHOLD
+	# itself), the same single-source rule the sprint already follows.
+	if not SprintCost.can_sprint(survival.stamina):
+		return "Too winded to throw yourself anywhere."
+	return ""
+
+
+## Both timers, ticked by the owner -- the module's own stated contract.
+func _dodge_timers_step(delta: float) -> void:
+	if _dodge_invincible_remaining <= 0.0 and _dodge_cooldown_remaining <= 0.0:
+		return
+	var advanced: Dictionary = _dodge.advance(
+		_dodge_invincible_remaining, _dodge_cooldown_remaining, delta
+	)
+	_dodge_invincible_remaining = float(advanced["invincible_time_remaining"])
+	_dodge_cooldown_remaining = float(advanced["cooldown_remaining"])
+
+
+func _dodge_step() -> void:
+	var pressed := Input.is_action_pressed("dodge") if _controlled_locally() else false
+	var just_pressed := _rising_edge("dodge", pressed, _last_dodge_input_state)
+	_last_dodge_input_state = pressed
+	if just_pressed:
+		dodge()
+
+
 func _rest_step() -> void:
 	var pressed := Input.is_action_pressed("rest") if _controlled_locally() else false
 	var just_pressed := _rising_edge("rest", pressed, _last_rest_input_state)
@@ -3126,15 +3232,32 @@ func answer(action_id: String, context: Dictionary = {}) -> void:
 	if not Answerback.has_feedback(action_id):
 		return
 	var now := _answer_clock_seconds
+	# A refusal keeps its OWN clock, separate from the success of the same
+	# verb. Found by giving the dodge a key: sharing one meant pressing
+	# dodge again the instant after a roll -- the commonest press in the
+	# game -- was muted by the roll that caused it, and a press that says
+	# nothing teaches a player the key is broken. That is exactly the
+	# failure docs/concept/feedback.md's third pillar exists to prevent.
+	# Each half still rate-limits itself, so holding a key against a wall
+	# hears one "no" rather than forty.
+	var clock_key := action_id
+	if bool(context.get("failed", false)):
+		clock_key += REFUSAL_CLOCK_SUFFIX
 	if not Answerback.should_play(
-		action_id, float(_answered_at.get(action_id, -INF)), now
+		action_id, float(_answered_at.get(clock_key, -INF)), now
 	):
 		return
 	var feedback := Answerback.for_action(action_id, context)
 	if feedback.is_empty():
 		return
-	_answered_at[action_id] = now
+	_answered_at[clock_key] = now
 	answered.emit(feedback)
+
+
+## What separates a verb's refusal clock from its success clock in
+## `_answered_at`. A suffix no action id can contain, so the two keys can
+## never collide with a real verb's.
+const REFUSAL_CLOCK_SUFFIX := "!refused"
 
 
 func _perform_attack() -> void:

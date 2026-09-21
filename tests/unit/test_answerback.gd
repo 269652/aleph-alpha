@@ -48,7 +48,7 @@ const HUD_ONE_LINE_BANNER_SECONDS := 6.0
 ## arms a placeable and returns a bool saying whether it worked.
 const WORLD_CHANGING_ACTIONS := [
 	"move_up", "move_down", "move_left", "move_right",
-	"attack", "block", "sprint", "pickup", "enter", "kick", "stash",
+	"attack", "block", "dodge", "sprint", "pickup", "enter", "kick", "stash",
 	"fish", "lasso", "mount", "trade", "sell",
 	"primary_action", "secondary_action", "talk",
 	"build", "destroy", "plant", "cast",

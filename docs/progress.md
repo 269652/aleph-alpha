@@ -481,6 +481,60 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **Dodge gets a key — the verb the whole predator table was balanced
+  against** (2026-09-21) — see the new `concept/dodge.md`.
+
+  `src/gameplay/dodge.gd` was a complete, tested pure module with **zero
+  consumers** outside `SpeciesBite` reading two of its constants.
+  `grep -rn "dodge\|Dodge" scenes/player.gd` returned nothing; no `dodge`
+  action existed; `grep -rn "invulner\|invincib\|iframe" scenes/player.gd`
+  returned one comment. Meanwhile `concept/predator_profiles.md` derives
+  **both** of its windup anchors from that module by name — the smallest
+  telegraph in the world is `Dodge.INVINCIBLE_DURATION`, and a bite that
+  would kill a full-health player outright must telegraph for a whole
+  `Dodge.COOLDOWN_DURATION`. The entire predator roster had been balanced
+  against a verb the player could not perform.
+
+  Nothing new was chosen. `Dodge.distance_px()` is sprint speed × the
+  invincibility window = **20 px**, and the two facts that fall out of it
+  are tests rather than remarks: it is **1.78 m** at this world's play
+  scale, which is what a real evasive dive covers, and it is **longer than
+  `ATTACK_RANGE`** (16 px), so a dodge begun inside a bite's reach ends
+  outside it. The cost is `SprintCost.stamina_for_seconds` of the same
+  window — exactly the sprint it is, never a cheaper way to cross ground —
+  and the exhausted gate is `SprintCost.can_sprint`, so *"Exhausted"* on
+  the survival panel and *"cannot dodge"* are one fact.
+
+  A blow inside the window is **refused**, not softened, and raises no
+  receipt because nothing happened to answer for. A venom tick is
+  untouched: you cannot roll away from what is already in your blood.
+  `apply_knockback` gained a duration so the shove and the roll share one
+  displacement — an ease-out converted to a velocity, not a position jump
+  that would put a rolling character inside a wall.
+
+  **The keyboard being full is now a documented constraint, not a
+  surprise.** Every letter A–Z is bound, the three keys under the left hand
+  are taken (Space, Ctrl, Shift), and a number would read as a sixth hotbar
+  slot — so `dodge` takes **Tab**.
+
+  **And it found a bug in the feedback layer.** `Player._answered_at` was
+  keyed by action id alone, so a refusal and a success of the same verb
+  shared one cooldown: pressing dodge again the instant after a roll — the
+  commonest press this mechanic will ever see — was muted by the roll that
+  caused it. A press that says nothing teaches a player the key is broken,
+  which is precisely what `feedback.md`'s third pillar exists to prevent.
+
+  Tests: `test_player_dodge.gd` 21, `test_player_answerback.gd` 17,
+  `test_answerback.gd` 56, `test_keybindings.gd` 24, `test_dodge.gd` 10,
+  `test_species_bite.gd` 48, `test_sprint_cost.gd` 18,
+  `test_player_rest.gd` 14, `test_player_input_latch.gd` 16 — green.
+
+  **Named gap, and the reason this slice came first:** there is still
+  nothing to dodge. `SpeciesBite.windup_seconds_for` has no consumer, so a
+  bite lands on the frame a creature is in range with no telegraph at all —
+  the player now has the answer and no question. A telegraph built before
+  the dodge would only have been a delay.
+
 - ✅ **A blow lands, and the exchange reads** (2026-09-21) — see
   `concept/feedback.md`. Three silences closed at once, all of them named
   in that doc's own opening diagnosis and still true months later.

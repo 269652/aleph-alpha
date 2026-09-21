@@ -185,6 +185,11 @@ const FEEDBACK := {
 	# A stance, not a strike: it answers at swing rate so raising the guard
 	# reads as part of the same exchange.
 	"block": {"sound": "guard_up", "flash": FLASH_NONE, "floats": FLOAT_NONE, "message": "", "interval": SWING_INTERVAL_SECONDS},
+	# The one answer that refuses a blow outright (docs/concept/dodge.md).
+	# DELIBERATE rather than SWING: the verb's own gate is
+	# Dodge.COOLDOWN_DURATION (1.5s), which is longer than either, so the
+	# limiter is transparent and never eats a roll the game allowed.
+	"dodge": {"sound": "dodge_roll", "flash": FLASH_GAIN, "floats": FLOAT_NONE, "message": "", "interval": DELIBERATE_INTERVAL_SECONDS},
 	# Held, and polled every frame -- so it needs the SLOW interval, not the
 	# fast one: one breath a second while running, not one per frame.
 	# Sprint costs stamina now (SprintCost), which is the change that made
