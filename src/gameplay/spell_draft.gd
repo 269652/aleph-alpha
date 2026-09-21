@@ -421,6 +421,36 @@ static func reaction_multiplier(draft: Dictionary) -> float:
 	return total
 
 
+## One pipeline step's parameters with a reaction multiplier applied --
+## what "the reactions scale magnitude at resolution" (design pillar 5)
+## actually does to a cast.
+##
+## Measured before this existed: `reaction_multiplier` had exactly ONE
+## caller, `scenes/spell_weave_window.gd`, which PRINTS the reactions.
+## `Player.cast_woven` parsed the draft, ran the pipeline and never asked.
+## So the Weave told a player that arranging fire before ignite made a
+## conflagration, and arranging it changed nothing whatever about what the
+## spell did -- and the quench, which is supposed to cost thirty percent of
+## a spell for putting frost after fire, was free.
+##
+## Magnitude where there is one, duration where there is not: a
+## conflagration burns harder, a flash freeze holds longer. Never both for
+## one atom -- an atom carrying a magnitude AND a duration would otherwise
+## be scaled twice for a single reaction.
+##
+## Returns a NEW dictionary, like every other function in this module, so
+## scaling a cast can never rewrite the draft it came from.
+static func scaled_params(params: Dictionary, multiplier: float) -> Dictionary:
+	if multiplier == 1.0:
+		return params.duplicate()
+	var scaled := params.duplicate()
+	if scaled.has("magnitude"):
+		scaled["magnitude"] = float(scaled["magnitude"]) * multiplier
+	elif scaled.has("duration"):
+		scaled["duration"] = float(scaled["duration"]) * multiplier
+	return scaled
+
+
 ## The ceiling, by CONSTRUCTION rather than by searching the space of
 ## drafts: a full row has MAX_SOCKETS - 1 adjacencies and every pair in the
 ## table is capped at MAX_PAIR_MULTIPLIER, so nothing can multiply past

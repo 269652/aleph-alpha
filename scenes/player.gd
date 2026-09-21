@@ -3678,9 +3678,20 @@ func cast_woven() -> bool:
 	answer("cast", {})
 	# The same resolution an authored spell gets -- one pipeline, one
 	# executor, no second path for a player-made spell.
+	#
+	# With one thing an authored spell has no claim to: the reaction the
+	# ORDER earned (docs/concept/spell_weaving.md, design pillar 5 -- "order
+	# is the craft"). A conflagration burns half again as hard; a quench,
+	# frost after fire, costs thirty percent. Measured before this line:
+	# SpellDraft.reaction_multiplier had exactly one caller, the Weave
+	# window, which PRINTS the reactions -- so the surface told a player
+	# their arrangement mattered and the cast never asked.
+	var reaction := SpellDraft.reaction_multiplier(_woven_draft)
 	var delivery := _spell_executor.delivery_for(rule)
 	for step in rule.get("pipeline", []):
-		_apply_cast_step(step, delivery)
+		var scaled: Dictionary = step.duplicate()
+		scaled["params"] = SpellDraft.scaled_params(step.get("params", {}), reaction)
+		_apply_cast_step(scaled, delivery)
 	return true
 
 

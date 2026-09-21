@@ -481,6 +481,30 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **Order is the craft, and it changed nothing** (2026-09-21) — see
+  `concept/spell_weaving.md`. That doc's fifth design pillar is *"order is
+  the craft: adjacent motes react, and the reactions scale magnitude at
+  resolution"*, and its table prices five of them — a conflagration at
+  1.50, a conduction at 1.40, a flash freeze at 1.35, steam at 1.25, a
+  quench at 0.70.
+
+  `SpellDraft.reaction_multiplier` had exactly **one** caller:
+  `scenes/spell_weave_window.gd`, which *prints* the reactions.
+  `cast_woven` parsed the draft, ran the pipeline and never asked. So the
+  Weave told a player their arrangement mattered and the cast ignored it —
+  and the quench was free, which is the sharper half: putting frost after
+  fire is supposed to cost thirty percent of your spell.
+
+  `SpellDraft.scaled_params` is the rule — magnitude where there is one,
+  duration where there is not, never both for one atom — and `cast_woven`
+  applies it per pipeline step. `cast_spell` deliberately does not: a spell
+  nobody arranged has no order to be paid for, and a test holds that line
+  so the two paths cannot quietly converge.
+
+  Tests: `test_reaction_multiplier_lands.gd` 9 (new),
+  `test_spell_draft.gd` 32, `test_player_spell_weaving.gd` 20,
+  `test_spell_weave_window.gd` 9, `test_player_spell_slots.gd` 10 — green.
+
 - ✅ **Every timed thing riding on you, finally on screen** (2026-09-21) —
   see `concept/hud.md`. `HudReadouts.condition_chips` took the survival
   meters and nothing else, so the row named *Hungry*, *Parched*,

@@ -376,13 +376,30 @@ holds both halves of pillar 6 at once.
   caps.
 - ✅ 53 tests: `tests/unit/test_spell_mote.gd` (21),
   `tests/unit/test_spell_draft.gd` (32).
-- ⬜ Wiring: nothing grants a mote yet. The witness hooks
-  (`SurvivalMeters.is_freezing`, `VenomModel`'s apply, the campfire,
-  `WeatherModel`'s storm) are callers that do not exist.
-- ⬜ No socket UI. A draft can be built and compiled in code; there is
-  no screen that lets a player drag a mote into a socket.
-- ⬜ The reaction multiplier is computed and not yet applied — the
-  resolution layer that multiplies an atom's magnitude by it is the
-  wiring half.
-- ⬜ Motes do not drop. `drop_tier_cap_for_ring` says what is eligible;
-  no loot table reads it.
+- ✅ **The witness hooks exist** and grant motes for all seven phenomena;
+  the grant is announced now too, which it was not — `Player.witness` had
+  called `answer("mote_found", …)` since it shipped and `Answerback` had no
+  such row, so every atom earned the hard way arrived in silence (see
+  [feedback.md](feedback.md), 2026-09-21).
+- ✅ **The socket UI exists** (`scenes/spell_weave_window.gd`, bound to
+  `toggle_weave`).
+- ✅ **The reaction multiplier is applied** (2026-09-21). It had exactly
+  ONE caller — the Weave window, which *prints* the reactions —
+  so the surface told a player that arranging fire before ignite made a
+  conflagration, and arranging it changed nothing whatever about what the
+  spell did. The quench was free: putting frost after fire is supposed to
+  cost thirty percent of a spell, and it cost nothing.
+
+  `SpellDraft.scaled_params` is the rule: **magnitude where there is one,
+  duration where there is not** — a conflagration burns harder, a flash
+  freeze holds longer — and never both for one atom, which would scale a
+  single reaction twice. `cast_woven` applies it to each step of the
+  pipeline; `cast_spell` deliberately does not, because a spell nobody
+  arranged has no order to be paid for. Tested
+  (`test_reaction_multiplier_lands.gd`, 9).
+- ⬜ **Motes do not drop.** `drop_tier_cap_for_ring` /
+  `droppable_atoms_at_ring` say what is eligible where, and still have zero
+  callers: the only ways into a pouch are the seven one-time witness
+  phenomena and the `/arena` dev command. So a character has at most seven
+  atoms for the whole game, and the four-socket Weave can never be full of
+  anything they chose. This is the last unbuilt half of the loop.
