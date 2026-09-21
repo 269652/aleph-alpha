@@ -33,6 +33,11 @@ func before_each():
 	marker.wander_seed = 5
 	marker.info = CreatureInfo.new("herbivore")
 	add_child(marker)
+	# Only the frames a test drives by hand may age this flash -- see the
+	# guard in test_bite_telegraph.gd. A marker left on the engine's own
+	# `_process` is also aged by real frames, which are milliseconds alone
+	# and can be seconds in a loaded batch run.
+	marker.set_process(false)
 
 
 func after_each():

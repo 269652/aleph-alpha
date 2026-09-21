@@ -901,6 +901,29 @@ and most species have no loot row so they vanish on death.
   creature's own remaining clock rather than a round number, so they cannot
   go stale when a species' telegraph changes.
 
+  **A frame no test asked for** (found 2026-09-21 by running all 954 unit
+  suites, not the ones judged affected). `CreatureMarker` has a `_process`,
+  and a marker parented into the live test tree gets it called by the
+  *engine* with the real frame delta — on top of every `_process(FRAME)` a
+  test makes by hand. Alone that is invisible. In a batch behind a slow
+  suite one real frame can be **seconds** long, longer than a wolf's entire
+  bite cooldown.
+
+  Measured: `test_a_bite_that_missed_still_costs_the_recovery` passed
+  standalone and failed inside a 60-suite batch, bisected to a single
+  neighbour — `test_bee_hive_marker.gd`, which is merely *slow*, and shares
+  no state with it. The wolf's recovery was being ticked away by frames no
+  test drove, so it committed to a second bite and the assertion that it
+  "cannot simply try again" was right to fail. `marker.set_process(false)`
+  in the three harnesses that drive frames by hand
+  (`test_bite_telegraph.gd`, `test_predator_initiative.gd`,
+  `test_creature_hit_flash.gd`) makes the frames a test drives the only
+  frames it gets.
+
+  Worth generalising: **any** suite that parents a `_process`-bearing node
+  into the tree and then steps it manually is running on two clocks, and
+  will pass alone and fail under load.
+
   Named gaps: a creature **rooted** mid-strike still bites (what a root
   takes is its footing) but its rear-up stops building, because that early
   return skips the animation step. Beyond 200 px one step can advance

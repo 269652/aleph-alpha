@@ -57,10 +57,17 @@ func after_each():
 	entities_parent.free()
 
 
+## Nothing here may tick except the frames a test drives itself -- see the
+## same guard in test_bite_telegraph.gd, where a marker left on the
+## engine's own `_process` lost a wolf's bite recovery to frames no test
+## asked for. Here it is why a step measured right after a sensing tick is
+## a step this file actually chose.
 func _creature(species: String, offset: Vector2):
-	return renderer.spawn_single(
+	var marker = renderer.spawn_single(
 		creatures_parent, species, player.position + offset, manager, TerrainRenderer.TILE_SIZE
 	)
+	marker.set_process(false)
+	return marker
 
 
 # -- the predicate --------------------------------------------------------

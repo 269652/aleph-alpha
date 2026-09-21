@@ -55,10 +55,26 @@ func after_each():
 	entities_parent.free()
 
 
+## Nothing here may tick except the frames a test drives itself.
+##
+## `CreatureMarker` has a `_process`, and a marker parented into the live
+## test tree gets it called by the ENGINE with the real frame delta, on top
+## of every `_process(FRAME)` a test makes by hand. Run alone that is
+## invisible; run in a batch behind a slow suite, one real frame can be
+## seconds long -- longer than a wolf's whole bite cooldown -- and a test
+## that drove exactly the frames it meant to drive loses.
+##
+## Measured: `test_a_bite_that_missed_still_costs_the_recovery` passed
+## alone and failed the moment `test_bee_hive_marker.gd` (a slow suite) ran
+## before it in the same process, bisected to that one neighbour. The
+## wolf's recovery had been silently ticked away by frames no test asked
+## for, so it committed to a second bite and the assertion that it "cannot
+## simply try again" was right to fail.
 func _predator(species: String, offset: Vector2):
 	var marker = renderer.spawn_single(
 		creatures_parent, species, player.position + offset, manager, TerrainRenderer.TILE_SIZE
 	)
+	marker.set_process(false)
 	marker.info.is_aggroed = true
 	return marker
 
