@@ -1523,9 +1523,17 @@ in, and the spawn pass and `_reconcile_chunk_creatures` cannot disagree
 (they pass the same chunk and the same salts, 1 for herbivores and 2 for
 predators, pinned by test).
 
-Measured again afterwards, same launch: **21 animals, one of them a
-jackal, 905 px away.** The total fell because unbiased rounding is *more*
-accurate than `roundi` — the populations really do sum to ~20.9.
+Measured again afterwards: **21 animals, one of them a jackal, 905 px
+away.** The total fell because unbiased rounding is *more* accurate than
+`roundi` — the populations really do sum to ~20.9.
+
+A second spawn seed drew **0 predators**, and that is the honest shape of
+it rather than a regression: 1.66 expected animals over 25 chunks leaves
+roughly one neighbourhood in five with none in it at the moment of
+spawning. Real country is patchy. What changed is that a predator is now
+*possible* everywhere the ecology says one is, instead of impossible
+everywhere; and since chunks stream continuously as the player walks, the
+encounter rate over a few minutes is what the density says it is.
 
 ## Status / mechanisms
 
