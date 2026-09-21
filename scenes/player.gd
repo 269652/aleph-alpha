@@ -3115,8 +3115,10 @@ func _perform_attack() -> void:
 		var knockback := _melee_attack.knockback_vector(
 			position, creature.position, _knockback_force_for(_held_weapon())
 		)
-		creature.apply_knockback(knockback)
-		creature.take_damage(damage)
+		# One call, so a blow is an event: it shoves by an amount that
+		# answers to the creature's own mass, it damages, and it makes the
+		# creature aware of who hit it (see CreatureMarker.struck_by).
+		creature.struck_by(self, damage, knockback)
 		# The swing answers (docs/concept/feedback.md): a number off the
 		# thing you hit, a flash, a sound. Before this a connecting blow on
 		# a lynx was completely silent.

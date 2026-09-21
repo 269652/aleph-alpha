@@ -3355,6 +3355,7 @@ func take_damage(amount: float) -> void:
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
 	if _health.is_dead(info.health):
+		_aggressor = null
 		_die()
 		return  # a lethal hit does not flinch on its way out: the death row
 		        # is the one that plays, and only one can play at a time
@@ -3828,6 +3829,68 @@ func _nearest_contaminated_carcass() -> Node:
 ## Starts a shove of `force` total displacement, played out smoothly over
 ## KNOCKBACK_DURATION (see _process/Knockback.step) rather than teleporting
 ## instantly. A knockback already in progress is replaced by the new one.
+## Who hit this animal, while it still cares. Null for anything that has
+## not been struck, and cleared by death -- a corpse holds no grudge.
+var _aggressor: Node = null
+
+
+func aggressor() -> Node:
+	return _aggressor
+
+
+## How far a blow of this force really moves THIS body.
+##
+## Measured before this existed: every swing shoved every creature the flat
+## `Player.KNOCKBACK_FORCE` of 60 px, whether it landed on a 0.5 kg
+## squirrel or a 300 kg bear. The player's reach is 20 px and a creature's
+## is 16, the player's cooldown is 0.5 s, and `_process` returns early for
+## the whole KNOCKBACK_DURATION -- so one swing put a bear outside its own
+## bite range AND froze its AI while it slid. A player who held the attack
+## key and walked forward killed every predator in the roster without being
+## bitten once.
+##
+## Momentum against mass is the model this project already uses everywhere
+## else (Throwable.impact_knockback, PebbleDispersion, the Kick action): the
+## same blow moves a light body further than a heavy one. The reference is
+## SpeciesBite.REFERENCE_SPECIES, the wolf this game derives every bite from
+## -- so a wolf is shoved exactly as far as it always was and the existing
+## 60 px calibration is preserved, while heavier animals hold their ground.
+##
+## Capped at the incoming force so this can only ever REDUCE a shove: a
+## squirrel does not fly across the screen because it is light.
+func knockback_distance_for(force: Vector2) -> float:
+	var incoming := force.length()
+	if incoming <= 0.0 or info == null:
+		return 0.0
+	var mass := CreatureMass.mass_kg_for(info.species)
+	if mass <= 0.0:
+		return incoming
+	var reference := CreatureMass.mass_kg_for(SpeciesBite.REFERENCE_SPECIES)
+	return minf(incoming * reference / mass, incoming)
+
+
+## A blow, as an EVENT rather than as arithmetic.
+##
+## Before this, `take_damage` subtracted health, updated the bar and called
+## a flinch that is a no-op for every species -- it set no target, raised no
+## aggro and woke no herd. There was no damage-driven aggro anywhere in the
+## game: a creature struck from behind carried on with its errand.
+##
+## The shove is applied through `knockback_distance_for`, so what moves is a
+## function of the blow AND the body it lands on, and the aggro is recorded
+## only if the animal survived, because a corpse has no opinion.
+func struck_by(attacker: Node, amount: float, force: Vector2 = Vector2.ZERO) -> void:
+	if info == null or _dying:
+		return
+	if force.length() > 0.0:
+		apply_knockback(force.normalized() * knockback_distance_for(force))
+	take_damage(amount)
+	if info == null or _dying or _health.is_dead(info.health):
+		return
+	_aggressor = attacker
+	info.is_aggroed = true
+
+
 func apply_knockback(force: Vector2) -> void:
 	_knockback_remaining = force
 	_knockback_time_remaining = KNOCKBACK_DURATION
