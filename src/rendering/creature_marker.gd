@@ -1065,7 +1065,7 @@ func _process(frame_delta: float) -> void:
 		_append_tile_stimuli(_cached_stimuli)
 		_cached_threats = _nodes_of(_behavior.threats(_decision_context(null)))
 		_cached_caution_threats = (
-			_outdoor_players_near(CAUTION_RADIUS) if fears_players() else []
+			_outdoor_players_near(CAUTION_RADIUS) if steers_clear_of_players() else []
 		)
 		_cached_blockers = _blockers_near(BLOCKER_SCAN_RADIUS)
 		_cached_nearby_herbivores = _nearby_herbivore_creatures()
@@ -1144,6 +1144,40 @@ func set_order(new_order: int) -> bool:
 ## carrots taming would spend the rest of its life fleeing from them.
 func fears_players() -> bool:
 	return not is_tame()
+
+
+## Whether this animal steers AROUND people while roaming -- a DIFFERENT
+## question from whether it perceives them at all, which `fears_players`
+## answers and which one predicate was answering for both.
+##
+## A hunter does not. Measured before this existed: the caution ramp
+## `clampf((CAUTION_RADIUS - d) / (CAUTION_RADIUS - SENSE_RADIUS), 0, 1)`
+## saturates at EXACTLY SENSE_RADIUS -- the distance at which a predator
+## would first perceive the player at all -- so a wandering wolf's closing
+## speed toward a player was 24 px/s at 160, 6 at 100, 3 at 90 and 0.00 at
+## 80. It asymptoted to its own perception boundary and could never cross
+## it. A predator could never INITIATE on a player; it only ever fought one
+## who had walked into its bubble.
+##
+## Cut here and NOT at fears_players, which is the on switch for the whole
+## PLAYER receptor channel (CreatureBehavior's sensitivity map): making a
+## predator "not fear players" would zero its PLAYER sensitivity and stop it
+## attacking at all. The obvious fix is the opposite of a fix.
+##
+## Broader than "predator", because nothing that will fight you gives you a
+## wide berth: a boar is aggressive without hunting anything for food.
+##
+## The herbivore behaviour the five existing caution tests protect is
+## untouched -- a calm grazer still keeps its distance, which is what ended
+## the flee hysteria those tests were written for.
+func steers_clear_of_players() -> bool:
+	if info == null:
+		return false
+	return (
+		fears_players()
+		and not info.is_predator
+		and info.temperament != CreatureInfo.AGGRESSIVE
+	)
 
 
 ## Movement for a tamed, un-roped animal carrying out its order.

@@ -245,6 +245,12 @@ const DIET_BY_SPECIES := {
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
+## The temperament that fights rather than flees. Named so the handful of
+## rules that ask "would this animal take a swing at you" can say so instead
+## of repeating a bare string -- CreatureBehavior._will_fight and
+## CreatureMarker.steers_clear_of_players both read it.
+const AGGRESSIVE := "aggressive"
+
 ## how this is used -- fighting back only needs "aggressive" temperament, not
 ## is_predator, so a boar fights without hunting other creatures for food.
 ## tapir deliberately stays "calm" despite sharing boar's shape family --

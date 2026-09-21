@@ -481,6 +481,40 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **A predator could never start a fight** (2026-09-21) — see
+  `concept/predator_profiles.md`.
+
+  `CreatureMarker.fears_players()` is literally `not is_tame()`, true for
+  every untamed creature, and it was the sole gate on the wander-avoidance
+  list. That bias ramps `clampf((CAUTION_RADIUS − d) / (CAUTION_RADIUS −
+  SENSE_RADIUS), 0, 1)`, which saturates at **exactly `SENSE_RADIUS`** —
+  the distance at which a predator would first perceive the player at all.
+
+  **Measured:** a wandering wolf's closing speed toward a player was
+  24 px/s at 160, 18 at 140, 12 at 120, 6 at 100, 3 at 90 and **0.00 at
+  80**. It asymptoted to its own perception boundary and could never cross
+  it, against a hunting speed of 64 px/s once engaged. A predator could
+  only ever fight a player who walked into its eighty-pixel bubble; it
+  could never initiate.
+
+  The obvious fix is the opposite of a fix: `fears_players` is also the on
+  switch for the whole PLAYER receptor channel, so making a predator "not
+  fear players" would zero its PLAYER sensitivity and stop it attacking at
+  all — already pinned green by
+  `test_an_animal_that_no_longer_fears_players_does_not_perceive_them`.
+  `steers_clear_of_players()` splits the two questions and cuts only the
+  second, for anything that will *fight* you rather than only for
+  predators, because a boar is aggressive without hunting anything for
+  food. A calm grazer still keeps its distance — the behaviour the five
+  existing caution tests protect, not one of which uses a predator, which
+  is exactly why none of them caught this.
+
+  Tests: `test_predator_initiative.gd` 6 (new), `test_creature_marker.gd`
+  293, `test_creature_behavior.gd` 53, `test_creature_info.gd` 60 — green.
+  The new suite's closing test drove a wolf from 120 px for ten seconds and
+  measured it **ending at 299 px** — it had been pushed further out the
+  whole time.
+
 - ✅ **A lit campfire was a twenty-tile no-predator zone** (2026-09-21) —
   see `concept/olfaction.md` and `concept/ethogram.md`.
 
@@ -520,7 +554,13 @@ and most species have no loot row so they vanish on death.
   rather than a restatement of the formula, which is what made the first
   draft of that suite pass over the bug.
 
-  Tests: `test_stimulus_scale.gd` 5, `test_behavior_kernel.gd` 26,
+  **Confirmed red against the pre-fix code**, not merely reasoned about: the
+  suite was run in a detached worktree at the old HEAD, where the
+  end-to-end test — a healthy wolf, a player two tiles away, a campfire ten
+  tiles away — returned **`"flee"`** where it now returns `"attack"`, and
+  the real producer reported 0.3299 where the shared scale wants 0.0020.
+
+  Tests: `test_stimulus_scale.gd` 8, `test_behavior_kernel.gd` 26,
   `test_creature_behavior.gd` 53, `test_ethogram.gd` 52,
   `test_olfaction.gd` 14, `test_creature_marker.gd` 293,
   `test_fight_is_loseable.gd` 6, `test_bite_telegraph.gd` 19 — green.

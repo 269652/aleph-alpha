@@ -124,19 +124,26 @@ func test_a_fire_is_still_what_a_creature_avoids_when_nothing_else_is_near():
 	assert_eq(decision["intent"], "flee")
 
 
-## The real producer, not this file's restatement of it: the two must agree,
-## or this whole suite is testing a copy.
+## The real producer, checked NUMERICALLY rather than by reading its source.
+## A source test that only asserts the body mentions `Affinity.proximity(`
+## would pass for `Affinity.proximity(0.0)` and pin nothing at all.
 func test_the_markers_own_smoke_strength_is_on_the_shared_scale():
-	var source := FileAccess.get_file_as_string("res://src/rendering/creature_marker.gd")
-	var start := source.find("func _scan_smoke_stimuli(")
-	assert_gt(start, 0, "precondition: the producer was found")
-	var rest := source.substr(start)
-	var body := rest.substr(0, rest.find("\nfunc "))
-	assert_true(
-		body.contains("Affinity.proximity("),
-		"a smell must be ranked on the same proximity scale as everything else"
-	)
-	assert_true(body.contains("Olfaction.dilution("), "and still obey its own dilution law")
+	for tiles in [1.0, 5.0, 10.0]:
+		var stimulus: Dictionary = _smoke_at(tiles)
+		assert_almost_eq(
+			float(stimulus["strength"]),
+			Affinity.proximity(tiles * TILE) * Olfaction.dilution(tiles),
+			0.000001,
+			"a smell must be the shared proximity ranking, attenuated by its own law"
+		)
+
+
+## And it really is BOTH: drop either factor and the numbers move.
+func test_the_smell_is_neither_pure_proximity_nor_pure_dilution():
+	var stimulus: Dictionary = _smoke_at(5.0)
+	var strength := float(stimulus["strength"])
+	assert_lt(strength, Affinity.proximity(5.0 * TILE), "the dilution law still attenuates it")
+	assert_lt(strength, Olfaction.dilution(5.0), "and it is ranked by distance like everything else")
 
 
 ## The boldness floor is stated in pixel-proximity units
@@ -148,6 +155,55 @@ func test_the_boldest_animal_is_not_frightened_by_a_distant_fire():
 	var floor_value := Ethogram.BOLDEST_FEAR_FLOOR
 	assert_almost_eq(floor_value, Affinity.proximity(TILE), 0.000001)
 	assert_lt(
-		_smoke_strength(10.0 * TILE, 10.0), floor_value,
+		float(_smoke_at(10.0)["strength"]), floor_value,
 		"a fire ten tiles off must not clear the floor a person one tile off barely does"
+	)
+
+
+## The other side of that, decided on purpose rather than discovered later:
+## once smoke shares the scale, the boldest animal in the game treats a fire
+## exactly as it treats a person -- it takes notice inside about a tile and
+## ignores it further out. That is the floor doing precisely what it was
+## built to do; before the fix, smoke was the one thing that walked straight
+## past it.
+##
+## It is NOT fireproof: a fire it is practically standing in weighs 1.0 at
+## zero distance and clears the floor comfortably out to roughly 14 px.
+func test_the_boldest_animal_still_leaves_a_fire_it_is_standing_in():
+	assert_gt(
+		float(_smoke_at(0.0)["strength"]), Ethogram.BOLDEST_FEAR_FLOOR,
+		"nothing bold enough to stand in a fire should be in this game"
+	)
+	assert_gt(float(_smoke_at(0.5)["strength"]), Ethogram.BOLDEST_FEAR_FLOOR)
+
+
+# -- and the gameplay claim, end to end -----------------------------------
+
+## The test that would have caught this in the first place, stated as a
+## player would: a wolf two tiles from you, with a campfire in sight, comes
+## for you. It used to flee -- so a lit fire made you untouchable.
+##
+## Driven through the marker's own decision context and its own behaviour
+## object, so it is the REAL mammal wiring, the real receptors and the real
+## smoke producer rather than a hand-built ladder.
+func test_a_wolf_does_not_flee_a_player_because_a_campfire_is_lit():
+	var world := OneFireWorld.new()
+	world.fire = Vector2(10.0 * TILE, 0.0)
+	var wolf := CreatureMarker.new()
+	wolf.info = CreatureInfo.new("wolf")
+	wolf.wander_seed = 5
+	wolf.position = Vector2.ZERO
+	wolf.home = Vector2.ZERO
+	add_child_autofree(wolf)
+	wolf.setup(world, int(TILE))
+
+	var player_at := Vector2(2.0 * TILE, 0.0)
+	wolf._cached_stimuli = [
+		{"position": player_at, "features": {Ethogram.PLAYER: 1.0}},
+	]
+	wolf._cached_stimuli.append_array(wolf._scan_smoke_stimuli())
+	var decision: Dictionary = CreatureBehavior.new().decide(wolf._decision_context(null))
+	assert_eq(
+		String(decision["intent"]), "attack",
+		"a lit campfire must not turn a healthy wolf two tiles away into scenery"
 	)

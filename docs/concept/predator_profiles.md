@@ -380,6 +380,29 @@ and suddenly plants is very readable.
   `windup_seconds` was a fairness-tested column with no runtime consumer at
   all, so the whole fairness model above was arithmetic about something
   that never happened.
+- ✅ **A predator can start a fight now** (2026-09-21).
+  `CreatureMarker.fears_players()` is literally `not is_tame()`, so it was
+  true for every untamed creature — and it was the sole gate on the
+  wander-avoidance list. The bias built from it ramps
+  `clampf((CAUTION_RADIUS − d) / (CAUTION_RADIUS − SENSE_RADIUS), 0, 1)`,
+  which saturates at **exactly `SENSE_RADIUS`**: the distance at which a
+  predator would first perceive the player at all. Measured, a wandering
+  wolf's closing speed toward a player was 24 px/s at 160, 6 at 100, 3 at
+  90 and **0.00 at 80** — it asymptoted to its own perception boundary and
+  could never cross it. A predator could never *initiate*; it only ever
+  fought a player who had walked into its bubble.
+
+  The obvious fix is the opposite of a fix: `fears_players` is also the on
+  switch for the whole PLAYER receptor channel, so making a predator not
+  fear players zeroes its PLAYER sensitivity and stops it attacking at all.
+  `steers_clear_of_players()` splits the two questions — *does it perceive
+  people* and *does it route around them* — and only the second is cut, and
+  cut for anything that will fight you rather than only for predators,
+  because a boar is aggressive without hunting anything for food. A calm
+  grazer still keeps its distance, which is what ended the flee hysteria
+  the five existing caution tests were written for; not one of them uses a
+  predator, which is why none of them would have caught this.
+
 - 🚧 **Wiring, partly.** `bite_damage`, `bite_cooldown_seconds`,
   `windup_seconds` and `pursuit_speed_tiles_per_second` all reach the live
   game now. Three columns are still dead: **`tenacity`**
@@ -388,7 +411,32 @@ and suddenly plants is very readable.
   `sense_radius_tiles` is read by the player and by `/arena`, never by the
   creature that owns it — a creature still senses at one flat
   `SENSE_RADIUS`, so a bear's authored ten-tile nose changes nothing about
-  when the bear notices you.
+  when the bear notices you. `scenes/player.gd` additionally carries a
+  comment claiming the creature reads the same radius, which is false: the
+  player is told it is *being hunted* from 144 px away by a wolf that
+  cannot perceive it until 80 px.
+
+  Four traps for whoever wires those columns, found while auditing this
+  one and recorded rather than rediscovered:
+
+  1. **The tenacity boundary is inverted.** `CreatureBehavior._will_fight`
+     fights at `health_fraction >= 0.5`; `SpeciesBite` flees at
+     `health_fraction <= tenacity`. At exactly 0.5 with the fallback
+     tenacity of 0.5 the two disagree, and the fallback path itself
+     reaches that edge.
+  2. **"Sense radius in tiles" is already double-defined and already
+     disagrees with itself.** `CreatureMarker.SENSE_RADIUS_TILES` is 6
+     (96 px) for terrain scanning while `SENSE_RADIUS` is 80 px (5 tiles).
+     A per-species column would be a third definition.
+  3. **Two horse tests break the moment per-species sensing lands**, and
+     one of them breaks silently: `test_a_creature_stops_fleeing_once_the_
+     threat_is_well_clear` places the player at 140 px, inside a horse's
+     authored 8-tile release, so the flee never ends; and the test that
+     places the player at exactly `SENSE_RADIUS` stops testing its own
+     name while staying green.
+  4. **`test_nothing_senses_further_than_the_engines_caution_radius` pins
+     the roster against the radius a creature AVOIDS at**, not the one it
+     senses at, and bear and curupira sit exactly on it.
 - ✅ **The dodge these numbers are authored against now exists**
   (2026-09-21) — see [dodge.md](dodge.md). Until then this whole fairness
   model rested on a verb the player could not perform: `Dodge` was a
