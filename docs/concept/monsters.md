@@ -404,6 +404,25 @@ canvas — the slicer takes bands per row, so a per-row file with its own
   profile that says what it is. Its first mass out-bit a jackal. And it
   belongs on the list of things a player can outrun at a walk, which is
   exactly right for something you are safe from by standing up.
+- ✅ **And it really never bites** (2026-09-21). Found by a combat audit on
+  the creature's first day: `_alp_step` raises `is_aggroed` so the ordinary
+  AI walks it to the sleeper — that *is* how it approaches — and then, on
+  the same frame, that same ordinary AI reached the attack path every
+  animal shares. `Player.take_damage` wakes a sleeper, so the Alp cancelled
+  its own signature mechanic on the first frame it arrived.
+
+  `NightMare.presses_instead_of_striking` is the rule, consulted at the top
+  of `CreatureMarker._try_attack`: what this creature takes is the rest
+  itself, so a bite from it is not a stronger version of its mechanic but
+  the end of one. The reason lives in the pure module with the rest of what
+  this creature is, so a second night-mare inherits it rather than
+  re-deriving it.
+
+  Every test the Alp shipped with drove `_alp_step` directly, which is
+  exactly why none of them saw this; the new one drives the marker's real
+  `_process` for three seconds with the creature sitting on the sleeper's
+  chest and asserts health is untouched, the character is still asleep, and
+  the stamina really was draining the whole time.
 - ⬜ Entries 1–2, 4 and 6–9 are unimplemented. Entry 9 (the
   Wolpertinger) is by its own entry a harmless easter egg rather than a
   threat. The remaining Tier C entries each still need their binding

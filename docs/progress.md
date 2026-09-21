@@ -433,10 +433,18 @@ and most species have no loot row so they vanish on death.
   `test_every_spawnable_species_has_a_profile` caught that a species with
   no `SpeciesBite` row silently inherits the shared `ATTACK_DAMAGE`.
 
-  **Known bug, found by the combat audit and not yet fixed (⬜):** the
-  Alp still runs the ordinary `_try_attack`, and `Player.take_damage`
-  calls `wake()` — so it cancels its own signature mechanic on the first
-  frame it reaches a sleeper. It must press, not bite.
+  **A bug the combat audit found on this creature's first day, fixed the
+  same day (✅):** `_alp_step` raises `is_aggroed` so the ordinary AI walks
+  it to the sleeper — that *is* how it approaches — and then that same
+  ordinary AI reached the attack path every animal shares.
+  `Player.take_damage` wakes a sleeper, so the Alp cancelled its own
+  signature mechanic on the first frame it arrived.
+  `NightMare.presses_instead_of_striking` is now consulted at the top of
+  `CreatureMarker._try_attack`, and `CreatureMarker.ALP_SPECIES` reads from
+  `NightMare.SPECIES` so the two cannot mean different creatures. Every
+  test the Alp shipped with drove `_alp_step` directly, which is exactly
+  why none of them saw it; the new one drives the marker's real `_process`
+  with the thing sitting on the sleeper's chest.
 
 - ✅ **Damage over time was forty times its own spec** (2026-09-21).
   Measured, not inferred: venom ticked at **60.0 damage/second** against a

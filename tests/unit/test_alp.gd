@@ -255,3 +255,64 @@ func test_waking_makes_you_safe_from_it():
 
 	player.queue_free()
 	creatures.free(); tml.free(); ents.free()
+
+
+# -- it presses; it never bites -------------------------------------------
+
+## The bug a combat audit found in the first day of this creature's life,
+## and the reason this test drives the REAL `_process` rather than
+## `_alp_step` alone: `_alp_step` raises `info.is_aggroed`, and then the
+## ordinary AI runs on the very same frame. An aggroed creature inside
+## attack range takes the ordinary attack path, bites, and
+## `Player.take_damage` calls `wake()` -- so the Alp cancelled its own
+## signature mechanic on the first frame it arrived. Every test above drove
+## `_alp_step` directly, which is exactly why none of them saw it.
+func test_it_never_bites_the_sleeper_it_is_sitting_on():
+	var tml := TileMapLayer.new()
+	var ents := Node2D.new()
+	var creatures := Node2D.new()
+	add_child(tml); add_child(ents); add_child(creatures)
+	var mgr = EarthChunkManager.new(tml, ents, creatures)
+	mgr.set_sun_position(-20.0, 0.0)
+	var renderer := CreatureRenderer.new()
+	var player = PlayerScene.instantiate()
+	add_child(player)
+	player.position = Vector2.ZERO
+	player.survival.stamina = 1.0
+	player.begin_rest()
+	await get_tree().process_frame
+
+	# Right on top of the sleeper: well inside any bite's reach, which is
+	# the whole point -- this is the position the mechanic REQUIRES.
+	var marker = renderer.spawn_single(creatures, ALP, Vector2(2.0, 0.0), mgr, TerrainRenderer.TILE_SIZE)
+	assert_not_null(marker, "precondition: an alp spawned")
+	marker._cached_player = player
+	marker.position = Vector2(2.0, 0.0)
+	var health_before: float = player.health
+
+	for _i in 30:
+		marker._process(0.1)
+
+	assert_almost_eq(player.health, health_before, 0.0001, "it presses; it does not bite")
+	assert_true(player.is_resting(), "and a sleeper it never hurt is never woken")
+	assert_lt(player.survival.stamina, 1.0, "precondition: it really was pressing all along")
+
+	player.queue_free()
+	creatures.free(); tml.free(); ents.free()
+
+
+## One name for it, in the pure rule, so the marker cannot drift from what
+## `NightMare` thinks it is talking about.
+func test_the_marker_and_the_rule_mean_the_same_creature():
+	const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+	assert_eq(CreatureMarker.ALP_SPECIES, NightMare.SPECIES)
+
+
+## And the refusal is about this creature alone: everything that really
+## hunts still strikes.
+func test_everything_that_hunts_still_strikes():
+	for species in ["wolf", "lynx", "bear", "lion", "jaguar", "jackal", "curupira"]:
+		assert_false(
+			NightMare.presses_instead_of_striking(species),
+			"%s hunts, so it bites" % species
+		)

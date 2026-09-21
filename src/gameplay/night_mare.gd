@@ -27,6 +27,11 @@ extends RefCounted
 
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
 
+## The one creature this rule is about. Named here so the pure rule can
+## answer questions about it without a caller having to say which species
+## it means; `CreatureMarker.ALP_SPECIES` is pinned to this by test.
+const SPECIES := "alp"
+
 ## Night, by the same definition everything else in this game uses: the sun
 ## below civil twilight. Restated from `WitnessConditions` rather than
 ## preloaded (both are leaf rules and neither should depend on the other)
@@ -64,6 +69,22 @@ static func preys_on(facts: Dictionary) -> bool:
 ## Whether it is dark enough for it, from the sun the world is drawing.
 static func is_dark(sun_elevation_deg: float) -> bool:
 	return sun_elevation_deg < DARK_BELOW_SUN_ELEVATION_DEG
+
+
+## Whether `species` harms by PRESSING rather than by striking.
+##
+## The Alp is the only one, and it is the whole of what it is. An ordinary
+## bite from it would not be a stronger version of its mechanic -- it would
+## be the END of it, because `Player.take_damage` wakes a sleeper and a
+## woken character is not its prey any more. So the creature that raises
+## its own aggro to approach a sleeper must never reach the attack path it
+## shares with every animal that does hunt.
+##
+## A rule rather than a species check at the call site: the reason lives
+## here with the rest of what this creature is, and a second night-mare
+## added later inherits it instead of re-deriving it.
+static func presses_instead_of_striking(species: String) -> bool:
+	return species == SPECIES
 
 
 ## One step of it sitting on a sleeper's chest.

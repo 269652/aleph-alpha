@@ -2223,8 +2223,9 @@ func _waits_for_its_moment() -> bool:
 ## (docs/concept/monsters.md entry 3, docs/concept/sleep.md). It is the
 ## exact inverse of every other creature here -- dangerous while the player
 ## is NOT -- so it neither hunts nor bites, and standing up is what makes a
-## character safe from it.
-const ALP_SPECIES := "alp"
+## character safe from it. The "never bites" half is enforced in
+## _try_attack, through NightMare's own rule.
+const ALP_SPECIES := NightMare.SPECIES
 
 
 func _alp_step(delta: float) -> void:
@@ -2454,6 +2455,13 @@ func bite_cooldown_seconds() -> float:
 
 func _try_attack(target: Node) -> void:
 	if target == null or _attack_cooldown_remaining > 0.0:
+		return
+	# The Alp never strikes: what it takes is the rest itself, and a bite
+	# would cancel its own mechanic on the frame it landed, because
+	# Player.take_damage wakes a sleeper (docs/concept/monsters.md entry 3,
+	# docs/concept/sleep.md). Its harm is _alp_step's press, which runs
+	# whether or not it ever reaches this path.
+	if info != null and NightMare.presses_instead_of_striking(info.species):
 		return
 	if position.distance_to(target.position) > ATTACK_RANGE:
 		return
