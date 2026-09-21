@@ -354,6 +354,52 @@ and most species have no loot row so they vanish on death.
   character can come by naturally are still the three phenomena with call
   sites.
 
+- ✅ **The four unreachable spell atoms** (2026-09-21) — see
+  `concept/spell_weaving.md`. The doc had tabled seven witness phenomena
+  since the Weave shipped and only three were ever raised, so
+  `shock_damage`, `illuminate`, `slow` and `fear` could not be come by in
+  ordinary play at all. `WitnessConditions` is one pure decision from facts
+  the player's step already has, with every threshold read from the module
+  that owns it: the storm from `WeatherModel.STATES`, dark from the HUD's
+  own civil twilight (the same −6° `arrival.md` derived first light from),
+  hard ground from `TerrainPassability`'s own slope threshold, and hunted
+  from a real predator with the character inside its **own** per-species
+  sense radius. Venom stays an event. Verified live: the facts come back as
+  real readings, not defaults.
+
+- ✅ **The Curupira** (2026-09-21) — see `concept/monsters.md` entry 5 and
+  `concept/arena.md`. The roster's first real creature, chosen because its
+  "one behaviour" needed no new state: **the ecosystem simulation is its
+  aggro table.** It ignores a sustainable hunter and hunts whoever drove
+  the local herd down, reading `herbivore_population_at_chunk` against
+  `herbivore_capacity_at_chunk`.
+
+  The threshold is derived rather than picked: `PopulationModel` is
+  logistic, `rate · P · (1 − P/K)` peaks at exactly `K/2`, and that is
+  maximum sustainable yield — the point below which a harvest has become
+  extraction. A test finds that peak in the real model and asserts the
+  threshold sits on it.
+
+  Quiet-until-provoked took one gate: `_perceives_threats` treats a
+  grudge-bearer the way it already treats a world boss, except that a
+  *footprint* flips it rather than a hit. Ordinary animals are unaffected.
+  The grudge re-reads rather than latches, so a recovered forest forgives.
+  It senses at the engine's caution radius — the furthest anything may,
+  which a pre-existing invariant caught when the first draft reached past
+  it — and its tenacity is 0.08, because a grievance is not hunger.
+
+  Tests: `test_ecological_grudge.gd` 15, `test_curupira.gd` 16, with 492
+  green across every touched suite including the 279-test creature-marker
+  one. Verified live.
+
+  Named gaps: it lives in **rainforest**, a long way from a 48°N spawn, so
+  in ordinary play it is something to travel to (`/arena curupira` stages
+  one). It draws on the procedural fallback, not the reversed-feet
+  silhouette the art brief asks for. And entry 3 (the Alp) is **blocked**:
+  its whole behaviour is "approaches only while you rest" and there is no
+  sleep state on the player — `SurvivalMeters.rest` is an amount, not a
+  condition.
+
 
 ### Loose stone (see `docs/concept/stone.md`)
 
