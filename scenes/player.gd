@@ -1964,6 +1964,45 @@ var _debuff_stack := DebuffStack.new()
 var _venom_model := VenomModel.new()
 
 
+## Every timed thing riding on this character right now, in the one
+## {"debuff_id", "stacks", "time_remaining"} shape `DebuffStack` and
+## `FoodConsumption` both already emit (docs/concept/hud.md).
+##
+## Gathered HERE and not in World, so the HUD does not have to know which
+## arrays exist and a new kind of buff added later reaches the screen by
+## being listed once rather than by somebody remembering a fifth argument.
+##
+## Measured before this: the chip row took the survival meters and nothing
+## else, so a character could be venomed, burning, blighted, frozen,
+## rooted, slowed, shielded and fed a damage-boosting meal at the same
+## moment and the HUD showed none of it -- every one of them already
+## tracked, already ticked, already carrying its own clock.
+func active_effects() -> Array:
+	var effects: Array = []
+	effects.append_array(active_venom_debuffs)
+	effects.append_array(active_spell_debuffs)
+	# A food buff names its own effect rather than a debuff id, so it is
+	# translated into the shared shape here -- one stack, because eating a
+	# second meal refreshes a buff rather than deepening it.
+	for buff in active_food_buffs:
+		effects.append({
+			"debuff_id": String(buff.get("buff", "")),
+			"stacks": 1,
+			"time_remaining": float(buff.get("time_remaining", 0.0)),
+		})
+	# The spell shield is a POOL rather than a clock, so it is reported with
+	# the absorb it has left where the others report seconds -- what a
+	# player needs to know about a shield is how much of it is left, and
+	# HudReadouts prints whatever number it is handed.
+	if _shield_absorb_remaining > 0.0:
+		effects.append({
+			"debuff_id": "shield",
+			"stacks": 1,
+			"time_remaining": _shield_absorb_remaining,
+		})
+	return effects
+
+
 ## Called by a venomous snake's bite (see CreatureMarker._try_attack):
 ## refreshes the venom debuff's duration and adds a stack (capped at
 ## VenomModel.MAX_STACKS) -- repeated bites hurt more, not just longer.

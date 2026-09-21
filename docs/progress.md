@@ -481,6 +481,32 @@ and most species have no loot row so they vanish on death.
   57/100. 401 green across the touched suites, including the 279-test
   creature-marker one.
 
+- ✅ **Every timed thing riding on you, finally on screen** (2026-09-21) —
+  see `concept/hud.md`. `HudReadouts.condition_chips` took the survival
+  meters and nothing else, so the row named *Hungry*, *Parched*,
+  *Freezing*, *Exhausted*, *Malnourished* and where you were standing — and
+  said nothing whatever about anything with a **clock** on it. A character
+  could be venomed, burning, blighted, frozen, rooted, slowed, shielded and
+  fed a damage-boosting meal at the same moment and see none of it.
+
+  Every one of those was already tracked, already ticked and already
+  carried its own `time_remaining`. Only the *reading* was missing, which
+  is why this reuses the chip row rather than building new furniture for
+  it. `Player.active_effects()` gathers them in the single
+  `{"debuff_id", "stacks", "time_remaining"}` shape two systems already
+  emit, so a buff added later reaches the screen by being listed once.
+
+  A chip says how long is left, because a chip that only says *Burning*
+  answers nothing a player can act on — rounded **up**, since half a second
+  is still a second to act in. Stacks show only above one (`VenomModel`
+  caps at three, and one versus three is an irritation versus a death
+  sentence). Harm reads negative, help reads accent, and an unnamed effect
+  reads as **its own id** rather than vanishing — a silent chip is exactly
+  how an effect goes unnoticed, which is the bug this closes.
+
+  Tests: `test_effect_chips.gd` 14 (new), `test_hud_readouts.gd` 40,
+  `test_world_hud.gd` 24, `test_hud_panel_flow.gd` 6 — green.
+
 - ✅ **`slow` did not slow anything you cast it at** (2026-09-21) — see
   `concept/spell_runtime.md`. `grep -c SLOW src/rendering/creature_marker.gd`
   returned **0**: the marker carried the stacks faithfully in

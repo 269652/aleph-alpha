@@ -3428,7 +3428,7 @@ func _build_condition_chips() -> void:
 ## not changed rebuilds nothing.
 func _update_condition_chips(local_player: Player) -> void:
 	var chips: Array = HudReadouts.condition_chips(
-		local_player.survival, local_player.current_mode
+		local_player.survival, local_player.current_mode, local_player.active_effects()
 	)
 	var signature := HudReadouts.chips_signature(chips)
 	if signature == _condition_chips_signature:
