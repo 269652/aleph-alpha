@@ -9465,6 +9465,17 @@ func _mirror_disturbances_to_the_river() -> void:
 	)
 
 
+## The sun's elevation the world is currently drawing with, in degrees.
+##
+## `set_sun_position` has pushed this into the hillshade every tick since
+## the sky was wired; nothing could READ it. The gameplay layer needs it to
+## know when it is dark (docs/concept/spell_weaving.md's
+## `hungry_in_the_dark`), and the honest source for that is the same sun the
+## player is standing under, not a second clock.
+func current_sun_elevation_deg() -> float:
+	return _current_sun_elevation_deg
+
+
 func current_weather(player_pixel: Vector2) -> String:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
 	# Weather turns over several times a DAY, not once per day.

@@ -18,6 +18,8 @@ const Answerback = preload("res://src/gameplay/answerback.gd")
 const SpellParser = preload("res://src/gameplay/spell_parser.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const SpellMote = preload("res://src/gameplay/spell_mote.gd")
+const WitnessConditions = preload("res://src/gameplay/witness_conditions.gd")
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
@@ -2470,16 +2472,7 @@ func _authority_step(delta: float) -> void:
 	_answer_clock_seconds += delta
 	survival.advance(delta)
 	# What this moment teaches, if anything (docs/concept/spell_weaving.md).
-	# Both are conditions the step already knows about; witness() is a
-	# no-op after the first time, so this is a dictionary probe per frame.
-	if survival.is_freezing():
-		witness(SpellMote.PHENOMENON_FROZE)
-	elif not _motes.has(SpellMote.first_witness_atom_for(SpellMote.PHENOMENON_WARMED_AT_A_FIRE)):
-		# Only asked while it could still teach something: _has_campfire is
-		# a real world-proximity scan and is not worth running every frame
-		# for a character who already learned fire.
-		if _has_campfire():
-			witness(SpellMote.PHENOMENON_WARMED_AT_A_FIRE)
+	_witness_step()
 	# Running costs the legs (docs/concept/survival.md's "Stamina scope",
 	# SprintCost). Only while actually MOVING: standing still with the
 	# sprint key held is not running, and charging the player for it would
@@ -3126,6 +3119,65 @@ func witness(phenomenon: String) -> bool:
 	grant_mote(atom)
 	answer("mote_found", {"item": SpellMote.display_name_for(atom), "count": 1})
 	return true
+
+
+## What this moment teaches, asked once a frame against the shared rule
+## (WitnessConditions, docs/concept/spell_weaving.md).
+##
+## Measured before this: the doc had tabled seven phenomena since the Weave
+## shipped and only THREE were ever raised, so `shock_damage`, `illuminate`,
+## `slow` and `fear` -- four of the twenty-five atoms -- could not be come
+## by in ordinary play at all. A player could open the Weave, own three
+## motes, and never reach the rest of the catalogue.
+##
+## `witness()` is a no-op after the first time, so the cost of this is
+## assembling the facts. Two of them are guarded rather than always read:
+## the campfire scan is a real world-proximity sweep and the predator scan
+## walks the creature group, and neither is worth a frame for a character
+## who has already learned what it teaches.
+func _witness_step() -> void:
+	var facts := {
+		"freezing": survival.is_freezing(),
+		"starving": survival.is_starving(),
+		"moving": velocity.length() > 0.01,
+		"at_a_fire": _still_to_learn(SpellMote.PHENOMENON_WARMED_AT_A_FIRE) and _has_campfire(),
+		"hunted": _still_to_learn(SpellMote.PHENOMENON_HUNTED) and _is_being_hunted(),
+	}
+	if _chunk_manager != null:
+		var tile := current_tile()
+		facts["weather"] = _chunk_manager.current_weather(position)
+		facts["sun_elevation_deg"] = _chunk_manager.current_sun_elevation_deg()
+		facts["slope_deg"] = _chunk_manager.slope_at_global(tile.x, tile.y)
+	for phenomenon in WitnessConditions.taught_by(facts):
+		witness(String(phenomenon))
+
+
+## Whether this phenomenon could still teach this character anything -- the
+## gate in front of the two expensive readings above.
+func _still_to_learn(phenomenon: String) -> bool:
+	var atom := SpellMote.first_witness_atom_for(phenomenon)
+	return atom != "" and not _motes.has(atom)
+
+
+## Whether something out there is hunting you: a real predator with this
+## character inside its OWN sense radius (SpeciesBite's per-species figure,
+## docs/concept/predator_profiles.md -- not one shared distance, so a lynx
+## has to be closer than a wolf before it counts).
+##
+## A predator that can sense you IS hunting you: CreatureMarker's own
+## pursuit decision reads the same radius, so this asks the question the
+## creature is about to answer rather than inventing a second one.
+func _is_being_hunted() -> bool:
+	for node in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var marker := node as CreatureMarker
+		if marker == null or marker.info == null or not marker.info.is_predator:
+			continue
+		var sense_px: float = float(
+			SpeciesBite.profile_for(marker.info.species)["sense_radius_tiles"]
+		) * float(_tile_size)
+		if position.distance_to(marker.position) <= sense_px:
+			return true
+	return false
 
 
 ## Puts one mote in the pouch, however it was come by -- a witness above, a

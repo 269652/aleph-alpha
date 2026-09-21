@@ -12,6 +12,7 @@ extends GutTest
 const PlayerScene = preload("res://scenes/player.tscn")
 const SpellMote = preload("res://src/gameplay/spell_mote.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
+const WitnessConditions = preload("res://src/gameplay/witness_conditions.gd")
 
 var player
 
@@ -131,12 +132,18 @@ func test_the_woven_spell_survives_a_save_and_load():
 # assert the call sites exist in the paths that already detect each
 # condition, so the phenomena are learnable in play rather than in theory.
 
+## Freezing and the fire are decided by the shared rule now
+## (WitnessConditions) rather than by two `if`s in the step, so these ask
+## the RULE whether the path exists and the player whether it lands --
+## which is what they were always about. The old form asserted that one
+## particular string appeared in player.gd, and would have gone red on a
+## refactor that changed nothing a player can feel.
 func test_the_freezing_path_teaches_what_freezing_teaches():
-	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
 	assert_true(
-		source.contains("SpellMote.PHENOMENON_FROZE"),
+		WitnessConditions.taught_by({"freezing": true}).has(SpellMote.PHENOMENON_FROZE),
 		"the cold that is already killing you is where frost is learned"
 	)
+	assert_true(player.witness(SpellMote.PHENOMENON_FROZE), "and it reaches the pouch")
 
 
 func test_the_venom_path_teaches_what_venom_teaches():
@@ -145,8 +152,12 @@ func test_the_venom_path_teaches_what_venom_teaches():
 
 
 func test_standing_at_a_fire_teaches_fire():
-	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
-	assert_true(source.contains("SpellMote.PHENOMENON_WARMED_AT_A_FIRE"))
+	assert_true(
+		WitnessConditions.taught_by({"at_a_fire": true}).has(
+			SpellMote.PHENOMENON_WARMED_AT_A_FIRE
+		)
+	)
+	assert_true(player.witness(SpellMote.PHENOMENON_WARMED_AT_A_FIRE))
 
 
 ## Being bitten really does hand over the mote, through the real path.

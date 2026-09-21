@@ -326,8 +326,33 @@ holds both halves of pillar 6 at once.
   detects the condition. `witness` is a no-op after the first time, so the
   per-frame cost is a dictionary probe; the fire check, which is a real
   world scan, is only run while it could still teach something.
-- ⬜ The storm, the dark and the hard climb are specified and tabled but
-  have no call site yet.
+- ✅ **All six condition phenomena are raised** (2026-09-21).
+  `WitnessConditions.taught_by`, one pure decision from facts the player's
+  own step already has, asked once a frame
+  (`test_witness_conditions.gd` 16, `test_player_witness_wiring.gd` 8).
+
+  Before it, four of the twenty-five atoms — `shock_damage`, `illuminate`,
+  `slow` and `fear` — could not be come by in ordinary play **at all**: a
+  player could open the Weave, own three motes and never reach the rest of
+  the catalogue. Every threshold is read from the module that owns it
+  rather than picked here: the storm is `WeatherModel.STATES`' own entry,
+  dark is the HUD's own civil twilight (the same −6° definition
+  [arrival.md](arrival.md) derived `FIRST_LIGHT_HOUR` from), and ground
+  that fought back is `TerrainPassability.SOFT_THRESHOLD_DEG`, the slope
+  where its own speed multiplier first bites. Being hunted is a real
+  predator with the character inside its **own** `SpeciesBite` sense
+  radius, so a lynx must be closer than a wolf before it counts.
+
+  Two readings are gated rather than taken every frame — the campfire
+  sweep and the predator scan — because neither is worth a frame to a
+  character who has already learned what it teaches. `envenomated` stays an
+  **event**, raised where the bite lands, since a poisoned character stays
+  poisoned for seconds and a condition-shaped venom would ask on every one
+  of them.
+
+  Verified live in a `--solo` run, not only in tests: the facts came back
+  as real readings (`weather: "cloudy"`, `sun_elevation_deg: -4.11`,
+  `slope_deg: 3.10`), not defaults.
 
 
 - ✅ `SpellMote`: `mote_for`, `display_name_for`, `rarity_of`,
