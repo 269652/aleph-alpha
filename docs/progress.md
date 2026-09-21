@@ -395,10 +395,124 @@ and most species have no loot row so they vanish on death.
   Named gaps: it lives in **rainforest**, a long way from a 48°N spawn, so
   in ordinary play it is something to travel to (`/arena curupira` stages
   one). It draws on the procedural fallback, not the reversed-feet
-  silhouette the art brief asks for. And entry 3 (the Alp) is **blocked**:
-  its whole behaviour is "approaches only while you rest" and there is no
-  sleep state on the player — `SurvivalMeters.rest` is an amount, not a
-  condition.
+  silhouette the art brief asks for. (Entry 3, the Alp, was **blocked**
+  here for want of a sleep state; unblocked the same day — next entry.)
+
+- ✅ **Sleep, and the Alp it existed to unblock** (2026-09-21) — see
+  `concept/sleep.md` and `concept/monsters.md` entry 3. `survival.md`'s
+  first paragraph had always said a character must *"eat, drink and
+  sleep"*; `SurvivalMeters.rest(amount)` was an arithmetic helper, so the
+  third of those had never existed.
+
+  `Slumber` is the whole rule, pure: a refusal sentence or the empty
+  string, the wait to first light across the clock face, the world age one
+  frame of rest advances, and the wake report. Two derivations rather than
+  two chosen numbers — the wake hour is `DawnClause.FIRST_LIGHT_HOUR`
+  (civil dawn, already derived from this repo's own astronomy for the
+  arrival clause), and the rate is `DawnClause.MAX_OFFSET_HOURS /
+  Answerback.MAX_CARD_SECONDS`, so **the longest possible night passes in
+  no more real time than the longest card this HUD will ask anyone to
+  read**, which falls out at one in-game hour per real second. Both bounds
+  pinned by test. The payoff banks only on completion: waking early keeps
+  the hours that really passed and loses the rest, which is what makes the
+  Alp a decision rather than damage.
+
+  The Alp (`NightMare`) is the exact inverse of every other creature here:
+  dangerous while you are *not*. `preys_on` wants a sleeper **and** the
+  dark, it empties the stamina bar in 20 s rather than touching health,
+  and a reflection test over its own method list forbids every
+  health-shaped name so it cannot quietly grow a bite.
+
+  Tests: `test_slumber.gd` 20, `test_player_rest.gd` 14, `test_alp.gd` 17.
+  Verified live: a rest begun at midnight ran 5.60 in-game hours in 5.62
+  real seconds and advanced the world clock by exactly that; a bite
+  mid-sleep woke the character with the stamina still at zero. Two
+  pre-existing invariants earned their keep — `test_keybindings.gd` caught
+  `rest` reaching for R (held by `primary_action`; every letter A–Z is
+  bound, so it took `KEY_PERIOD`), and
+  `test_every_spawnable_species_has_a_profile` caught that a species with
+  no `SpeciesBite` row silently inherits the shared `ATTACK_DAMAGE`.
+
+  **Known bug, found by the combat audit and not yet fixed (⬜):** the
+  Alp still runs the ordinary `_try_attack`, and `Player.take_damage`
+  calls `wake()` — so it cancels its own signature mechanic on the first
+  frame it reaches a sleeper. It must press, not bite.
+
+- ✅ **Damage over time was forty times its own spec** (2026-09-21).
+  Measured, not inferred: venom ticked at **60.0 damage/second** against a
+  specified 1.5, and a full dose dealt **481** where the spec says 36.
+  Every per-frame tick was routing through `Player.take_damage`, whose
+  armour floor (`Health.MIN_DAMAGE`, a real rule for a real blow) turned
+  each sub-unit tick into a whole point — sixty of them a second. The same
+  path also ran `_wear_equipped_item` sixty times a second while blocking,
+  so a poisoned player destroyed their own weapon.
+
+  `take_tick_damage` now carries continuous harm and `take_damage` the
+  discrete blow; both share `_suffer`, so death, the dimming and the save
+  path stay one implementation. Three callers moved across (`_venom_step`,
+  `_mushroom_toxin_step`, `_spell_status_step`). 7 new tests, 72 green
+  across venom/mushroom/spell-status/debuff/item-wear/block.
+
+- ✅ **The fight was unloseable, and a blow was not an event** (2026-09-21)
+  — the finding a nine-lens audit's nine readers all missed and its critic
+  caught. Every player swing shoved a creature clear of its own 16 px
+  reach (player reach 20 px, cooldown 0.5 s) *and* `apply_knockback` froze
+  its AI while it slid, so a bear could be walked backwards to death
+  without ever biting. `CreatureMarker.take_damage` set no target, no
+  aggro and no herd alarm, so being hit was not information.
+
+  `struck_by(attacker, amount, force)` is now the one door a blow comes
+  through: knockback first, then damage, then — only if it survived —
+  the attacker becomes its aggressor and it aggroes.
+  `knockback_distance_for` divides the shove by the animal's own
+  `CreatureMass` against the reference species, so a 300 kg bear barely
+  rocks where a 10 kg jackal is thrown; a lethal blow clears the
+  aggressor rather than leaving a corpse angry.
+
+  Measured after: a bear kills the player in **6 s** and survives at
+  57/100. 401 green across the touched suites, including the 279-test
+  creature-marker one.
+
+- ✅ **Kills pay: a body for every species, worth what the animal is**
+  (2026-09-21) — see `concept/carrion.md`. `LootTable._DROPS` was a
+  four-row authored table (`herbivore`/`boar`/`predator`/`lynx`) and two of
+  those keys are retired anonymous placeholders no biome pool has promoted
+  since the roster got real names. So killing a deer, wolf, bear, lion,
+  jaguar or horse dropped nothing — and since
+  `_spawn_carcass_if_eligible` early-returns on an empty drop list, it did
+  not even leave a body. Fighting was a pure cost, which is why predators
+  read as obstacles to route around rather than as things to hunt.
+
+  Drops are now **derived from each animal's real mass** rather than
+  authored per species, so a creature added to a biome pool tomorrow
+  cannot ship worthless: `CreatureMass.knows` is the membership test (a new
+  guard — `mass_kg_for` estimates a mass for *any* string from the
+  fallback anatomy profile, so a typo would otherwise have been handed a
+  silent handful of meat), a hide comes off anything above rabbit size, a
+  fang off anything in `CreatureInfo.PREDATOR_SPECIES`.
+
+  The same pass closed this doc's own ⬜ **species-specific yields**:
+  `Butchering.base_meat_for` runs the animal's real body mass through a
+  real edible fraction (wild-game dressing is about a third of live
+  weight), in units fixed by the one row the game had already costed —
+  boar, 90 kg, two steaks — so that species keeps exactly its old count
+  and nothing already balanced is quietly rebalanced. A bear's carcass now
+  cuts into more meat than a squirrel's, and the village hunter carries
+  home the same figure a player's knife would take off the same animal.
+  `LootTable` delegates to it rather than keeping a second opinion.
+
+  Tests: `test_butchering.gd` 21 (the calibration row, the reference mass
+  asserted against `CreatureMass`'s own figure, monotonicity swept across a
+  thirteen-species weight ladder, a one-meal floor, a fail-open flat count
+  for anything the world has no mass for), plus `test_loot_table.gd` 12,
+  `test_carcass.gd` 33, `test_huntable_quarry.gd` 37, `test_npc_economy.gd`
+  84 and `test_creature_marker.gd` 293 — all green.
+
+  **Pre-existing red, found while running the blast radius and confirmed
+  against `HEAD` in a detached worktree so it is not this change's:**
+  `test_npc_marker_hunting.gd`'s `test_a_kill_pays_the_hunter_real_gold`
+  fails — a villager's kill puts real meat and a real hide in the market
+  but the purse stays at 0.0. Named here rather than left silent.
 
 
 ### Loose stone (see `docs/concept/stone.md`)
@@ -9409,9 +9523,9 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
 
 - **Carcass entity** (medium) — ✅ Done — `src/rendering/carcass.gd`:
   spawned in place of the old instant loot drop, for every species
-  `LootTable` already covers (herbivore/boar/predator/lynx — the same
-  scope as today's real drop table, no new per-species tuning in this
-  pass). Real ordered parts (hide → meat → guts,
+  `LootTable` covered at the time (herbivore/boar/predator/lynx — the same
+  scope as that pass's real drop table, no new per-species tuning in it;
+  widened to every spawnable species on 2026-09-21, see "Kills pay"). Real ordered parts (hide → meat → guts,
   `src/gameplay/butchering.gd`'s `PART_ORDER`), one swing removes the
   next remaining part (`Carcass.butcher`, same melee-range-sweep shape as
   chop/smash/pull). Independent rot clock (`ROT_SECONDS`, tuned to be
@@ -10026,9 +10140,12 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   carcass` / `test_a_herbivore_never_scans_for_carcasses` /
   `test_scavenging_only_feeds_the_predator_when_the_bite_actually_lands`
   (`test_creature_marker.gd`).
-- ⬜ Species-specific butcher yields (a bear's hide vs. a boar's hide) —
-  every carcass-eligible species shares one part order/quantity today,
-  mirroring `LootTable`'s own existing flat-by-role shape.
+- ✅ Species-specific **meat** yields (2026-09-21) — `Butchering.base_meat_
+  for` derives the cut from the animal's own real `CreatureMass`; see the
+  "Kills pay" entry near the top of this file. Species-specific **hide**
+  yields stay ⬜ and deliberately flat: a hide is a fact about having been
+  an animal, not a quantity, and sizing it wants a hide *grade* rather
+  than a count.
 - ⬜ Persistence/catch-up integration for carcasses across a chunk
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
@@ -13987,17 +14104,17 @@ New mechanisms:
   `test_an_unpenned_animal_left_hungry_leaves_instead_of_dying` as the boundary
   that keeps the two rules from colliding. The fence is precisely what removed
   the animal's own option to solve the problem, which is what makes penning a
-  responsibility rather than free storage. **It does not leave a carcass, and
-  that is a named prerequisite (⬜) rather than something either doc may
-  assume:** `_die()` routes through `_spawn_carcass_if_eligible` (`:1879`),
-  which returns immediately when `LootTable.drops_for(species)` comes back
-  empty, and `LootTable._DROPS` (`src/gameplay/loot_table.gd:19-24`) has rows
-  for `herbivore`, `boar`, `predator` and `lynx` **only** -- so a starved
-  sheep, goat or horse vanishes without remains and never reaches
-  `concept/carrion.md`'s loop, which would make the one consequence that is
-  supposed to teach the lesson invisible. Giving the keepable roster its own
-  drop rows (hide + meat, on the `herbivore` row's shape) comes first, driven
-  by `test_every_keepable_species_leaves_a_carcass`.
+  responsibility rather than free storage. **It did not leave a carcass, and that
+  was a named prerequisite (⬜):** `_die()` routes through
+  `_spawn_carcass_if_eligible`, which returns immediately when
+  `LootTable.drops_for(species)` comes back empty, and `LootTable._DROPS`
+  had rows for `herbivore`, `boar`, `predator` and `lynx` **only** -- so a
+  starved sheep, goat or horse vanished without remains and never reached
+  `concept/carrion.md`'s loop, which made the one consequence that is
+  supposed to teach the lesson invisible. **Resolved 2026-09-21** (✅): the
+  drop table is derived from `CreatureMass` rather than authored, so every
+  species the world spawns -- the whole keepable roster included -- leaves a
+  real carcass. See the "Kills pay" entry near the top of this file.
 - **A pen as a placed structure** (large) — ⬜ Not started — two new
   `BuildingPiece` rows (`wood_fence`, `wood_gate`) beside the existing twelve,
   reusing the placeable path (`src/gameplay/item_catalog.gd` +
@@ -14382,13 +14499,15 @@ because this ledger is where the honesty lives:
    *composed* speed multiplier dropping below the animal's flee speed --
    see the approach entry under Animal Husbandry above.
 4. An earlier draft of the rewrite claimed the starved penned animal "leaves a
-   real carcass and joins carrion.md's loop". It does not: `LootTable._DROPS`
-   covers `herbivore`/`boar`/`predator`/`lynx` only and
+   real carcass and joins carrion.md's loop". At the time it did not:
+   `LootTable._DROPS` covered `herbivore`/`boar`/`predator`/`lynx` only and
    `CreatureMarker._spawn_carcass_if_eligible` returns immediately on an empty
-   drop list, so no keepable species leaves remains today. Both the rewritten
-   `taming.md` §7 and `animal_husbandry.md` now carry the correction and name
-   the loot rows as a prerequisite; see the neglect entry under Animal Husbandry
-   above.
+   drop list, so no keepable species left remains. Both the rewritten
+   `taming.md` §7 and `animal_husbandry.md` carried the correction and named
+   the loot rows as a prerequisite. **That prerequisite was met on
+   2026-09-21** -- the table is derived from `CreatureMass` now and every
+   spawnable species leaves a body -- so the original claim is true as of that
+   date; see the neglect entry under Animal Husbandry above.
 
 - **Rivers: the boulder's shore band, not a halo** (small) — ✅ Done —
   reported against the boulder ring introduced earlier: "The rocks should

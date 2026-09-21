@@ -65,8 +65,12 @@ all this should be skills the player can train."*
 
 #### The carcass (`Carcass`)
 
-Spawned in place of the old instant `_drop_loot()` call, for exactly the
-species that currently have a real loot table (see `LootTable._DROPS`).
+Spawned in place of the old instant `_drop_loot()` call, for every species
+this world can actually spawn — `LootTable.drops_for` is the eligibility
+gate, and it answers for anything `CreatureMass` knows a real mass for.
+(Before that was derived it answered for four authored keys, two of them
+retired placeholders no biome pool promotes any more, so a killed deer,
+wolf, bear, lion, jaguar or horse left no body at all.)
 Mirrors `SmashableStone`'s "N hits, N states" shape rather than
 `ChoppableTree`'s two-stage fell/cut split — a carcass doesn't move or fall,
 it just has parts.
@@ -366,11 +370,27 @@ see that doc's own mechanism spec and Status.
   carcass` / `test_a_herbivore_never_scans_for_carcasses` /
   `test_scavenging_only_feeds_the_predator_when_the_bite_actually_lands`
   (`test_creature_marker.gd`).
-- ⬜ Species-specific butcher yields (a bear's hide vs. a boar's hide) —
-  today every carcass-eligible species shares one part order/quantity,
-  mirroring `LootTable`'s own existing flat-by-role shape
-  (`herbivore`/`boar`/`predator`/`lynx`) rather than inventing new
-  per-species tuning in the same pass.
+- ✅ **Species-specific meat yields** (2026-09-21). A bear's carcass cuts
+  into more meat than a squirrel's, because a bear *is* more meat.
+  `Butchering.base_meat_for(species)` runs the animal's own real body mass
+  (`CreatureMass`) through a real edible fraction — wild-game dressing
+  yields about a third of live weight — in units fixed by the one row this
+  game had already costed (`REFERENCE_SPECIES` = boar, 90 kg, two steaks),
+  so the species that was already balanced keeps exactly its old count and
+  nobody eyeballs a number for the other twenty-five. Derived rather than
+  authored: a creature added to a biome pool tomorrow cannot ship worth
+  nothing. It composes with the live-mass correction (a fat bear still beats
+  an average bear) and with the skill bonus (a trained cut still adds whole
+  steaks). Pinned by `test_butchering.gd` (21) — the calibration row, the
+  reference mass asserted against `CreatureMass`'s own figure, monotonicity
+  swept across the thirteen-species weight ladder, a one-meal floor, and a
+  fail-open flat count for anything the world has no mass for — plus
+  `test_carcass.gd` and `test_huntable_quarry.gd` for the two callers that
+  now pass a species through.
+- ⬜ Species-specific **hide** yields (a bear's hide vs. a boar's hide) —
+  one animal is still one hide. Deliberately left flat: a hide is a fact
+  about having been an animal, not a quantity, and sizing it would want a
+  hide *grade* (an item property) rather than a count.
 - ⬜ Persistence/catch-up integration for carcasses across a chunk
   unload — a carcass is chunk-local, ephemeral state, same explicit scope
   cut `soil_fauna.md`'s worm burrows already made for the same reason.
@@ -384,11 +404,11 @@ see that doc's own mechanism spec and Status.
   real field-dressing leaves behind are **not** spawned, so that kill
   contributes nothing to the decomposer/fly/disease chain above; modelling
   field-dressing residue is a real follow-up, not a thing this pass
-  pretends to have. Second, in practice the rule barely fires: `LootTable`
-  has drops for four generic entries (`herbivore`/`boar`/`predator`/
-  `lynx`) out of roughly thirty species, so most kills — a hunter's or
-  anyone's — leave no carcass at all. Widening that table is this doc's
-  own ⬜ species-specific-yields item above, and it is what would make
-  this interaction actually matter. Wild deaths — predation, disease, age
+  pretends to have. Second, the rule now really fires:
+  until `LootTable` was derived it had drops for four generic entries
+  (`herbivore`/`boar`/`predator`/`lynx`) out of roughly thirty species, so
+  most kills — a hunter's or anyone's — left no carcass at all. Every
+  species the world spawns now leaves one, which is what makes this
+  interaction matter in the first place. Wild deaths — predation, disease, age
   — are untouched either way, so every input this chain already had
   remains except the ones a villager personally killed and carried off.

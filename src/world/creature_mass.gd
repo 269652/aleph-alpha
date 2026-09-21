@@ -108,6 +108,14 @@ const _FALLBACK_ANCHOR_SPECIES := "deer"
 ## real mass ratios (verified directly -- cubing alone would put a
 ## "horse" under 150kg, nothing like its real ~500kg), so only species
 ## with no real reference at all use this derived approximation.
+## Whether this is a species this world actually knows, as opposed to one
+## `mass_kg_for` would happily estimate from the fallback anatomy profile.
+## Callers that must not invent a creature (LootTable, which would
+## otherwise hand a silent handful of meat to any typo) ask this first.
+static func knows(species: String) -> bool:
+	return _REAL_MASS_KG.has(species)
+
+
 static func mass_kg_for(species: String) -> float:
 	if _REAL_MASS_KG.has(species):
 		return _REAL_MASS_KG[species]
