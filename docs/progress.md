@@ -48,6 +48,78 @@ each other.* Two measurements under it, both taken by driving the real code:
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
 
+- ✅ **The exchange lasts long enough to use the mechanics built for it**
+  (2026-09-22) — see `concept/combat.md`, which had no numeric half at all
+  until this slice and now has one.
+
+  **Measured, driving the real default character** (the warrior lens plus
+  `StarterKit.DEFAULT_CHOICES`, axe in hand — an axe is a *tool*, so the
+  swing is `UNARMED_DAMAGE 5 + class 12 = 17` times the axe-into-flesh
+  `0.8` = **13.6 on a 0.5 s cooldown**): a wolf fell in **three swings,
+  1.5 s**, against a `Dodge.COOLDOWN_DURATION` of exactly 1.5 s and a bear
+  rear-up of 0.90 s. The telegraph, the windup freeze, the i-frames, the
+  reach asymmetry and the braced-knockback rule — every mechanic the last
+  month built for this fight — were real, tested, and **never got a turn**.
+
+  The rule, now pinned: **an animal that stands and trades must live long
+  enough to land two bites.** One telegraph is a surprise; two is a
+  pattern. Counted the way the animal's own clock runs — two windups and
+  *one* recovery, not two whole cycles, because the recovery after the last
+  bite is time the fight does not need and charging for it demands about a
+  fifth more health than the rule asks.
+
+  `CombatPacing.EXCHANGE_HEALTH_SCALE` is **2.5**, and it is a measurement
+  rather than a preference: the test pins it from **both** sides — every
+  bound species satisfies the rule at 2.5, and at 2.4 at least one fails.
+  The binding species is the **boar** (2.02 s to land two bites on 28 base
+  health); every other bound species is satisfied between 1.3 (curupira)
+  and 1.9 (wolf), and which species binds is itself pinned so retuning
+  another animal cannot quietly become the thing that sets the scale.
+
+  **Three design decisions, each with its reason in the doc**:
+
+  - **Health rather than player damage**, because `MaterialDamage` makes
+    the swing load-bearing for chopping trees and breaking stone — tuning
+    combat through it would retune woodworking.
+  - **Uniform, and on the instance rather than the table.** Everything else
+    that reads `max_health` reads it as a *ratio* (fight-or-flight, the
+    health bar, `BossAggro`'s threshold, hit-flash severity), so a uniform
+    scale leaves all of them exactly where they were — confirmed by the
+    regression, where only `test_creature_info`'s own formula tests moved.
+    And `Taming.PREDATOR_BREAK_FREE_MULTIPLIER` is derived from the
+    **table**, so leaving the table alone leaves that constant alone; a
+    predators-only scale would have made wild animals harder to tame for a
+    reason with nothing to do with taming.
+  - **A longer fight sharpens the species gradient rather than flattening
+    it.** The creature's dps is unchanged, so a fight twice as long lands
+    twice as many bites: the wolf stays a warm-up (22 damage taken, 15% of
+    the reference character) while the bear becomes a real fight (103, 71%).
+
+  Two species are exempt, each by a property the code already owns rather
+  than a name on a list: the **Alp** (`presses_instead_of_striking`) never
+  strikes, so "land two bites" is a requirement about something that never
+  happens; a **venomous** animal is a glass cannon whose threat is what it
+  leaves behind, and binding the snake would demand 41 health of it —
+  tougher than a jackal.
+
+  Tests: `test_combat_pacing.gd` 11 (new), `test_creature_info.gd` 60, and
+  a 17-suite batch over the ecology and hunting side —
+  `test_creature_marker`, `test_creature_behavior`, `test_species_bite`,
+  `test_battle_loop`, `test_fight_is_loseable`, `test_bite_telegraph`,
+  `test_butchering`, `test_loot_table`, `test_huntable_quarry`,
+  `test_npc_marker_hunting`, `test_carcass`, `test_creature_mass`,
+  `test_animal_fitness`, `test_animal_reproduction`, `test_boss_aggro`,
+  `test_arena`, `test_predator_initiative` — **342 passing, zero failures**,
+  on a clean boot.
+
+  Two honest gaps recorded in `combat.md`'s new Status rather than papered
+  over: **levelling still grows only one axis** (`LEVEL_HEALTH_SCALE` has no
+  damage counterpart, so a level-5 wolf has twice the health and the
+  identical 6-damage bite — "that one is bigger" is a longer chore rather
+  than a warning), and **block is free and invisible**, so a player holding
+  the block key experiences a materially longer fight than the one this rule
+  pins. The reference exchange is therefore stated **unblocked**.
+
 - ✅ **A spell is a blow** (2026-09-22) — see `concept/spell_runtime.md`'s
   rule of that name and `concept/spell_weaving.md`.
 

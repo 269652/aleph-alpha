@@ -369,6 +369,10 @@ const LEVEL_RANGE := 5
 ## e.g. 0.25 means a level-5 individual (the max) has double the base HP.
 const LEVEL_HEALTH_SCALE := 0.25
 
+## How long a fight has to last, so the mechanics built for it get a turn
+## (docs/concept/combat.md, "The reference exchange").
+const CombatPacing = preload("res://src/gameplay/combat_pacing.gd")
+
 var species: String
 var display_name: String
 var diet: String
@@ -399,7 +403,23 @@ func _init(a_species: String, seed_value: int = 0) -> void:
 	is_world_boss = WORLD_BOSS_SPECIES.get(a_species, false)
 	level = 1 + (absi(seed_value) % LEVEL_RANGE)
 	var base_max_health: float = MAX_HEALTH_BY_SPECIES.get(a_species, 10.0)
-	max_health = base_max_health * (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)
+	# The reference exchange (docs/concept/combat.md): a fight has to last
+	# long enough for the animal in it to land two bites, or the telegraph
+	# the player is meant to read never becomes a pattern. Measured before
+	# this line existed, the default character felled a wolf in three
+	# swings -- 1.5 s, against a dodge cooldown of exactly 1.5 s.
+	#
+	# Applied to the INSTANCE and never to the table above. Everything else
+	# that reads max_health reads it as a ratio (fight-or-flight, the health
+	# bar, BossAggro's threshold, the hit-flash severity), so a uniform
+	# scale leaves all of them where they were -- and Taming derives
+	# PREDATOR_BREAK_FREE_MULTIPLIER from the TABLE, which therefore does
+	# not move either.
+	max_health = (
+		base_max_health
+		* (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)
+		* CombatPacing.EXCHANGE_HEALTH_SCALE
+	)
 	health = max_health
 	max_stamina = MAX_STAMINA_BY_SPECIES.get(a_species, 10.0)
 	stamina = max_stamina
