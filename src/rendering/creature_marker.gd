@@ -2519,11 +2519,42 @@ func hunt_speed() -> float:
 ## (SpeciesBite, docs/concept/predator_profiles.md). Falls back to the
 ## shared ATTACK_DAMAGE for a species with no profile -- an unprofiled
 ## animal must still be able to hurt you, not silently deal zero.
+## Scaled by this individual's own level, which is the whole point of a
+## level: "that one is bigger" has to be a warning rather than a longer
+## chore (docs/concept/combat.md, "A level is a bigger animal").
 func bite_damage() -> float:
 	var species := info.species if info != null else ""
+	var authored := ATTACK_DAMAGE
 	if SpeciesBite.has_profile(species):
-		return SpeciesBite.bite_damage_for(species)
-	return ATTACK_DAMAGE
+		authored = SpeciesBite.bite_damage_for(species)
+	return authored * _level_growth()
+
+
+## How much bigger this individual is than the smallest of its kind.
+func _level_growth() -> float:
+	return CreatureInfo.level_growth(info.level) if info != null else 1.0
+
+
+## How long this individual telegraphs a bite at `target_max_health`.
+##
+## Asked of the INDIVIDUAL'S bite, not the species sheet's, and that is what
+## makes scaling the bite safe rather than cruel.
+## `required_windup_seconds` derives the tell from the fraction of your
+## health the blow would take, so a harder-hitting animal is automatically
+## warned about for longer -- but only if it is asked about the blow this
+## animal actually lands. A level-5 wolf hitting for 10 on the tell of one
+## that hits for 6 is exactly the cheap shot the fairness model forbids.
+##
+## The authored column stays a FLOOR, the same way `windup_seconds_for`
+## treats it: an animal is never telegraphed for less than its sheet says.
+func windup_seconds_against(target_max_health: float) -> float:
+	var species := info.species if info != null else ""
+	if not SpeciesBite.has_profile(species):
+		return 0.0
+	return maxf(
+		float(SpeciesBite.profile_for(species)["windup_seconds"]),
+		SpeciesBite.required_windup_seconds(bite_damage(), target_max_health)
+	)
 
 
 ## How long this individual waits between bites, from the same profile.
@@ -2558,7 +2589,7 @@ func _try_attack(target: Node) -> void:
 	# health by design -- a frailer character is warned longer, not less --
 	# so the number is read here, where the target is known, rather than
 	# baked per species.
-	var windup := SpeciesBite.windup_seconds_for(info.species, _max_health_of(target))
+	var windup := windup_seconds_against(_max_health_of(target))
 	if windup <= 0.0:
 		# A species with no bite is owed no telegraph, and a zero-length
 		# windup must not become a state a grazer sits in every frame.

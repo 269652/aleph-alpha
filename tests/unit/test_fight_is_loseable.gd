@@ -61,10 +61,24 @@ func after_each():
 	entities_parent.free()
 
 
+## Nothing here may tick except the frames this file drives itself.
+##
+## `CreatureMarker` has a `_process`, and a marker parented into the live
+## test tree gets it called by the ENGINE with the real frame delta on top
+## of every `_process(frame)` the exchange below makes by hand. Alone that
+## is invisible; in a batch behind a slow suite one real frame can be
+## seconds, and the twelve-second exchange this file measures stops being
+## twelve seconds. See the same guard in test_bite_telegraph.gd.
+##
+## Found here when the reference exchange made fights longer: the suite
+## passed three runs standalone and failed inside a twenty-one-suite batch.
+## The fragility was always present -- a longer fight simply spends longer
+## exposed to it.
 func _creature(species: String, offset: Vector2):
 	var marker = renderer.spawn_single(
 		creatures_parent, species, player.position + offset, manager, TerrainRenderer.TILE_SIZE
 	)
+	marker.set_process(false)
 	return marker
 
 

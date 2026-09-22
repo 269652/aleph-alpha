@@ -48,6 +48,81 @@ each other.* Two measurements under it, both taken by driving the real code:
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
 
+- ✅ **A level is a bigger animal — every axis, not just health**
+  (2026-09-22) — see `concept/combat.md`, section of that name. Closes the
+  🚧 gap this overhaul's previous slice recorded rather than papered over.
+
+  `CreatureInfo` had `LEVEL_HEALTH_SCALE` and **no counterpart for anything
+  else**, and `CreatureMarker.bite_damage()` read `info.species` and never
+  `info.level`. Measured: a level-5 wolf carried **twice the health and the
+  identical 6-damage bite**. A bigger animal was a longer chore, never a
+  greater danger — the same "spongier, not deadlier" failure the reference
+  exchange exists to prevent, hiding inside the level roll.
+
+  Every magnitude axis grows now: health (0.25, unchanged), **bite damage**
+  (`LEVEL_DAMAGE_SCALE` 0.18, new), stamina and mana (0.18, coherence only).
+
+  **The telegraph is not a third number — it is a consequence, and that is
+  what makes this safe.** `SpeciesBite.required_windup_seconds` already
+  derives the tell from *what fraction of your health the blow would take*,
+  rising from one `Dodge.INVINCIBLE_DURATION` to a full
+  `Dodge.COOLDOWN_DURATION` for a bite that would kill outright. So asking
+  it about the **individual's** bite rather than the species sheet's means a
+  harder-hitting animal is automatically warned about for longer. Without
+  that half, a level-5 wolf hitting for 10 on the tell of one that hits for
+  6 would be exactly the cheap shot the fairness model was written to
+  forbid — so `_try_attack` now reads a new
+  `CreatureMarker.windup_seconds_against(target_max_health)`.
+
+  **Why 0.18 and not 0.25.** `MINIMUM_TIME_TO_KILL_SECONDS` says no animal
+  may take a full-health player from alive to dead faster than five
+  seconds, because below that there is no "you are in trouble" phase to
+  read. 0.18 is the **largest hundredth** for which every biting species at
+  every level it can roll still clears that floor; measured, the binding
+  animal is the **bear**, and at 0.19 a level-5 bear kills a reference
+  player too fast to read. Pinned from both sides, with the capping species
+  pinned too.
+
+  The honest consequence: damage grows slightly slower than health (×1.72
+  against ×2.00 at level 5), so a very large animal remains a little
+  spongier than it is deadlier. That is not a compromise between tastes —
+  it is where the fairness floor sits, and more danger would be bought from
+  the player's ability to read the fight. **Measured end to end, a level-5
+  encounter now costs about 3.4× the health a level-1 one does, where before
+  it cost 1.0×.**
+
+  **Speed deliberately does not scale.** `Player.BASE_SPEED` is 40 and
+  `CreatureMarker.HUNT_SPEED` is 36: a player out-runs a hunting animal, but
+  only just. Scaling pursuit would flip that for large individuals and
+  remove disengagement entirely — you could no longer choose not to have the
+  fight, which every other fairness rule is built on top of. Stamina and
+  mana scale for coherence but are read by **nothing** today, so that growth
+  is inert and is named as such rather than shipped as though it did
+  something. Venom is left alone because `venom_damage` is itself still a
+  dead column.
+
+  **Two test-harness faults surfaced, both pre-existing and both the same
+  fault.** `test_fight_is_loseable.gd` never disabled engine processing on
+  its marker, so its twelve-second exchange stopped being twelve seconds
+  inside a batch — it passed three runs standalone and failed in a
+  twenty-one-suite batch. And `test_bite_telegraph.gd` ran its windups for
+  `_windup_of(marker) + a frame or two`: a number computed *beside* the
+  animal, which agreed with the animal only while the windup was a property
+  of the species. Now that it is a property of the individual, the two can
+  disagree, so those call sites drive the creature's **own** clock through a
+  new `_let_the_jaws_close`. The file's own header already claimed it drove
+  the creature's remaining clock rather than a round number; now it does.
+
+  Tests: `test_level_scaling.gd` 10 (new), and a 22-suite batch run behind
+  the slow `test_bee_hive_marker` — `test_species_bite`,
+  `test_creature_info`, `test_creature_marker`, `test_creature_behavior`,
+  `test_bite_telegraph`, `test_bite_tell`, `test_combat_pacing`,
+  `test_fight_is_loseable`, `test_battle_loop`, `test_predator_initiative`,
+  `test_alp`, `test_curupira`, `test_boss_aggro`, `test_animal_fitness`,
+  `test_npc_marker_hunting`, `test_arena`, `test_duel`,
+  `test_spell_kill_credit`, `test_creature_hit_flash`, `test_mote_drop` —
+  **714 passing, zero failures**, on a clean boot.
+
 - ✅ **Magic gets range: a starting hand that is not all touch**
   (2026-09-22) — see `concept/magic.md`.
 

@@ -79,8 +79,19 @@ func _predator(species: String, offset: Vector2):
 	return marker
 
 
-func _windup_of(species: String) -> float:
-	return SpeciesBite.windup_seconds_for(species, player.max_health)
+## The telegraph THIS ANIMAL owes, asked of the animal rather than of its
+## species sheet.
+##
+## It used to ask `SpeciesBite.windup_seconds_for(species, ...)`, which is
+## the sheet's number. That was the same thing until levels began to scale
+## the bite (docs/concept/combat.md, "A level is a bigger animal"): a
+## level-3 wolf hits harder than the sheet says, so it is warned about for
+## longer than the sheet says, and a test that waited the sheet's windup
+## walked away while the jaws were still opening. This file's own header
+## already said it drives "the creature's own remaining clock rather than a
+## round number" -- this helper is what makes that true of the windup too.
+func _windup_of(marker) -> float:
+	return marker.windup_seconds_against(player.max_health)
 
 
 func _run(marker, seconds: float) -> void:
@@ -88,6 +99,28 @@ func _run(marker, seconds: float) -> void:
 	while elapsed < seconds:
 		marker._process(FRAME)
 		elapsed += FRAME
+
+
+## Drives this animal until its OWN windup clock runs out, then one frame
+## more so the jaws resolve.
+##
+## Preferred over running for `_windup_of(marker) + a frame or two`, because
+## that is a number computed BESIDE the animal and the two can disagree.
+## They agreed while the windup was a property of the species; once it
+## became a property of the individual -- scaling with the level through the
+## bite it is derived from (docs/concept/combat.md) -- a recomputed number
+## is a second opinion about a clock that is already running. Measured: the
+## recomputed form passed standalone and failed inside a twenty-one-suite
+## batch, where live state the windup is derived from had moved underneath
+## it. The clock cannot disagree with itself.
+func _let_the_jaws_close(marker) -> void:
+	var guard := 0
+	while marker.is_winding_up() and guard < 2000:
+		marker._process(FRAME)
+		guard += 1
+	assert_lt(guard, 2000, "precondition: the windup really ended")
+	marker._process(FRAME)
+
 
 
 # -- the bite is no longer instantaneous ----------------------------------
@@ -112,7 +145,7 @@ func test_it_really_commits_to_the_bite():
 func test_the_wait_is_the_species_own_windup():
 	var bear = _predator("bear", Vector2(8.0, 0.0))
 	bear._try_attack(player)
-	assert_almost_eq(bear.windup_remaining(), _windup_of("bear"), 0.0001)
+	assert_almost_eq(bear.windup_remaining(), _windup_of(bear), 0.0001)
 
 
 ## A frail character is warned MORE, not less -- the table takes the
@@ -138,7 +171,7 @@ func test_the_bite_lands_when_the_wait_runs_out():
 	var wolf = _predator("wolf", Vector2(8.0, 0.0))
 	var before: float = player.health
 	wolf._try_attack(player)
-	_run(wolf, _windup_of("wolf") + FRAME * 2.0)
+	_let_the_jaws_close(wolf)
 	assert_lt(player.health, before, "a telegraph is not a reprieve")
 
 
@@ -152,7 +185,7 @@ func test_a_creature_plants_itself_while_it_winds_up():
 	var bear = _predator("bear", Vector2(10.0, 0.0))
 	bear._try_attack(player)
 	var planted: Vector2 = bear.position
-	_run(bear, _windup_of("bear") * 0.5)
+	_run(bear, _windup_of(bear) * 0.5)
 	assert_almost_eq(bear.position.distance_to(planted), 0.0, 0.01, "it plants to strike")
 
 
@@ -165,7 +198,7 @@ func test_a_target_that_leaves_reach_is_not_bitten():
 	var before: float = player.health
 	wolf._try_attack(player)
 	player.position = Vector2(400.0, 0.0)
-	_run(wolf, _windup_of("wolf") + FRAME * 2.0)
+	_let_the_jaws_close(wolf)
 	assert_almost_eq(player.health, before, 0.0001, "the jaws closed on nothing")
 
 
@@ -182,7 +215,7 @@ func test_a_dodge_away_really_denies_the_bite():
 	for _i in 60:
 		player._knockback_velocity(Vector2.ZERO, Dodge.INVINCIBLE_DURATION / 60.0)
 		player.position += Vector2.LEFT * (Dodge.distance_px() / 60.0)
-	_run(bear, _windup_of("bear") + FRAME * 2.0)
+	_let_the_jaws_close(bear)
 	assert_almost_eq(player.health, before, 0.0001, "twenty pixels beats sixteen")
 
 
@@ -192,7 +225,7 @@ func test_a_bite_that_missed_still_costs_the_recovery():
 	var wolf = _predator("wolf", Vector2(8.0, 0.0))
 	wolf._try_attack(player)
 	player.position = Vector2(400.0, 0.0)
-	_run(wolf, _windup_of("wolf") + FRAME * 2.0)
+	_let_the_jaws_close(wolf)
 	player.position = Vector2(8.0, 0.0)
 	var before: float = player.health
 	wolf._try_attack(player)
@@ -237,7 +270,7 @@ func test_the_rear_up_really_settles_again():
 	var bear = _predator("bear", Vector2(10.0, 0.0))
 	var resting: Vector2 = bear.scale
 	bear._try_attack(player)
-	_run(bear, _windup_of("bear") + FRAME * 3.0)
+	_let_the_jaws_close(bear)
 	assert_almost_eq(bear.scale.y, resting.y, 0.001)
 
 
@@ -247,7 +280,7 @@ func test_the_rear_up_is_the_shared_rule():
 	var resting: Vector2 = bear.scale
 	bear._try_attack(player)
 	bear._process(FRAME)
-	var total := _windup_of("bear")
+	var total := _windup_of(bear)
 	var expected: Vector2 = BiteTell.scale_multiplier(bear.windup_remaining(), total)
 	assert_almost_eq(bear.scale.y / resting.y, expected.y, 0.001)
 
@@ -274,7 +307,7 @@ func test_a_planted_animal_is_not_shoved_off_its_strike():
 	bear._try_attack(player)
 	var planted: Vector2 = bear.position
 	bear.struck_by(player, 1.0, Vector2(60.0, 0.0))
-	_run(bear, _windup_of("bear") * 0.5)
+	_run(bear, _windup_of(bear) * 0.5)
 	assert_almost_eq(bear.position.distance_to(planted), 0.0, 0.01, "braced")
 
 
@@ -313,7 +346,7 @@ func test_a_rooted_animal_still_finishes_the_bite_it_committed_to():
 	wolf._try_attack(player)
 	wolf.apply_spell_debuff("root", 10.0)
 	assert_true(wolf.is_rooted(), "precondition: it really is held")
-	_run(wolf, _windup_of("wolf") + FRAME * 2.0)
+	_let_the_jaws_close(wolf)
 	assert_lt(player.health, before, "a held animal still has jaws")
 
 

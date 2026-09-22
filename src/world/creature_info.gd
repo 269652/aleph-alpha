@@ -369,6 +369,32 @@ const LEVEL_RANGE := 5
 ## e.g. 0.25 means a level-5 individual (the max) has double the base HP.
 const LEVEL_HEALTH_SCALE := 0.25
 
+## What each level above 1 adds to every OTHER magnitude a creature has --
+## its bite above all (docs/concept/combat.md, "A level is a bigger
+## animal").
+##
+## Before this existed, `LEVEL_HEALTH_SCALE` had no counterpart and
+## `CreatureMarker.bite_damage()` read the species and never the level, so a
+## level-5 wolf carried TWICE THE HEALTH AND THE IDENTICAL 6-DAMAGE BITE. A
+## bigger animal was a longer chore rather than a greater danger.
+##
+## 0.18 and not 0.25, and the difference is not a matter of taste:
+## `SpeciesBite.MINIMUM_TIME_TO_KILL_SECONDS` says no animal may take a
+## full-health player from alive to dead faster than five seconds, because
+## below that there is no "you are in trouble" phase to read. This is the
+## LARGEST hundredth for which every biting species, at every level it can
+## roll, still clears that floor -- measured, the binding animal is the
+## bear, and at 0.19 a level-5 bear kills a reference player too fast to
+## read. Pinned from both sides by test_level_scaling.gd.
+const LEVEL_DAMAGE_SCALE := 0.18
+
+
+## How much bigger this individual is than the smallest of its kind. One
+## function, so every axis that grows with a level grows by the same amount
+## and none of them can drift apart.
+static func level_growth(level: int) -> float:
+	return 1.0 + maxi(0, level - 1) * LEVEL_DAMAGE_SCALE
+
 ## How long a fight has to last, so the mechanics built for it get a turn
 ## (docs/concept/combat.md, "The reference exchange").
 const CombatPacing = preload("res://src/gameplay/combat_pacing.gd")
@@ -421,7 +447,14 @@ func _init(a_species: String, seed_value: int = 0) -> void:
 		* CombatPacing.EXCHANGE_HEALTH_SCALE
 	)
 	health = max_health
-	max_stamina = MAX_STAMINA_BY_SPECIES.get(a_species, 10.0)
+	# Scaled for coherence -- a bigger animal is bigger on every axis it
+	# has. Both are read by NOTHING in the game today (grep for
+	# `info.stamina` and `info.max_mana` returns no consumers), so the
+	# growth is inert; it is applied anyway so that the day something reads
+	# them, it reads a number that already grew. Named in combat.md rather
+	# than shipped as though it did something.
+	var growth := level_growth(level)
+	max_stamina = float(MAX_STAMINA_BY_SPECIES.get(a_species, 10.0)) * growth
 	stamina = max_stamina
-	max_mana = MAX_MANA_BY_SPECIES.get(a_species, 5.0)
+	max_mana = float(MAX_MANA_BY_SPECIES.get(a_species, 5.0)) * growth
 	mana = max_mana

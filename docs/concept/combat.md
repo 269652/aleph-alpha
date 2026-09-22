@@ -106,6 +106,86 @@ than by name on a list:
   would demand 41 HP of a snake — tougher than a jackal — to protect a
   telegraph nobody is meant to trade blows through.
 
+## A level is a bigger animal
+
+A creature's `level` rolls per individual from its own seed, in
+`[1, LEVEL_RANGE]` — variety rather than a distance gradient, which the
+journey rings supply by changing *which species* live where. "That one is
+bigger" is meant to be a warning.
+
+It was not one. `CreatureInfo` had `LEVEL_HEALTH_SCALE` and **no
+counterpart for anything else**, and `CreatureMarker.bite_damage()` read
+`info.species` and never `info.level` — so a level-5 wolf carried **twice
+the health and the identical 6-damage bite**. A bigger animal was a longer
+chore, never a greater danger. That is the "spongier, not deadlier" failure
+the reference exchange above exists to avoid, hiding inside the level roll.
+
+Every magnitude axis now grows with the level:
+
+| axis | per level above 1 | note |
+|---|---|---|
+| `max_health` | `LEVEL_HEALTH_SCALE` 0.25 | unchanged |
+| bite damage | `LEVEL_DAMAGE_SCALE` 0.18 | new; derived below |
+| the telegraph | *follows the bite* | not a scale — a consequence |
+| `max_stamina`, `max_mana` | 0.18 | coherence only; see below |
+| speed | **does not scale** | deliberate; see below |
+
+### Why the telegraph is not a third number
+
+`SpeciesBite.required_windup_seconds(bite_damage, player_max_health)`
+already derives the tell from **what fraction of your health the bite would
+take**: the floor is one `Dodge.INVINCIBLE_DURATION` (see it, roll, the
+bite passes through you) rising to a full `Dodge.COOLDOWN_DURATION` for a
+bite that would kill outright.
+
+So the moment the bite is asked of the *individual* rather than the
+species, a harder-hitting animal is automatically warned about for longer.
+This is what makes scaling damage safe rather than cruel, and it is why
+this change also has to fix where the telegraph is read from: a level-5
+wolf that hit for 10 while telegraphing like one that hits for 6 would be
+the cheap shot the whole fairness model was written to forbid.
+
+### Why 0.18, and not 0.25
+
+`SpeciesBite.MINIMUM_TIME_TO_KILL_SECONDS` is the invariant: *however hard
+it bites, an animal may not take a full-health player from alive to dead
+faster than five seconds* — below that there is no "you are in trouble"
+phase to read, only a death.
+
+0.18 is the **largest hundredth** for which every biting species, at every
+level it can roll, still needs at least that long. Measured, the binding
+species is the **bear**: at 0.19 a level-5 bear kills a reference player in
+under five seconds. Every other species has far more room (the wolf would
+tolerate 0.85, the jackal 1.00), so the bear alone sets it.
+
+The honest consequence: damage grows *slightly slower* than health (×1.72
+against ×2.00 at level 5), so a very large animal is still a little
+spongier than it is deadlier. That asymmetry is not a compromise between
+tastes — it is exactly where the fairness floor sits, and buying more
+danger would mean buying it from a player's ability to read the fight.
+
+Measured end to end, a level-5 encounter costs about **3.4× the health** a
+level-1 one does (2.00 × 1.72), where before this it cost **1.0×** — the
+same bite, landed over a longer chew.
+
+### What does not scale, and why
+
+**Speed.** `Player.BASE_SPEED` is 40 and `CreatureMarker.HUNT_SPEED` is 36:
+a player out-runs a hunting animal, but only just. Scaling pursuit with
+level would flip that for large individuals and remove disengagement
+entirely — you could no longer choose not to have the fight, which is the
+affordance every other fairness rule here is built on top of.
+
+**Stamina and mana** are scaled for coherence — a bigger animal is bigger
+on every axis it has — but both are currently read by **nothing** in the
+game (`grep` for `info.stamina` and `info.max_mana` returns no consumers).
+The scale is therefore inert today. Named here rather than quietly shipped
+as though it did something.
+
+**Venom** is not scaled, because `venom_damage` is itself still a dead
+column with no runtime reader; scaling it would be a second inert number
+layered on the first. It should scale on the day it is wired.
+
 ## Status
 
 - ✅ **The reference exchange is pinned** (2026-09-22) — the rule above,
@@ -117,12 +197,8 @@ than by name on a list:
   Measured, the binding species is the **boar** — 2.02 s to land two bites
   on only 28 base health. Every other bound species is satisfied between 1.3
   (curupira) and 1.9 (wolf).
-- 🚧 **Levelling still only grows one axis.** `CreatureInfo` has
-  `LEVEL_HEALTH_SCALE` and no counterpart for damage, so a level-5 wolf has
-  **twice the health and the identical 6-damage bite**. Levels roll per
-  individual from a seed (`LEVEL_RANGE` 5), so this is about variety rather
-  than the ring gradient — "that one is bigger" should be a warning and is
-  currently only a longer chore. Named here rather than silently left.
+- ✅ **Levelling grows every axis** (2026-09-22) — see *A level is a bigger
+  animal* below.
 - 🚧 **Block is free and invisible.** `is_blocking()` costs nothing — no
   stamina, no cooldown, no readout — and reduces damage weapon-dependently,
   so a player holding the block key experiences a materially longer fight
