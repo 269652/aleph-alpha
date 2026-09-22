@@ -118,6 +118,46 @@ below), `play_attack_swing`-style visual, then resolve.
    note, same reasoning) plus a new procedural effect sprite per atom (see
    below), at the target.
 
+### A spell is a blow
+
+One rule, and everything in this section is downstream of it:
+
+> **Damage the player deals is the same behavioural event however it is
+> delivered.** A creature that a spell hurts turns on the caster, and a
+> creature a spell kills pays what a creature a sword kills pays.
+
+`CreatureMarker.struck_by(attacker, amount, force)` is the door a blow is
+supposed to come through. It takes the damage, records the attacker, and
+sets `is_aggroed` — three things a fight needs — and `take_damage` does only
+the first. A spell that calls `take_damage` directly is therefore not a
+weaker attack; it is a *different kind of act*, one the world does not
+notice being done to it.
+
+That is not a nuance. It is the difference between magic being combat and
+magic being an exploit:
+
+- **A creature a spell hurts must fight back.** Otherwise the caster's
+  correct play against anything in the game is to stand outside its reach
+  and tap a key, which is neither a fight nor interesting.
+- **A creature a spell kills must pay.** XP and a mote
+  ([spell_weaving.md](spell_weaving.md)) hang off the kill, and the
+  Magicraft loop is fed by kills. A mage — the one class built around that
+  loop — killing only with spells would be the one character who can never
+  fill a Weave.
+- **The cast must answer.** A swing that lands puts a number on the thing
+  it hit ([feedback.md](feedback.md)); a cast that lands must too, or the
+  player cannot tell a spell that hit from one that whiffed.
+
+Force is the one exception, and deliberately so: a spell's damage passes
+`Vector2.ZERO` force, so the braced-windup rule in `apply_knockback` is
+untouched. Knockback remains the business of the `push`/`pull`/`gravity_shift`
+atoms, which ask for it by name. Being burned makes an animal angry; it does
+not shove it.
+
+The same rule binds anything else the player throws. A thrown stone that
+damages a creature without angering it is the same bug wearing different
+clothes.
+
 ### Per-atom mechanics
 
 `spell_atom_catalog.gd`'s own `mag_ref`/`dur_ref` shape is the organizing
@@ -126,7 +166,7 @@ axis — not the `category` field, which only drives the *visual* palette
 
 | Shape | Atoms | Mechanic |
 |---|---|---|
-| **Instant, magnitude** | `fire_damage`, `frost_damage`, `shock_damage`, `poison_damage` | `target.take_damage(magnitude)` — duck-typed, already shared by Player and CreatureMarker, already mitigation-aware (armor/block on Player, boss-aggro gate on creatures). All four are mechanically identical for now — no elemental-interaction/resistance model exists yet (magic.md's own open question); they differ only in visual color. |
+| **Instant, magnitude** | `fire_damage`, `frost_damage`, `shock_damage`, `poison_damage` | `target.struck_by(caster, magnitude)` where the target has it (every `CreatureMarker` does), falling back to `target.take_damage(magnitude)` where it does not — both duck-typed, both already mitigation-aware (armor/block on Player, boss-aggro gate on creatures). **The door matters more than the number**: see *A spell is a blow* below. All four are mechanically identical for now — no elemental-interaction/resistance model exists yet (magic.md's own open question); they differ only in visual color. |
 | | `minor_heal`, `major_heal` | Restore `health`/`info.health` toward `max_health`/`info.max_health`, clamped. |
 | | `push`, `pull` | `MeleeAttack.knockback_vector`-shaped math (away from / toward the caster) → `CreatureMarker.apply_knockback`. Player currently has **no** `apply_knockback` sink (nothing in this game has ever knocked the player back) — add a minimal, symmetric one so a hostile-cast push/pull isn't creature-only. |
 | | `teleport` | `target.position = target.position + facing_direction * magnitude` (pixels). No dry-land validation (that's `_compute_dry_land_spawn_tile`-grade expensive, chunk-aware work, wrong cost for an instant cast) — an honest, documented gap, not a silent one. |
@@ -238,6 +278,18 @@ tested pure generation, matching this codebase's established boundary.
   An empty slot refuses with a sentence rather than doing nothing, the same
   rule every other verb in this overhaul follows
   ([feedback.md](feedback.md)).
+
+- ✅ **A spell is a blow** (2026-09-22) — see *A spell is a blow* above.
+  `struck_by` had **exactly one caller in the whole game**, the melee swing,
+  so every other way the player dealt damage went through the door that does
+  not notice. Measured: a creature burned to death by Fire Bolt never turned
+  on the caster, paid no XP, and dropped no mote — so the risk-free way to
+  kill anything was to stand at `TOUCH_RANGE` and tap the cast key, and the
+  mage was the one class whose own kills could not feed its own Weave. Now
+  `SpellAtomEffects` takes the caster and prefers `struck_by`; the kill
+  credit that lived inside `_perform_attack` is a shared `_credit_kill` both
+  the swing and the cast call; and a cast that lands answers with its total.
+  The same change routes the thrown stone through the same door.
 
 - ✅ **Mana on screen** (2026-09-21). There was no mana readout anywhere:
   the one resource every cast spends was invisible, and *"Not enough mana"*

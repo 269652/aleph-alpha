@@ -139,17 +139,48 @@ const PlayerScene = preload("res://scenes/player.tscn")
 ## The wiring, which is the whole point: two pure functions that say
 ## exactly what is eligible where had zero callers for as long as they have
 ## existed.
+##
+## Asked of `_credit_kill` rather than of the swing. The body used to live
+## inside `_perform_attack`, which is exactly why the swing was the only
+## verb in the game that paid -- so this test now follows the chain instead
+## of pinning the address, and the test below pins that EVERY verb which
+## deals damage walks it (docs/concept/spell_runtime.md, "A spell is a
+## blow").
 func test_a_kill_is_where_a_mote_comes_from():
-	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
-	var start := source.find("func _perform_attack(")
-	assert_gt(start, 0, "precondition: the swing was found")
-	var rest := source.substr(start)
-	var body := rest.substr(0, rest.find("\nfunc "))
+	var body := _function_body("_credit_kill")
+	assert_false(body.is_empty(), "precondition: the shared credit was found")
 	assert_true(body.contains("MoteDrop.drops("), "a kill must roll for one")
 	assert_true(
 		body.contains("find_mote("),
 		"and hand it over through the one path that also announces it"
 	)
+
+
+## And every way the player deals damage walks that chain. This is the
+## assertion that would have caught the original defect: the roll existed,
+## the grant existed, and only one of the three verbs ever reached them, so
+## a mage could not fill the Weave their own class is built around.
+func test_every_verb_that_kills_pays_through_the_same_credit():
+	for verb in ["_perform_attack", "_apply_cast_step_to", "_resolve_thrown_stone_impact"]:
+		var body := _function_body(verb)
+		assert_false(body.is_empty(), "precondition: %s was found" % verb)
+		assert_true(
+			body.contains("_credit_kill("),
+			"%s kills things, so %s must pay for them" % [verb, verb]
+		)
+
+
+## The body of one function in scenes/player.gd, up to the next one. Reading
+## a fixed window of characters instead trips over the doc comment of
+## whatever follows -- a trap this repo has fallen into twice.
+func _function_body(name: String) -> String:
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	var start := source.find("func %s(" % name)
+	if start < 0:
+		return ""
+	var rest := source.substr(start)
+	var next := rest.find("\nfunc ")
+	return rest if next < 0 else rest.substr(0, next)
 
 
 ## The grant is the same one the witness layer uses, so a found atom and a

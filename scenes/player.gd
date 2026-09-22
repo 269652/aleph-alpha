@@ -3413,6 +3413,7 @@ func _perform_attack() -> void:
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)
 	for index in hit_indices:
 		var creature: CreatureMarker = creatures[index]
+		var health_before := _damageable_health_of(creature)
 		var knockback := _melee_attack.knockback_vector(
 			position, creature.position, _knockback_force_for(_held_weapon())
 		)
@@ -3425,27 +3426,11 @@ func _perform_attack() -> void:
 		# a lynx was completely silent.
 		answer("attack", {"damage": damage})
 		_wear_equipped_item()  # a real connecting hit, see docs/concept/item_durability.md
-		# A hit that kills the creature awards XP scaled by its level (see
-		# ExperienceTrack / concept/progression.md).
-		if creature.is_queued_for_deletion() and creature.info != null:
-			# What the kill teaches a spellwright, if anything
-			# (docs/concept/spell_weaving.md). A mote is a souvenir of
-			# something that nearly killed you, so the odds are the
-			# species' own threat and the eligible set is the ground it
-			# died on. Rolled from the kill's POSITION, the same spatial
-			# hash every other one-time world roll here uses, so the same
-			# kill always leaves the same thing.
-			find_mote(MoteDrop.drops(
-				creature.info.species, _journey_ring_index(), _mote_seed_at(creature.position)
-			))
-			var gained := XP_PER_KILL * creature.info.level
-			var levels := gain_experience(gained)
-			answer("xp_gain", {"xp": gained})
-			# gain_experience has always RETURNED the levels it granted and
-			# all three of its callers threw that away, which is why a
-			# level-up was a silent change to a corner label.
-			if levels > 0:
-				answer("level_up", {"level": experience.level})
+		# A hit that kills the creature pays -- and it pays through the one
+		# shared door, so the swing is not the only verb in the game that
+		# is worth anything (docs/concept/spell_runtime.md, "A spell is a
+		# blow").
+		_credit_kill(creature, health_before)
 
 	_chop_step()
 	_smash_step()
@@ -3723,7 +3708,6 @@ func cast_woven() -> bool:
 		return false
 	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
-	answer("cast", {})
 	# The same resolution an authored spell gets -- one pipeline, one
 	# executor, no second path for a player-made spell.
 	#
@@ -3736,10 +3720,15 @@ func cast_woven() -> bool:
 	# their arrangement mattered and the cast never asked.
 	var reaction := SpellDraft.reaction_multiplier(_woven_draft)
 	var delivery := _spell_executor.delivery_for(rule)
+	var dealt := 0.0
 	for step in rule.get("pipeline", []):
 		var scaled: Dictionary = step.duplicate()
 		scaled["params"] = SpellDraft.scaled_params(step.get("params", {}), reaction)
-		_apply_cast_step(scaled, delivery)
+		dealt += _apply_cast_step(scaled, delivery)
+	# Answered AFTER the pipeline, not before it, so the number it carries
+	# is what the weave really took off. It used to answer `{}` up front,
+	# which floated nothing over a spell that had not resolved yet.
+	answer("cast", {"damage": dealt} if dealt > 0.0 else {})
 	return true
 
 
@@ -3783,8 +3772,15 @@ func cast_spell(spell_id: String) -> bool:
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 
 	var delivery := _spell_executor.delivery_for(rule)
+	var dealt := 0.0
 	for step in rule.get("pipeline", []):
-		_apply_cast_step(step, delivery)
+		dealt += _apply_cast_step(step, delivery)
+	# A swing that lands puts a number on the thing it hit; a cast that
+	# lands must too, or a spell that hit and a spell that whiffed look
+	# identical (docs/concept/feedback.md). The Answerback table has had a
+	# `cast` row since it was written and nothing ever raised it.
+	if dealt > 0.0:
+		answer("cast", {"damage": dealt})
 	return true
 
 
@@ -3795,27 +3791,107 @@ func cast_spell(spell_id: String) -> bool:
 ## visual only, see spell_runtime.md). Everything else routes through
 ## SpellAtomEffects against whatever SpellTargeting resolves for the rule's
 ## delivery method.
-func _apply_cast_step(step: Dictionary, delivery: String) -> void:
+## Returns the health this step actually removed from the world, summed
+## across everything it touched -- so a cast can answer with a real number
+## the way a swing does (docs/concept/feedback.md).
+func _apply_cast_step(step: Dictionary, delivery: String) -> float:
 	var atom_id: String = step.get("atom", "")
 	var params: Dictionary = step.get("params", {})
 
 	if atom_id == "accelerate_growth":
 		_cast_accelerate_growth(params)
-		return
+		return 0.0
 	if atom_id == "reveal":
 		_cast_reveal(params)
-		return
+		return 0.0
 	if atom_id == "portal" or atom_id == "induce_mutation":
-		return
+		return 0.0
 
 	var target = _resolve_cast_target(delivery)
+	var dealt := 0.0
 	if target is Array:
 		for one in target:
-			if _spell_atom_effects.apply_to_target(atom_id, params, one, position, _last_facing_direction):
-				_spawn_spell_effect(atom_id, one.position)
+			dealt += _apply_cast_step_to(atom_id, params, one)
 	else:
-		if _spell_atom_effects.apply_to_target(atom_id, params, target, position, _last_facing_direction):
-			_spawn_spell_effect(atom_id, target.position if target != null else position)
+		dealt += _apply_cast_step_to(atom_id, params, target)
+	return dealt
+
+
+## One atom against one target: the blow, the effect it throws, and -- when
+## this was the blow that felled it -- the credit. `self` is handed to
+## SpellAtomEffects so damage goes through `struck_by` and the thing turns
+## on its caster; see docs/concept/spell_runtime.md, "A spell is a blow".
+func _apply_cast_step_to(atom_id: String, params: Dictionary, one) -> float:
+	var health_before := _damageable_health_of(one)
+	if not _spell_atom_effects.apply_to_target(
+		atom_id, params, one, position, _last_facing_direction, self
+	):
+		return 0.0
+	_spawn_spell_effect(atom_id, one.position if one != null else position)
+	_credit_kill(one, health_before)
+	return maxf(0.0, health_before - _damageable_health_of(one))
+
+
+## What a kill is worth, wherever the killing blow came from
+## (docs/concept/spell_runtime.md, "A spell is a blow"). This body lived
+## inside `_perform_attack` and had no other caller, which made the sword
+## the only verb in the game that paid: a creature burned to death by a
+## spell levelled nobody and left nothing, and the mage -- the one class
+## the Weave exists for -- was the one character whose own kills could not
+## fill it.
+##
+## `health_before` is what the target had when the blow was thrown, and it
+## is the guard against paying twice: a pipeline's second atom lands on
+## something already dead, and only the atom that found it ALIVE may claim
+## the kill.
+##
+## Asks `_death_has_begun()` rather than `is_queued_for_deletion()`. A
+## species with death art sets `_dying` and collapses for a handful of
+## steps before the node is ever queued, so the old question would have
+## silently stopped paying the day that art landed.
+func _credit_kill(creature, health_before: float) -> void:
+	if creature == null or not is_instance_valid(creature):
+		return
+	if health_before <= 0.0:
+		return
+	if not creature.has_method("_death_has_begun") or not creature._death_has_begun():
+		return
+	if creature.info == null:
+		return
+	# What the kill teaches a spellwright, if anything
+	# (docs/concept/spell_weaving.md). A mote is a souvenir of something
+	# that nearly killed you, so the odds are the species' own threat and
+	# the eligible set is the ground it died on. Rolled from the kill's
+	# POSITION, the same spatial hash every other one-time world roll here
+	# uses, so the same kill always leaves the same thing -- and so the
+	# same animal on the same ground leaves the same thing whether a sword
+	# or a spell felled it.
+	find_mote(MoteDrop.drops(
+		creature.info.species, _journey_ring_index(), _mote_seed_at(creature.position)
+	))
+	var gained: int = XP_PER_KILL * creature.info.level
+	var levels: int = gain_experience(gained)
+	answer("xp_gain", {"xp": gained})
+	# gain_experience has always RETURNED the levels it granted and all
+	# three of its callers threw that away, which is why a level-up was a
+	# silent change to a corner label.
+	if levels > 0:
+		answer("level_up", {"level": experience.level})
+
+
+## How much life a thing has right now, asked the same way of a creature
+## (whose health lives on its `info`) and of anything else with a plain
+## `health`. Used to measure what a blow actually removed, so the number a
+## cast reports is the one the world really lost rather than the one the
+## atom hoped for -- mitigation, armour and a shield all land in between.
+func _damageable_health_of(target) -> float:
+	if target == null or not is_instance_valid(target):
+		return 0.0
+	if target is CreatureMarker:
+		return target.info.health if target.info != null else 0.0
+	if target is Player:
+		return target.health
+	return 0.0
 
 
 ## The procedural VFX (see docs/concept/magic.md's atom-effects section) --
@@ -4487,8 +4563,14 @@ func _resolve_thrown_stone_impact(landing_position: Vector2, momentum: float) ->
 		var knockback := _melee_attack.knockback_vector(
 			landing_position, creature.position, _knockback_force_for_momentum(momentum)
 		)
-		creature.apply_knockback(knockback)
-		creature.take_damage(THROWN_STONE_BASE_DAMAGE)
+		# One call, the same door the swing uses: it shoves, it damages, and
+		# it makes the creature aware of who threw the thing
+		# (docs/concept/spell_runtime.md, "A spell is a blow" -- the rule is
+		# about any damage the player deals, not only a spell). Before this
+		# a stone drew blood and the animal never knew a fight had started.
+		var health_before := _damageable_health_of(creature)
+		creature.struck_by(self, THROWN_STONE_BASE_DAMAGE, knockback)
+		_credit_kill(creature, health_before)
 
 
 ## Delivers `momentum` to any CollapsedPassage obstacle (docs/concept/

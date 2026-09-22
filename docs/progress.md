@@ -23,6 +23,87 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Towards a playable fight (2026-09-22) — see `concept/spell_runtime.md`, `concept/combat.md`
+
+Asked directly: *"Flesh out the magic; monsters; spells and fights towards a
+playable state"*.
+
+**Audited first**, across seven parallel readers over the spell runtime, the
+Weave, the monster roster, the fight loop, status effects, progression and
+the cold-start player experience — 76 gaps, then synthesised into a ranked
+plan whose top findings were re-verified rather than trusted. The verdict:
+*a great many correct, tested combat modules wired almost none of them to
+each other.* Two measurements under it, both taken by driving the real code:
+
+1. **The fight is over before it starts.** A default warrior deals 13.6 per
+   swing on a 0.5 s cooldown into a 29 HP wolf — three swings, 1.5 s — while
+   `Dodge.COOLDOWN_DURATION` is 1.5 s and a bear's rear-up is 0.90 s. The
+   telegraph, the windup freeze, the i-frames, the reach asymmetry: all
+   real, all tested, none of them ever gets a turn.
+2. **Levelling makes a creature spongier, never deadlier.**
+   `CreatureMarker.bite_damage()` reads `info.species` and never
+   `info.level`, so a level-10 wolf has **3.2× the health and the identical
+   6-damage bite**. Measured across the roster: you kill a level-1 wolf
+   11.3× faster than it kills you, and at level 10 still 3.5×. Harder
+   ground is not more dangerous, only chewier — which is precisely the
+   danger gradient the journey rings exist to build.
+
+- ✅ **A spell is a blow** (2026-09-22) — see `concept/spell_runtime.md`'s
+  rule of that name and `concept/spell_weaving.md`.
+
+  `CreatureMarker.struck_by` is the door a blow comes through: it takes the
+  damage, records the attacker, and sets `is_aggroed`. `take_damage` does
+  only the first. **`struck_by` had exactly one caller in the whole game**
+  — the melee swing — so every other way the player dealt damage went
+  through the door the world does not notice.
+
+  **Measured:** a caster could stand inside `SpellTargeting.TOUCH_RANGE` of
+  anything on the roster and tap the cast key until it died, and it never
+  turned on them, paid **no XP**, and left **no mote**. Not a weaker attack
+  — a different kind of act, with no risk and no reward. And because the
+  award sat inside `_perform_attack`, the **mage was the one character whose
+  own kills could not fill the Weave their class is built around**, while
+  `spell_weaving.md`'s own "how many kills fill a Weave" arithmetic assumed
+  they did. A thrown stone had the same hole: it drew blood and shoved, and
+  the animal never learned a fight had started.
+
+  `SpellAtomEffects.apply_to_target` now takes the caster and prefers
+  `struck_by`; the credit is a shared `_credit_kill(creature, health_before)`
+  that the swing, the cast and the stone all call. Three details that are
+  not incidental:
+
+  - **Force is `Vector2.ZERO`.** Knockback stays the business of the
+    `push`/`pull`/`gravity_shift` atoms, which ask for it by name. Any force
+    here would shove a braced animal mid-windup and re-open the unloseable
+    fight `apply_knockback`'s guard exists to close.
+  - **`health_before` is the guard against paying twice.** A pipeline's
+    second atom lands on something already dead; only the atom that found it
+    alive may claim the kill.
+  - **The credit asks `_death_has_begun()`, not `is_queued_for_deletion()`.**
+    A species with death art sets `_dying` and collapses for several steps
+    before the node is queued, so the old question would have silently
+    stopped paying melee the day that art landed — a latent bug fixed by
+    being hoisted.
+
+  A landed cast also **answers with what it really took off** — measured as
+  health actually removed, so armour, block and a shield are all inside the
+  number. The `cast` row has been in the Answerback table since it was
+  written and nothing ever raised it; `cast_woven` raised `{}` *before* its
+  pipeline ran, floating nothing over a spell that had not resolved.
+
+  A drift test was re-pointed rather than deleted: `test_mote_drop.gd`
+  asserted the roll lived inside `_perform_attack`, which is exactly why the
+  swing was the only verb that paid. It now follows the chain, and a new
+  test pins that **every** verb dealing damage walks it.
+
+  Tests: `test_spell_kill_credit.gd` 7 (new), `test_mote_drop.gd` 17,
+  `test_battle_loop.gd` 8, `test_spell_atom_effects.gd` 13,
+  `test_player_spell_weaving.gd` 20, `test_player_spell_slots.gd` 10,
+  `test_creature_marker.gd` 293, `test_player_collapsed_passage.gd` 3,
+  `test_reaction_multiplier_lands.gd` 9, and `test_player.gd` filters
+  `damage` 10 / `hurt` 2 / `health` 3 / `venom` 5 / `mana` 13 / `spell` 14 /
+  `xp` 13 — green, on a clean boot.
+
 ### The gameplay overhaul (2026-09-20) — see `concept/errands.md`, `concept/survival.md`
 
 Asked directly, after the game was shown to someone who was not impressed:

@@ -424,3 +424,12 @@ holds both halves of pillar 6 at once.
 
   A world that has not decided where home is yields nothing rather than
   pretending the origin is the hearth. Tested (`test_mote_drop.gd`, 16).
+
+  **Any kill by the player pays — not just a kill by the sword.** The
+  arithmetic above assumes it: `MAX_SOCKETS / MAX_DROP_CHANCE` is "how many
+  kills fill a Weave", and a kill is a kill. Until 2026-09-22 the award sat
+  inside `_perform_attack`, so only melee paid, and the class the Weave
+  exists for — a mage, who kills with spells — was the one character whose
+  kills fed it nothing. The credit now lives in a shared `_credit_kill` that
+  both the swing and the cast call (see
+  [spell_runtime.md](spell_runtime.md)'s *A spell is a blow*).

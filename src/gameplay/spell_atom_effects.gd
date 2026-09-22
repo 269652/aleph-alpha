@@ -47,11 +47,17 @@ const _STATUS_ATOMS := {
 var _catalog := SpellAtomCatalog.new()
 
 
-func apply_to_target(atom_id: String, params: Dictionary, target, caster_position: Vector2, facing_direction: Vector2) -> bool:
+## `attacker` is who is doing this, and it is not decoration: damage routes
+## through `target.struck_by(attacker, amount)` where the target has that
+## method, which is the door that also makes the target ANGRY at whoever
+## came through it (docs/concept/spell_runtime.md, "A spell is a blow").
+## Left null -- a witness phenomenon, a test, a world effect with no author
+## -- damage falls back to plain `take_damage` exactly as before.
+func apply_to_target(atom_id: String, params: Dictionary, target, caster_position: Vector2, facing_direction: Vector2, attacker: Node = null) -> bool:
 	if target == null:
 		return false
 	if _DAMAGE_ATOMS.has(atom_id):
-		return _apply_damage(atom_id, params, target)
+		return _apply_damage(atom_id, params, target, attacker)
 	if _HEAL_ATOMS.has(atom_id):
 		return _apply_heal(atom_id, params, target)
 	if _FORCE_ATOMS.has(atom_id):
@@ -80,10 +86,23 @@ func _duration(atom_id: String, params: Dictionary) -> float:
 	return float(params.get("duration", reference))
 
 
-func _apply_damage(atom_id: String, params: Dictionary, target) -> bool:
+## The door matters more than the number. `struck_by` takes the damage AND
+## records the attacker AND aggroes; `take_damage` does only the first, so a
+## spell that called it hurt a creature without the creature ever noticing
+## who did it -- magic as an exploit rather than a fight.
+##
+## Force is deliberately ZERO. Knockback stays the business of the
+## push/pull/gravity_shift atoms, which ask for it by name, and passing any
+## force here would shove a braced animal mid-windup and re-open the
+## unloseable fight that `apply_knockback`'s own guard exists to close.
+func _apply_damage(atom_id: String, params: Dictionary, target, attacker: Node = null) -> bool:
+	var amount := _magnitude(atom_id, params)
+	if attacker != null and target.has_method("struck_by"):
+		target.struck_by(attacker, amount, Vector2.ZERO)
+		return true
 	if not target.has_method("take_damage"):
 		return false
-	target.take_damage(_magnitude(atom_id, params))
+	target.take_damage(amount)
 	return true
 
 
