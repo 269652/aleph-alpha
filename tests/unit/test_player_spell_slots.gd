@@ -65,17 +65,20 @@ func test_the_selection_starts_on_the_first_spell_you_know():
 
 
 func test_pressing_a_slot_casts_that_spell_and_selects_it():
-	player._known_spell_ids.append("frost_lance")
-	assert_eq(player.spell_in_slot(1), "frost_lance", "precondition: it reached the row")
-	assert_true(player.cast_spell_slot(1), "the key really casts")
+	# The slot it lands in is DERIVED, not assumed to be 1. These two tests
+	# hardcoded index 1 back when the starting hand held a single spell, and
+	# went red the day it learned to teach more than one delivery
+	# (docs/concept/magic.md) -- for a reason with nothing to do with slots.
+	var slot := _slot_of_a_newly_learned("frost_lance")
+	assert_eq(player.spell_in_slot(slot), "frost_lance", "precondition: it reached the row")
+	assert_true(player.cast_spell_slot(slot), "the key really casts")
 	assert_eq(player.selected_spell_id(), "frost_lance", "and it stays loaded")
 
 
 ## And the cast key then repeats that choice -- the deliberate act and the
 ## quick one are the same act.
 func test_the_cast_key_repeats_the_selection():
-	player._known_spell_ids.append("frost_lance")
-	player.cast_spell_slot(1)
+	player.cast_spell_slot(_slot_of_a_newly_learned("frost_lance"))
 	var before: float = player.mana
 	player.mana = player.max_mana
 	assert_true(player.cast_held())
@@ -137,3 +140,12 @@ func test_every_spell_slot_has_a_key_of_its_own():
 func test_every_spell_key_answers():
 	for index in player.spell_slot_count():
 		assert_true(Answerback.has_feedback("spell_%d" % (index + 1)))
+
+
+## Teaches `spell_id` and says which slot of the bar it landed in. The row
+## is the Nth entry of known_spell_ids(), so a spell just appended sits at
+## the end of it -- asked rather than assumed, so widening the starting hand
+## again cannot make these tests lie.
+func _slot_of_a_newly_learned(spell_id: String) -> int:
+	player._known_spell_ids.append(spell_id)
+	return player.known_spell_ids().size() - 1

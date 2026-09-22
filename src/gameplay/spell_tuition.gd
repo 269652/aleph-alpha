@@ -44,7 +44,26 @@ const Shop = preload("res://src/gameplay/shop.gd")
 ## the cast key to -- a character who cannot cast the spell the game binds
 ## to their own cast button is a bug, not a gate (pinned by
 ## test_the_starting_set_contains_whatever_the_cast_key_is_bound_to).
-const STARTING_SPELL_IDS: Array[String] = ["fire_bolt"]
+##
+## ONE SPELL PER DELIVERY, which is the whole shape of it
+## (docs/concept/magic.md). It was `["fire_bolt"]` alone, and Fire Bolt is
+## `cast(touch)`: TOUCH_RANGE is 24 px against the sword's ATTACK_RANGE of
+## 20, so **nothing a normal player could cast reached further than a
+## sword**. A mage traded 15 max_health for the privilege of standing
+## inside a bear's windup, and the three authored projectile spells were
+## reachable only through the `/learn` dev console.
+##
+## So the hand teaches the three verbs a caster has, rather than the same
+## verb once:
+##
+##   fire_bolt   cast(touch)       the jab, in reach of the sword
+##   spark       cast(projectile)  the reason to be a caster at all -- 120 px
+##   minor_heal  cast(self)        the answer to having been hit
+##
+## Three, not four: the bar is four slots wide and the empty one is where
+## the first spell a guild teaches lands, so a player can see that the row
+## grows.
+const STARTING_SPELL_IDS: Array[String] = ["fire_bolt", "spark", "minor_heal"]
 
 ## The structure that has to be standing within reach, and the one
 ## settlement_charter.gd gates at CITY tier. Named here rather than inlined

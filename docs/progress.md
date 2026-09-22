@@ -48,6 +48,50 @@ each other.* Two measurements under it, both taken by driving the real code:
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
 
+- ✅ **Magic gets range: a starting hand that is not all touch**
+  (2026-09-22) — see `concept/magic.md`.
+
+  `SpellTuition.STARTING_SPELL_IDS` was `["fire_bolt"]`, and Fire Bolt is
+  `cast(touch)`: `SpellTargeting.TOUCH_RANGE` is **24 px** against the
+  sword's `ATTACK_RANGE` of **20**. So **nothing a normal player could cast
+  reached further than a sword**, ever. The mage trades 15 `max_health` for
+  their frailty and bought, with it, the privilege of standing inside a
+  bear's windup. Three projectile spells (`spark`, `frost_lance`,
+  `cinder_lash`) were authored, parsed, priced and tested — and reachable
+  only through the `/learn` dev console.
+
+  The hand now teaches the three verbs a caster has rather than the same
+  verb three times: `fire_bolt` (touch, the jab), `spark` (projectile,
+  **120 px**, five times the sword), `minor_heal` (self, the answer to
+  having been hit). Three and not four, so the empty fourth slot is visibly
+  where the first spell a guild teaches will land.
+
+  Pinned **by rule rather than by list**, so the hand can be retuned without
+  the tests becoming a second opinion: it must reach further than a sword,
+  teach more than one delivery, and be castable from the pool a new mage is
+  really born with — the class lens plus the start node the web hands them
+  free, composed from the game's own constants.
+
+  **Widening it broke fourteen tests in two suites, and both were brittle
+  for the same reason**: `test_spell_tuition.gd` had named `minor_heal` as
+  its example of "a spell you do not know", and `test_player_spell_slots.gd`
+  assumed a newly learned spell lands in slot 1 — true only while the hand
+  held exactly one spell. Both now *derive* what they need (the first
+  catalogue entry outside the starting hand; the row's own last index)
+  rather than naming it, so the next change to the hand cannot do this
+  again.
+
+  A stale claim in `concept/magic.md` was corrected in the same pass: its
+  Status still said *"no spell-selection UI, so the cast key still casts
+  `DEFAULT_CAST_SPELL_ID`"*, which shipped away on 2026-09-21.
+
+  Tests: `test_spell_tuition.gd` 46, `test_player_spell_slots.gd` 10, and an
+  11-suite batch over the magic side — `test_world_spell_hud`,
+  `test_spell_book`, `test_spell_executor`, `test_spell_targeting`,
+  `test_battle_loop`, `test_spell_kill_credit`, `test_player_spell_weaving`,
+  `test_spell_schools`, `test_combat_pacing`, `test_player_persistence`,
+  `test_mage_guild_roster` — **202 passing, zero failures**, clean boot.
+
 - ✅ **The exchange lasts long enough to use the mechanics built for it**
   (2026-09-22) — see `concept/combat.md`, which had no numeric half at all
   until this slice and now has one.
