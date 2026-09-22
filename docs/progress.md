@@ -287,7 +287,20 @@ each other.* Two measurements under it, both taken by driving the real code:
   swing was the only verb that paid. It now follows the chain, and a new
   test pins that **every** verb dealing damage walks it.
 
-  Tests: `test_spell_kill_credit.gd` 7 (new), `test_mote_drop.gd` 17,
+  **A green test that checked nothing, caught on the merge to `main`.**
+  GUT reported `test_the_sword_and_the_spell_leave_exactly_the_same_mote`
+  as **"did not assert"**: it killed two wolves wherever they stood and
+  compared the pouches, but a wolf's drop chance is its threat scaled
+  against the roster's peak — about one ground in twelve — so both kills
+  rolled nothing and the comparison loop never executed. Choosing yielding
+  ground in advance does not fix it either: the mote is seeded from where
+  the creature **dies**, and a sword *shoves* it, so a melee kill credits
+  at the post-knockback position while a spell (zero force by design)
+  leaves it where it stands. The test now kills with the sword first, reads
+  where the wolf actually fell, and stages the spell kill on that same
+  ground — the only arrangement in which the two rolls are the same roll.
+
+  Tests: `test_spell_kill_credit.gd` 8 (new), `test_mote_drop.gd` 17,
   `test_battle_loop.gd` 8, `test_spell_atom_effects.gd` 13,
   `test_player_spell_weaving.gd` 20, `test_player_spell_slots.gd` 10,
   `test_creature_marker.gd` 293, `test_player_collapsed_passage.gd` 3,

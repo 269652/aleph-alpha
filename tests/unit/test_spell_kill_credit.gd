@@ -25,6 +25,7 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
+const MoteDrop = preload("res://src/gameplay/mote_drop.gd")
 
 var player
 var creatures_parent: Node2D
@@ -186,35 +187,76 @@ func test_the_sword_and_the_spell_pay_exactly_the_same_for_the_same_animal():
 ## And the mote, which is the whole Magicraft supply loop
 ## (docs/concept/spell_weaving.md). Asserted as the same invariant so it
 ## cannot be satisfied by a spell kill that merely rolls its own odds.
+##
+## Two things make this awkward, and a first version of the test was caught
+## by both.
+##
+## It killed two wolves wherever they happened to stand and compared the
+## pouches -- and a wolf's drop chance is its threat scaled against the
+## roster's peak, about one ground in twelve. Both kills rolled nothing, the
+## comparison loop never executed, and GUT reported the test as **"did not
+## assert"**: a green test that checked nothing.
+##
+## Choosing yielding ground in advance does not fix it either, because the
+## mote is seeded from where the creature DIES and a sword SHOVES it: the
+## melee kill credits at the post-knockback position, so a wolf beaten
+## across the clearing dies on ground nobody chose. A spell carries zero
+## force by design and leaves it where it stands.
+##
+## So the sword goes first and the test reads where the wolf actually fell;
+## the spell kill is then staged on that same ground, which is the only way
+## the two rolls are the same roll.
 func test_the_sword_and_the_spell_leave_exactly_the_same_mote():
 	await get_tree().process_frame
 
-	var by_sword = _creature_at("wolf", IN_REACH)
-	_face(by_sword)
-	for _i in 60:
-		if by_sword.info == null or by_sword._death_has_begun():
+	var died_at := Vector2.ZERO
+	var sword_gained := {}
+	for attempt in range(1, 40):
+		var offset := Vector2(float(attempt % 17) + 6.0, float(attempt) * 3.0)
+		var by_sword = _creature_at("wolf", offset)
+		_face(by_sword)
+		var before: Dictionary = player.motes()
+		for _i in 60:
+			if by_sword.info == null or by_sword._death_has_begun():
+				break
+			player._attack_cooldown_remaining = 0.0
+			player._perform_attack()
+		# Where it FELL, which is what the roll was seeded from.
+		died_at = by_sword.position
+		sword_gained = _gained_since(before)
+		await get_tree().process_frame
+		if not sword_gained.is_empty():
 			break
-		player._attack_cooldown_remaining = 0.0
-		player._perform_attack()
-	var after_sword: Dictionary = player.motes()
-	await get_tree().process_frame
 
-	var by_spell = _creature_at("wolf", IN_REACH)
+	assert_false(
+		sword_gained.is_empty(),
+		"precondition: in forty kills the sword left at least one mote"
+	)
+	if sword_gained.is_empty():
+		return
+
+	# The spell kill, staged on the ground the sword kill actually died on.
+	var by_spell = _creature_at("wolf", died_at - player.position)
 	_face(by_spell)
+	var spell_before: Dictionary = player.motes()
 	_burn_down(by_spell)
-	var after_spell: Dictionary = player.motes()
+	var spell_gained: Dictionary = _gained_since(spell_before)
 
-	# Both kills happen at the same position, and MoteDrop is seeded from
-	# the kill's position -- so the two kills roll the SAME thing, and the
-	# pouch must therefore have gained it twice, or not at all, but never
-	# once.
-	for atom_id in after_spell:
-		var gained: int = int(after_spell[atom_id]) - int(after_sword.get(atom_id, 0))
-		var by_the_sword: int = int(after_sword.get(atom_id, 0))
-		assert_eq(
-			gained, by_the_sword,
-			"the spell kill must leave what the sword kill left (%s)" % atom_id
-		)
+	assert_eq(
+		spell_gained, sword_gained,
+		"the spell kill must leave what the sword kill left on the same ground"
+	)
+
+
+## What the pouch gained since `before`, as atom id -> count.
+func _gained_since(before: Dictionary) -> Dictionary:
+	var gained := {}
+	var now: Dictionary = player.motes()
+	for atom_id in now:
+		var delta: int = int(now[atom_id]) - int(before.get(atom_id, 0))
+		if delta != 0:
+			gained[atom_id] = delta
+	return gained
 
 
 # -- and it answers -------------------------------------------------------
