@@ -73,6 +73,13 @@ const _REAL_MASS_KG := {
 	"sheep": 80.0,
 	"boar": 90.0,
 	"jaguar": 90.0,
+	# Child-sized, in the folklore -- small, and that is the point: it is
+	# not dangerous because it is big.
+	"curupira": 30.0,
+	# Small and hunched; the folklore weight of a thing that sits on a chest.
+	# Light enough that its derived bite is the least of anything that
+	# hunts -- a first draft at 14 kg out-bit a jackal, which a test caught.
+	"alp": 7.0,
 	"reindeer": 150.0,
 	"lion": 180.0,
 	"tapir": 250.0,
@@ -101,6 +108,14 @@ const _FALLBACK_ANCHOR_SPECIES := "deer"
 ## real mass ratios (verified directly -- cubing alone would put a
 ## "horse" under 150kg, nothing like its real ~500kg), so only species
 ## with no real reference at all use this derived approximation.
+## Whether this is a species this world actually knows, as opposed to one
+## `mass_kg_for` would happily estimate from the fallback anatomy profile.
+## Callers that must not invent a creature (LootTable, which would
+## otherwise hand a silent handful of meat to any typo) ask this first.
+static func knows(species: String) -> bool:
+	return _REAL_MASS_KG.has(species)
+
+
 static func mass_kg_for(species: String) -> float:
 	if _REAL_MASS_KG.has(species):
 		return _REAL_MASS_KG[species]

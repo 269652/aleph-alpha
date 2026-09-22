@@ -469,11 +469,63 @@ func has_composite_part(part_name: String) -> bool:
 	return HERO_COMPOSITE_BAND_INDICES.has(part_name)
 
 
-## Which of the 8 pre-colored outfits this hero wears -- deterministic per
+## The outfit rows _composite_frames refuses outright, so nobody is ever
+## dressed in one.
+##
+## Reported live with the village in shot: *"Some NPCs look like proper
+## chars, others have rectangles as legs"*. Row 7 draws its right arm and
+## torso touching, with no dividing column between them, so the row yields
+## the wrong band count and _composite_frames refuses the WHOLE row (see
+## HERO_COMPOSITE_EXPECTED_BAND_COUNT for why refusing beats mis-assigning).
+## Refusing is right. What was wrong is that a villager could be HANDED that
+## row: every caller's has-art-then-fallback check then drew the procedural
+## body and legs, which is the rectangle. Measured at 400 of 3200 class/seed
+## pairs -- an even one in eight (tools/probe_hero_composite_rows.gd).
+##
+## Exactly the shape UNUSABLE_HEAD_CELLS already takes for faces, for the
+## same reported reason ("a rough sketch with a square as head"), and PINNED
+## the same way rather than computed on startup: deciding usability means
+## flood-filling and slicing every row, and the answer is a fact about
+## hero_composite.png that only changes when the art does.
+## test_the_pinned_unusable_outfit_rows_are_exactly_the_ones_the_art_cannot_
+## draw checks it against has_usable_composite_row itself, so it cannot
+## drift from the sheet -- redraw row 7 with a gap between arm and torso and
+## that test fails and says so.
+const UNUSABLE_COMPOSITE_ROWS: Array[int] = [7]
+
+
+## The rows that really draw an outfit -- the sheet's rows minus
+## UNUSABLE_COMPOSITE_ROWS, in order. This is what every outfit pick walks
+## (outfit_variant_for here, HeroAppearance.outfit_variant_for above it);
+## has_usable_composite_row stays the per-row safety net underneath for
+## anything that reaches a row another way, such as a hero saved before the
+## list narrowed.
+static func usable_composite_rows() -> Array[int]:
+	var rows: Array[int] = []
+	for row in range(HERO_COMPOSITE_ROWS):
+		if not UNUSABLE_COMPOSITE_ROWS.has(row):
+			rows.append(row)
+	return rows
+
+
+## Whether this row really slices into art -- the composite counterpart to
+## has_usable_head, asking the one question that decides it: does the body
+## band come back at all? _composite_frames refuses a row whole, so body,
+## arms and legs stand or fall together and one is enough to ask.
+func has_usable_composite_row(row: int) -> bool:
+	return not _composite_frames("body", row, "front").is_empty()
+
+
+## Which of the pre-colored outfits this hero wears -- deterministic per
 ## seed, same "vary by DNA, no new UI" answer skin/hair/eyes already give
 ## (asked directly, unlike head's own real axis -- see HeroAppearance.AXES).
+## Rolled within the rows the art can DRAW, never across all 8.
 func outfit_variant_for(seed_value: int) -> int:
-	return absi(hash("%d_outfit_variant" % seed_value)) % HERO_COMPOSITE_ROWS
+	var rolled := absi(hash("%d_outfit_variant" % seed_value))
+	var usable := usable_composite_rows()
+	if usable.is_empty():
+		return rolled % HERO_COMPOSITE_ROWS  # nothing to prefer; behave as before
+	return usable[rolled % usable.size()]
 
 
 ## The pre-colored texture(s) for one part of one outfit variant -- one

@@ -272,9 +272,9 @@ func test_being_outside_is_reported_before_the_price():
 func test_every_refusal_carries_the_spell_it_is_about():
 	for refusal in [
 		_refusal("not_a_real_spell", _starting(), 100000, _an_empty_guild()),
-		_refusal("minor_heal", _starting(), 100000, _outside()),
+		_refusal(_not_yet_known(), _starting(), 100000, _outside()),
 		_refusal(SpellTuition.STARTING_SPELL_IDS[0], _starting(), 100000, _a_guild_teaching(SpellTuition.STARTING_SPELL_IDS[0])),
-		_refusal("minor_heal", _starting(), 0, _a_guild_teaching("minor_heal")),
+		_refusal(_not_yet_known(), _starting(), 0, _a_guild_teaching(_not_yet_known())),
 	]:
 		assert_eq(refusal.get("spell_id", ""), refusal.get("spell_id", "_"), "")
 		assert_true(refusal.has("spell_id"), "a refusal must name what it refused: %s" % refusal)
@@ -359,12 +359,12 @@ func test_learning_every_teachable_spell_ends_with_the_whole_catalogue():
 # -- somebody has to be home (docs/concept/mage_guild.md mechanism 4) --------
 
 func test_an_empty_guild_teaches_nothing_because_the_building_is_not_the_teacher():
-	var refusal := _refusal("minor_heal", _starting(), 100000, _an_empty_guild())
+	var refusal := _refusal(_not_yet_known(), _starting(), 100000, _an_empty_guild())
 	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
 
 
 func test_a_guild_whose_masters_all_hold_other_traditions_refuses():
-	var wanted := "minor_heal"
+	var wanted := _not_yet_known()
 	var wanted_school: String = SpellSchools.school_of_spell(book, wanted)
 	var stranger := 0
 	for i in 4000:
@@ -378,20 +378,20 @@ func test_a_guild_whose_masters_all_hold_other_traditions_refuses():
 
 ## The sentence that turns a refusal into a reason to travel.
 func test_the_no_master_refusal_names_the_school_and_the_depth_to_go_looking_for():
-	var refusal := _refusal("minor_heal", _starting(), 100000, _an_empty_guild())
-	assert_eq(refusal.get("school", ""), SpellSchools.school_of_spell(book, "minor_heal"))
-	assert_eq(refusal.get("depth", 0), SpellSchools.depth_of_spell(book, "minor_heal"))
+	var refusal := _refusal(_not_yet_known(), _starting(), 100000, _an_empty_guild())
+	assert_eq(refusal.get("school", ""), SpellSchools.school_of_spell(book, _not_yet_known()))
+	assert_eq(refusal.get("depth", 0), SpellSchools.depth_of_spell(book, _not_yet_known()))
 
 
 func test_one_master_of_the_right_tradition_is_enough():
-	var wanted := "minor_heal"
+	var wanted := _not_yet_known()
 	var guild := {"inside": true, "masters": [hash("nobody_in_particular"), _a_master_who_teaches(wanted)]}
 	assert_eq(_refusal(wanted, _starting(), tuition.tuition_for(book, wanted), guild), {})
 
 
 func test_being_outside_is_reported_before_having_no_teacher():
 	# You cannot tell who is in a building you have not walked into.
-	var refusal := _refusal("minor_heal", _starting(), 100000, {"inside": false, "masters": []})
+	var refusal := _refusal(_not_yet_known(), _starting(), 100000, {"inside": false, "masters": []})
 	assert_eq(refusal.get("reason", ""), SpellTuition.OUTSIDE)
 
 
@@ -404,12 +404,12 @@ func test_a_spell_you_already_know_is_refused_before_looking_for_a_teacher():
 func test_having_no_teacher_is_reported_before_the_price():
 	# "Nobody here teaches that" is a better answer than "you are poor"
 	# when both are true, because only one of them is about this guild.
-	var refusal := _refusal("minor_heal", _starting(), 0, _an_empty_guild())
+	var refusal := _refusal(_not_yet_known(), _starting(), 0, _an_empty_guild())
 	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
 
 
 func test_a_landed_lesson_names_the_master_who_gave_it():
-	var wanted := "minor_heal"
+	var wanted := _not_yet_known()
 	var teacher := _a_master_who_teaches(wanted)
 	var result: Dictionary = tuition.learn(
 		book, wanted, _starting(), _wallet(100000), {"inside": true, "masters": [teacher]}
@@ -419,7 +419,7 @@ func test_a_landed_lesson_names_the_master_who_gave_it():
 
 
 func test_a_refused_lesson_names_no_master():
-	var result: Dictionary = tuition.learn(book, "minor_heal", _starting(), _wallet(100000), _outside())
+	var result: Dictionary = tuition.learn(book, _not_yet_known(), _starting(), _wallet(100000), _outside())
 	assert_false(result["ok"])
 	assert_eq(result["teacher"], 0)
 
@@ -436,3 +436,87 @@ func test_what_a_guild_offers_is_what_its_masters_teach_minus_what_you_know():
 
 func test_an_empty_guild_offers_nothing():
 	assert_eq(tuition.offers_at(book, _starting(), []), [])
+
+
+# -- the hand a caster is dealt (docs/concept/magic.md) --------------------
+
+## Measured before this section existed: `STARTING_SPELL_IDS` was
+## `["fire_bolt"]` and Fire Bolt is `cast(touch)` -- `SpellTargeting`'s
+## TOUCH_RANGE is 24 px against `Player.ATTACK_RANGE` of 20. So **nothing a
+## normal player could cast reached further than a sword**, ever, and the
+## mage traded 15 max_health for the privilege of standing inside a bear's
+## windup to use it. Three projectile spells were authored, parsed, priced
+## and tested, and reachable only through the `/learn` dev console.
+func test_the_starting_hand_reaches_further_than_a_sword():
+	var reaches := false
+	for spell_id in SpellTuition.STARTING_SPELL_IDS:
+		if _delivery_of(spell_id) == "projectile":
+			reaches = true
+	assert_true(
+		reaches,
+		"a caster who can only touch has bought nothing with their frailty"
+	)
+
+
+## And the hand teaches more than one verb. A starting set that is three
+## projectiles is the same lesson three times; the point of the bar is that
+## the slots differ.
+func test_the_starting_hand_teaches_more_than_one_delivery():
+	var deliveries := {}
+	for spell_id in SpellTuition.STARTING_SPELL_IDS:
+		deliveries[_delivery_of(spell_id)] = true
+	assert_gt(
+		deliveries.size(), 1,
+		"the starting hand must teach more than one way to deliver a spell"
+	)
+
+
+## Every one of them affordable from the pool a mage is actually born with,
+## or the hand is a tease. Driven from the real class lens plus the real
+## start node rather than a number typed here.
+func test_every_starting_spell_is_castable_from_a_new_mages_own_pool():
+	var pool: float = _new_mage_pool()
+	assert_gt(pool, 0.0, "precondition: a mage is born with mana")
+	var executor := SpellExecutor.new()
+	for spell_id in SpellTuition.STARTING_SPELL_IDS:
+		var ast = book.ast_for(spell_id)
+		assert_true(ast != null, "precondition: %s is in the catalogue" % spell_id)
+		var rule = executor.cast_rule(ast)
+		assert_lt(
+			executor.cost_for(rule, 0.0), pool,
+			"%s must be castable by the character who starts with it" % spell_id
+		)
+
+
+const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
+const SkillWeb = preload("res://src/gameplay/skill_web.gd")
+
+
+## What a freshly made mage's pool really is: the class lens plus the start
+## node the web hands them free (see concept/skill_payoff.md -- three of the
+## seven classes start on a `max_mana` node).
+func _new_mage_pool() -> float:
+	var lens: float = float(ClassArchetype.new().stats_for("mage").get("max_mana", 0.0))
+	var web := SkillWeb.new()
+	return lens + web.total_bonus("max_mana", {web.start_node_for("mage"): true}, {}, 0)
+
+
+func _delivery_of(spell_id: String) -> String:
+	var ast = book.ast_for(spell_id)
+	if ast == null:
+		return ""
+	var executor := SpellExecutor.new()
+	return executor.delivery_for(executor.cast_rule(ast))
+
+
+## A spell this caster genuinely does not know, taken from the catalogue
+## rather than named. A first draft of the tests below hardcoded
+## "minor_heal", which stopped being unknown the day the starting hand
+## learned to teach more than one delivery (docs/concept/magic.md) -- twelve
+## tests went red at once for a reason that had nothing to do with tuition.
+## Derived, so the next change to the starting hand cannot do it again.
+func _not_yet_known() -> String:
+	for spell_id in book.known_ids():
+		if not SpellTuition.STARTING_SPELL_IDS.has(spell_id):
+			return spell_id
+	return ""

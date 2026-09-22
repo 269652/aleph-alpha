@@ -353,3 +353,25 @@ func test_the_hide_is_butcherings_own_first_part():
 	# Not a second opinion about what comes off a carcass first -- the
 	# same id, so a rename can never leave the two disagreeing.
 	assert_eq(HuntableQuarry.HIDE_ITEM_ID, Butchering.PART_ORDER[0])
+
+
+## A hunter carries home what the animal really was, not a flat two
+## steaks: the same species-derived cut a player butchering that very
+## carcass gets (docs/concept/carrion.md).
+func test_a_heavier_species_carries_more_meat_home():
+	assert_gt(
+		HuntableQuarry.meat_yield_of(_creature_of_species("bear")),
+		HuntableQuarry.meat_yield_of(_creature_of_species("squirrel"))
+	)
+
+
+func test_the_hunters_cut_is_the_butchers_own_species_cut():
+	var deer := _deer_of_mass(1.0)
+	assert_eq(HuntableQuarry.meat_yield_of(deer), Butchering.meat_count(0.0, 1.0, "deer"))
+
+
+func _creature_of_species(species: String) -> MassiveCreature:
+	var animal := MassiveCreature.new()
+	animal.info.species = species
+	animal.mass_kg = CreatureMass.mass_kg_for(species)
+	return animal

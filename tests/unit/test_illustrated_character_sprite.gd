@@ -768,3 +768,77 @@ func test_the_usable_head_cells_are_the_grid_minus_the_broken_ones():
 	)
 	for broken in IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS:
 		assert_false(usable.has(broken), "cell %d is broken and must not be offered" % broken)
+
+
+# -- the outfit rows the art cannot draw ------------------------------------
+#
+# Reported live with the village in shot: *"Some NPCs look like proper
+# chars, others have rectangles as legs"*. Measured
+# (tools/probe_hero_composite_rows.gd):
+#
+#     row 0..6  arms=2 body=1 legs=5   usable
+#     row 7     arms=0 body=0 legs=0   REFUSED -> procedural rectangle
+#     villagers handed a refused row: 400 of 3200 (12.5%)
+#
+# _composite_frames refuses a WHOLE row whose real band count is not
+# HERO_COMPOSITE_EXPECTED_BAND_COUNT -- on row 7 the right arm and torso are
+# drawn touching, so there is no dividing column and every fixed index after
+# the merge would address the wrong art. Refusing is right; what was wrong is
+# that a villager could be HANDED that row at all, and then every caller's
+# has-art-then-fallback check drew the procedural body and legs instead.
+#
+# Exactly the shape UNUSABLE_HEAD_CELLS already fixed for faces, and for the
+# same reported reason ("a rough sketch with a square as head") -- one in
+# eight instead of one in five.
+
+
+func test_the_pinned_unusable_outfit_rows_are_exactly_the_ones_the_art_cannot_draw():
+	var measured: Array[int] = []
+	for row in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
+		if not sprite.has_usable_composite_row(row):
+			measured.append(row)
+	assert_eq(
+		measured, IllustratedCharacterSprite.UNUSABLE_COMPOSITE_ROWS,
+		"UNUSABLE_COMPOSITE_ROWS must match what the sheet really slices"
+	)
+
+
+## The usable list is the rows minus the broken ones -- and it is what every
+## outfit pick walks, so it must never be empty or contain a broken row.
+func test_the_usable_outfit_rows_are_the_rows_minus_the_broken_ones():
+	var usable := IllustratedCharacterSprite.usable_composite_rows()
+	assert_false(usable.is_empty(), "every villager would wear the procedural rig")
+	assert_eq(
+		usable.size(),
+		IllustratedCharacterSprite.HERO_COMPOSITE_ROWS - IllustratedCharacterSprite.UNUSABLE_COMPOSITE_ROWS.size()
+	)
+	for row in usable:
+		assert_false(
+			IllustratedCharacterSprite.UNUSABLE_COMPOSITE_ROWS.has(row),
+			"row %d cannot be drawn and must not be offered" % row
+		)
+		assert_true(sprite.has_usable_composite_row(row))
+
+
+## A refused row really does hand every part back empty -- which is what
+## makes it a rectangle on screen, and what this whole pin is about.
+func test_a_refused_outfit_row_draws_no_part_at_all():
+	for row in IllustratedCharacterSprite.UNUSABLE_COMPOSITE_ROWS:
+		for part in ["arms", "body", "legs"]:
+			assert_eq(
+				sprite.generate_composite_textures(part, row, "front").size(), 0,
+				"row %d's %s should be refused outright" % [row, part]
+			)
+
+
+## ...and the roll itself never lands on one.
+func test_no_seed_rolls_an_outfit_row_the_art_cannot_draw():
+	var seen := {}
+	for seed_value in range(0, 400):
+		var row: int = sprite.outfit_variant_for(seed_value)
+		assert_false(
+			IllustratedCharacterSprite.UNUSABLE_COMPOSITE_ROWS.has(row),
+			"seed %d rolled row %d, which the art cannot draw" % [seed_value, row]
+		)
+		seen[row] = true
+	assert_gt(seen.size(), 1, "the roll still varies across outfits")

@@ -153,6 +153,17 @@ const ToggleSwitch = preload("res://src/ui/toggle_switch.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
+const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
+const Answerback = preload("res://src/gameplay/answerback.gd")
+const SpellBook = preload("res://src/gameplay/spell_book.gd")
+const HurtFlash = preload("res://src/ui/hurt_flash.gd")
+const Discovery = preload("res://src/gameplay/discovery.gd")
+const Arena = preload("res://src/gameplay/arena.gd")
+const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
+const ArrivalBriefing = preload("res://src/gameplay/arrival_briefing.gd")
+const SpellWeaveWindow = preload("res://scenes/spell_weave_window.gd")
+const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -446,6 +457,7 @@ const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
 const QUEST_LOG_TOGGLE_ACTION := "toggle_quest_log"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
+const WEAVE_TOGGLE_ACTION := "toggle_weave"
 ## P for planner (docs/concept/planner_mode.md). The mode toggle used to be
 ## the HUD button alone, and a focused Button answers ui_accept -- which is
 ## Space, the attack key.
@@ -477,6 +489,13 @@ const KEYBINDINGS_PATH := "user://keybindings.cfg"
 ## little around the player rather than stacking exactly on top of each
 ## other or one another.
 const MAX_SPAWN_COUNT := 10
+
+## What /arena stages when told nothing: a wolf is the reference species
+## SpeciesBite derives every other bite from, and three is enough to be a
+## fight rather than a duel. The count itself is capped by
+## Arena.MAX_OPPONENTS, not here.
+const ARENA_DEFAULT_SPECIES := "wolf"
+const ARENA_DEFAULT_COUNT := 3
 const SPAWN_SCATTER := 20.0
 ## /give caps how many of an item one command can hand out.
 const MAX_GIVE_COUNT := 99
@@ -875,6 +894,12 @@ var _charge_meter_fill: ColorRect
 
 var _hunger_fill: ColorRect
 var _hunger_label: Label
+## The one resource every cast spends, which had no readout at all: a grep
+## for "mana" in this file matched only the word "manager", so "Not enough
+## mana" was the first a player ever heard of it
+## (docs/concept/spell_runtime.md).
+var _mana_fill: ColorRect
+var _mana_label: Label
 var _thirst_fill: ColorRect
 var _thirst_label: Label
 var _stamina_fill: ColorRect
@@ -1235,6 +1260,7 @@ func _ready() -> void:
 	_build_quest_log_window()
 	_build_conversation_window()
 	_build_skill_window()
+	_build_weave_window()
 	_build_settings_overlay()
 	_build_hover_tooltip()
 	_build_death_label()
@@ -1246,6 +1272,7 @@ func _ready() -> void:
 	_build_land_sense_label()
 	_build_creature_panels_container()
 	_build_condition_chips()
+	_build_place_card()
 	_build_survival_bar()
 	_build_world_clock_card()
 	_build_karma_display()
@@ -1463,6 +1490,7 @@ static func backed_up_directories() -> PackedStringArray:
 		EarthChunkManager.UPPER_FLOOR_MODIFICATIONS_DIR,
 		EarthChunkManager.UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR,
 		EarthChunkManager.BUILDINGS_DIR,
+		EarthChunkManager.POND_FISH_DIR,
 	])
 
 
@@ -1550,6 +1578,12 @@ func _wipe_persisted_world() -> void:
 	_world_reset.wipe_directory(EarthChunkManager.UPPER_FLOOR_MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.BUILDINGS_DIR)
+	# A village pond's own fish stock, added with the pond fix (2026-09-20)
+	# and, like every store above it, never joined to this wipe -- the same
+	# drift test caught it. It is READ BACK on the next chunk load
+	# (_restore_pond_fish) and carries no world identity, so a new world
+	# inherited the previous one's fished-out or well-stocked ponds.
+	_world_reset.wipe_directory(EarthChunkManager.POND_FISH_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
@@ -1917,6 +1951,7 @@ func _build_conversation_window() -> void:
 	_conversation_window.offset_bottom = 210.0
 	_ui.add_child(_conversation_window)
 	_conversation_window.topic_chosen.connect(_on_conversation_topic_chosen)
+	_conversation_window.give_requested.connect(_on_conversation_give_requested)
 
 
 ## The talk key's real handler (docs/concept/dialogue.md's own Status
@@ -2000,7 +2035,13 @@ func _open_conversation_with(npc: NpcMarker, local_player: Player) -> void:
 		beats.append(DialogueBeat.build({}, frame, voice_register, recognition))
 
 	_conversation_npc_id = npc_id
-	_conversation_window.open_for(npc_id, npc.identity.npc_name, result["greeting"], beats)
+	# The errand, read off the very frame the villager's own "I could use
+	# three more rock" line is built from (docs/concept/errands.md): the
+	# saying and the giving cannot disagree, because they are one state.
+	_conversation_window.open_for(
+		npc_id, npc.identity.npc_name, result["greeting"], beats,
+		ErrandDelivery.offer_from_frame(frame)
+	)
 
 
 ## Burns the chosen topic in the real, persistent ledger (see
@@ -2011,15 +2052,131 @@ func _on_conversation_topic_chosen(topic_id: String) -> void:
 	_chunk_manager.seen_ledger().mark_told(_conversation_npc_id, topic_id, _chunk_manager.world_age_seconds())
 
 
+## The player handed a villager the goods their household is short of
+## (docs/concept/errands.md). EarthChunkManager.deliver_errand performs the
+## whole transfer atomically against live state -- inventory, the
+## settlement's own market, the household's purse, a witnessed event -- and
+## hands back what really moved, which is what the banner then reports.
+func _on_conversation_give_requested(offer: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	var deal: Dictionary = _chunk_manager.deliver_errand(offer, local_player)
+	if int(deal["units"]) <= 0:
+		return
+	_show_errand_banner(deal)
+
+
+## What a delivery reports: what moved, what it paid, and what it is still
+## owed -- a village too poor to pay takes the goods anyway and carries the
+## rest as a debt, which the player should hear about rather than be
+## silently short-changed over.
+func _show_errand_banner(deal: Dictionary) -> void:
+	var parts: Array[String] = []
+	for entry in deal["given"]:
+		parts.append("%d %s" % [int(entry["count"]), String(entry["item_id"]).replace("_", " ")])
+	var moved := ", ".join(parts)
+	var paid := int(deal["paid"])
+	var debt := int(deal["debt"])
+	var line := "Handed over %s." % moved
+	if paid > 0:
+		line += " Paid %d gold." % paid
+	if debt > 0:
+		line += " They owe you %d more." % debt
+	elif paid <= 0:
+		line += " They have nothing to pay with."
+	_set_message_banner(_trade_banner, line)
+
+
 func _on_craft_requested(recipe_id: String) -> void:
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-	if local_player != null and local_player.craft(recipe_id):
+	if local_player == null:
+		return
+	# Why it would refuse, asked BEFORE trying, so the answer is a sentence
+	# about the world rather than a button that did nothing
+	# (docs/concept/feedback.md). Measured before this: clicking a recipe
+	# card that looked affordable but failed a heat/skill gate produced no
+	# sound, no line and no change -- one of the first things that broke in
+	# a new player's hands.
+	var refusal: String = local_player.craft_refusal(recipe_id)
+	if refusal != "":
+		local_player.answer("craft", {"failed": true, "reason": refusal})
+		return
+	if local_player.craft(recipe_id):
+		local_player.answer("craft", {"item": recipe_id})
 		_crafting_window.refresh(local_player.inventory_counts())
 
 
 ## Builds the skill-tree spend window (see SkillTreeWindow), hidden until
 ## toggled with toggle_skills (default L). Clicking an affordable node/keystone
 ## allocates it on the local player and refreshes.
+## The spell-weave surface (docs/concept/spell_weaving.md), hidden until
+## toggled with toggle_weave (default M). The window reports what the
+## player arranged; Player.weave owns whether it is allowed.
+func _build_weave_window() -> void:
+	_weave_window = SpellWeaveWindow.new()
+	_weave_window.theme = _ui_theme
+	_weave_window.set_anchors_preset(Control.PRESET_CENTER)
+	_weave_window.offset_left = -SpellWeaveWindow.WINDOW_SIZE.x * 0.5
+	_weave_window.offset_top = -SpellWeaveWindow.WINDOW_SIZE.y * 0.5
+	_weave_window.offset_right = SpellWeaveWindow.WINDOW_SIZE.x * 0.5
+	_weave_window.offset_bottom = SpellWeaveWindow.WINDOW_SIZE.y * 0.5
+	_ui.add_child(_weave_window)
+	_weave_window.weave_requested.connect(_on_weave_requested)
+	_weave_window.socket_requested.connect(_on_weave_socket_requested)
+	_weave_window.unsocket_requested.connect(_on_weave_unsocket_requested)
+
+
+var _weave_window: SpellWeaveWindow
+
+## The arrangement being built on screen, before it is committed. Held
+## here rather than in the window because the window is a view: it is
+## rebuilt from this on every refresh and owns nothing.
+var _weave_draft: Dictionary = {}
+
+
+func _refresh_weave_window(local_player: Player) -> void:
+	if _weave_window == null or not _weave_window.visible:
+		return
+	_weave_window.refresh(local_player.motes(), _weave_draft)
+
+
+## Clicking a mote in the pouch sockets it next, up to the shared socket
+## limit. Refused past that by the same constant the validator uses.
+func _on_weave_socket_requested(atom_id: String) -> void:
+	var atoms: Array = SpellDraft.atoms_of(_weave_draft)
+	if atoms.size() >= SpellDraft.MAX_SOCKETS:
+		return
+	atoms.append(atom_id)
+	_weave_draft = SpellDraft.make(atoms, SpellDraft.delivery_of(_weave_draft))
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_refresh_weave_window(local_player)
+
+
+func _on_weave_unsocket_requested(socket_index: int) -> void:
+	var atoms: Array = SpellDraft.atoms_of(_weave_draft)
+	if socket_index < 0 or socket_index >= atoms.size():
+		return
+	atoms.remove_at(socket_index)
+	_weave_draft = SpellDraft.make(atoms, SpellDraft.delivery_of(_weave_draft))
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_refresh_weave_window(local_player)
+
+
+## Committing the arrangement. Player.weave owns both gates and writes its
+## own refusal into cast_message, which the HUD already shows -- so a
+## refused weave reads as a sentence rather than a button that did nothing.
+func _on_weave_requested(draft: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	if local_player.weave(draft):
+		_set_message_banner(_cast_banner, "Woven: %s" % SpellDraft.name_for(draft))
+	_refresh_weave_window(local_player)
+
+
 func _build_skill_window() -> void:
 	_skill_window = SkillTreeWindow.new()
 	_skill_window.theme = _ui_theme
@@ -2069,12 +2226,360 @@ func _refresh_skill_window(local_player: Player) -> void:
 		local_player.skill_web,
 		local_player.character_class,
 		local_player.dna_resonance,
-		local_player.dna_seed
+		local_player.dna_seed,
+		_payoff_facts_for(local_player),
+		_allocated_bonuses_for(local_player)
 	)
 	_skill_window.refresh(
 		local_player.experience.unspent_points,
 		local_player.allocated_nodes,
 		local_player.unlocked_keystones
+	)
+
+
+## The stat bonuses this character has ALREADY allocated, for the payoff
+## preview's "before" (docs/concept/skill_payoff.md). Read through
+## Player.skill_bonus, the one reader for every stat the web grants, so
+## this can never disagree with what the character really has.
+func _allocated_bonuses_for(local_player: Player) -> Dictionary:
+	var bonuses := {}
+	for stat_name in NodePayoff.CONSUMER_STATS:
+		bonuses[stat_name] = local_player.skill_bonus(stat_name)
+	return bonuses
+
+
+## What this character already is, for the skill web's payoff preview
+## (docs/concept/skill_payoff.md): the consumers need to know what they are
+## computing against -- the weapon really in hand, the health they really
+## have, the spell they really know -- so a node's "before" is the player's
+## own before rather than a textbook one. Every key is optional; NodePayoff
+## falls back to a neutral character for anything missing.
+func _payoff_facts_for(local_player: Player) -> Dictionary:
+	var facts := {
+		"base_max_health": float(local_player.max_health),
+		"knows_spells": 1.0 if local_player.known_spell_ids().size() > 0 else 0.0,
+		"has_companion": 1.0 if local_player.bonded_companions.size() > 0 else 0.0,
+	}
+	var weapon = local_player.held_weapon()
+	if weapon != null:
+		facts["held_weapon"] = weapon
+	return facts
+
+
+## Draws what an act answered with (docs/concept/feedback.md): the line on
+## the shared message stack, the number floating up off the player.
+##
+## World owns the screen; the Player owns knowing what happened. The same
+## division `topic_chosen` keeps for the seen ledger, and the reason the
+## resolved feedback arrives here already decided rather than as raw
+## numbers to interpret.
+func _listen_for_answers(player: Player) -> void:
+	if player == null or player.answered.is_connected(_on_player_answered):
+		return
+	player.answered.connect(_on_player_answered)
+
+
+func _on_player_answered(feedback: Dictionary) -> void:
+	var message := String(feedback.get("message", ""))
+	if message != "":
+		_set_message_banner(_talk_banner, message)
+	var float_text := String(feedback.get("float_text", ""))
+	if float_text != "":
+		_float_answer_text(float_text, Color(feedback.get("flash_color", Color.WHITE)))
+	# The third thing every row says, and the one this handler used to throw
+	# away: the "flash" kind (docs/concept/feedback.md). WHO flashes is the
+	# module's decision, not a species of if-statement written again here --
+	# four rows carry FLASH_HIT and three of them are harm the player DEALT,
+	# so asking the kind alone would turn the screen red every time you
+	# chopped a tree.
+	if not bool(feedback.get("failed", false)) and HurtFlash.flashes_for(
+		String(feedback.get("action", ""))
+	):
+		_flash_screen(HurtFlash.peak_colour_for(float(feedback.get("severity", 0.0))))
+
+
+## The screen's own answer to a blow landing on the character: a full tint
+## at the instant it lands, fading to nothing over HurtFlash.SECONDS.
+##
+## Drawn and then GONE. A full-screen ColorRect left parented to the UI is
+## not a flash, it is a colour filter over every window for the rest of the
+## session -- so it frees itself on the tween's own tail rather than being
+## kept and re-shown, which also means two overlapping blows really are two
+## flashes rather than one restarted one.
+##
+## MOUSE_FILTER_IGNORE for the obvious reason: a rectangle over the whole
+## screen that eats clicks would make being bitten a UI lockout.
+func _flash_screen(colour: Color) -> void:
+	if _ui == null:
+		return
+	var tint := ColorRect.new()
+	tint.color = colour
+	tint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(tint)
+	var fade := create_tween()
+	fade.tween_property(tint, "color:a", 0.0, HurtFlash.SECONDS)
+	fade.tween_callback(tint.queue_free)
+
+
+## One rising, fading label over the player: the receipt for an act, gone
+## before it can clutter. Deliberately a plain Label on the UI layer rather
+## than a world-space node -- it belongs to the reading of the act, not to
+## the place it happened, and a world-space number is the first thing to
+## get lost behind a tree.
+func _float_answer_text(text: String, colour: Color) -> void:
+	if _ui == null:
+		return
+	var label := Label.new()
+	label.text = text
+	label.theme = _ui_theme
+	label.add_theme_color_override("font_color", colour)
+	label.add_theme_font_size_override("font_size", ANSWER_FLOAT_FONT_SIZE)
+	label.set_anchors_preset(Control.PRESET_CENTER)
+	label.offset_top = ANSWER_FLOAT_START_OFFSET_Y
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(label)
+	var rise := create_tween()
+	rise.set_parallel(true)
+	rise.tween_property(label, "offset_top", ANSWER_FLOAT_START_OFFSET_Y - ANSWER_FLOAT_RISE_PX,
+		ANSWER_FLOAT_SECONDS)
+	rise.tween_property(label, "modulate:a", 0.0, ANSWER_FLOAT_SECONDS)
+	rise.chain().tween_callback(label.queue_free)
+
+
+## How a floating answer reads: far enough above the hero to clear their
+## own sprite, rising a little, gone inside the interval the feedback table
+## itself uses for a deliberate act (Answerback.DELIBERATE_INTERVAL_SECONDS)
+## so two receipts never stack.
+const ANSWER_FLOAT_FONT_SIZE := 14
+const ANSWER_FLOAT_START_OFFSET_Y := -36.0
+const ANSWER_FLOAT_RISE_PX := 24.0
+const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
+
+
+## The crossing card's own banner and the time left on it
+## (docs/concept/discovery.md). The duration is never a constant here:
+## Answerback.seconds_to_read gives each card its OWN word count at the
+## reading rate the feedback layer already grounds itself on, because the
+## hearth's card is seventeen words and the far country's is thirty-four
+## and showing both for the same six seconds means one of them is wrong.
+var _discovery_banner: PanelContainer
+var _discovery_card_seconds_left := 0.0
+
+## The permanent place reading (see _build_place_card) and its last text, so
+## a frame that has not moved rebuilds nothing.
+var _place_card: PanelContainer
+var _place_card_text := ""
+
+## The tile the arrival card was read from, so "has the character moved" is
+## measured from the greeting rather than from the origin. See
+## _expire_arrival_card.
+var _arrival_tile := Vector2i.ZERO
+var _arrival_tile_known := false
+
+
+## One footfall, every client frame (docs/concept/discovery.md).
+##
+## Before this existed, the ONLY caller of `mark_chunk_explored` in the game
+## was the `reveal` spell atom, so a player who walked across a continent
+## still had an empty map; and distance from spawn appeared in no XP formula
+## anywhere, so the far country was strictly more dangerous and strictly no
+## more rewarding.
+##
+## `record_footfall` owns the whole decision (it holds the explored record
+## and the spawn coordinate, and asks `Discovery` for the rest) and hands
+## back `{}` on all but a handful of frames -- the player is still in the
+## chunk they were already in. World only performs what it decided: the XP,
+## the floating receipt every other act in this game answers with, and the
+## card.
+func _discovery_step(local_player: Player, delta: float) -> void:
+	_expire_discovery_card(delta)
+	if local_player == null or _chunk_manager == null:
+		return
+	var report: Dictionary = _chunk_manager.record_footfall(local_player.current_tile())
+	if report.is_empty():
+		return
+	var xp := int(report.get("xp", 0))
+	if xp > 0:
+		local_player.gain_experience(xp)
+		_float_answer_text(
+			String(report.get("float_text", "")),
+			Answerback.flash_color_for(Answerback.FLASH_GAIN)
+		)
+	var card := String(report.get("message", ""))
+	if card != "":
+		_set_message_banner(_discovery_banner, card)
+		_discovery_card_seconds_left = Answerback.seconds_to_read(card)
+
+
+## Clears the crossing card once it has been up long enough to read. Kept
+## separate from the step itself so the card decays on every frame rather
+## than only on the frames a chunk edge is crossed -- otherwise a player who
+## stopped walking would keep the card until they moved again.
+func _expire_discovery_card(delta: float) -> void:
+	_discovery_card_seconds_left = _expire_card(
+		_discovery_banner, _discovery_card_seconds_left, delta
+	)
+
+
+## One prose card's countdown: hands back the time left, and hides the card
+## itself on the frame it runs out. Shared by every timed passage here so
+## "a card that never clears is furniture" is one rule rather than one per
+## card.
+func _expire_card(banner: PanelContainer, seconds_left: float, delta: float) -> float:
+	if seconds_left <= 0.0:
+		return 0.0
+	var remaining := maxf(0.0, seconds_left - delta)
+	if remaining <= 0.0 and banner != null:
+		_set_message_banner(banner, "")
+	return remaining
+
+
+## The arrival briefing's own banner and the time left on it
+## (docs/concept/arrival.md). Shown once, on the NEW-game path only.
+var _arrival_banner: PanelContainer
+var _arrival_card_seconds_left := 0.0
+
+## The curated river this session's spawn was drawn on
+## (SpawnRiverPicker.pick's "river"). Before the briefing existed this was
+## printed to stdout at spawn and thrown away, which is why the game could
+## put a character on the Loire and never say so.
+var _spawn_river_name := ""
+
+
+## The three facts a new character needs in their first ten seconds: where
+## they are, what is near them, and one thing to do
+## (docs/concept/arrival.md).
+##
+## Every line is read off live state or is not printed. The river is the one
+## the spawn picker really drew, the season the world's own clock, the
+## bearing a real settlement the event store really recorded, and the errand
+## the live production-shortfall projection -- so the card shows a shortage
+## because there IS one, never because a first quest was authored.
+##
+## NEW game only, the same rule the dawn clause keeps: a character old
+## enough to have been saved has already had a first morning, and being told
+## where they are would be the game forgetting them.
+func _show_arrival_briefing(local_player: Player) -> void:
+	if local_player == null or _chunk_manager == null or _arrival_banner == null:
+		return
+	var player_tile := local_player.current_tile()
+	var facts := {
+		"river_name": _spawn_river_name,
+		"season": _chunk_manager.current_season(),
+		"player_tile": player_tile,
+	}
+	var nearest := _nearest_known_settlement(player_tile)
+	if not nearest.is_empty():
+		facts["settlement_tile"] = nearest["tile"]
+		facts["errands"] = _chunk_manager.production_shortfall_quests_for_settlement(
+			String(nearest["id"])
+		)
+	var card := ArrivalBriefing.card_text(ArrivalBriefing.briefing_for(facts))
+	if card == "":
+		return
+	_set_message_banner(_arrival_banner, card)
+	_arrival_card_seconds_left = Answerback.seconds_to_read(card)
+	# Where it was read from, so the countdown starts on the first step
+	# rather than on the first frame (see _expire_arrival_card).
+	_arrival_tile = player_tile
+	_arrival_tile_known = true
+
+
+## The arrival card does not start expiring until the character has taken a
+## step.
+##
+## Measured after "no card or XP visible": the card really was raised, and it
+## really said "You are on the Isar, in spring." -- for 1.51 s, which is
+## Answerback.seconds_to_read of six words, while the loading overlay was
+## still fading. A greeting nobody can read is not a greeting, and this is
+## the one moment a new player is listening. Standing still reads it for as
+## long as they like; moving says they are done.
+func _expire_arrival_card(delta: float, has_moved: bool) -> void:
+	if not has_moved:
+		return
+	_arrival_card_seconds_left = _expire_card(
+		_arrival_banner, _arrival_card_seconds_left, delta
+	)
+
+
+## Whether the character has left the tile they were greeted on. False until
+## a card has actually been raised, so a session with no briefing never
+## counts as "moved" and never touches the timer.
+func _has_left_the_arrival_tile(local_player: Player) -> bool:
+	if not _arrival_tile_known or local_player == null:
+		return false
+	return local_player.current_tile() != _arrival_tile
+
+
+## The nearest settlement this world has actually founded, as `{id, tile}`,
+## or `{}` when none has been. Read from the event store's own
+## `settlement_founded` records -- the same door `_handle_map_command` reads
+## landmarks through -- so the briefing can never point at a village that
+## does not exist. The tile is the settlement chunk's centre, which is where
+## `RegionalTrade.chunk_coord_of` puts it.
+func _nearest_known_settlement(player_tile: Vector2i) -> Dictionary:
+	var best: Dictionary = {}
+	var best_distance := INF
+	var half := EarthChunkManager.CHUNK_SIZE / 2
+	for event in _chunk_manager.event_store().events_of_type("settlement_founded"):
+		if event.actors.is_empty():
+			continue
+		var settlement_id: String = event.actors[0]
+		var chunk_coord: Vector2i = RegionalTrade.chunk_coord_of(settlement_id)
+		var tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(half, half)
+		var distance := Vector2(tile).distance_to(Vector2(player_tile))
+		if distance < best_distance:
+			best_distance = distance
+			best = {"id": settlement_id, "tile": tile}
+	return best
+
+
+## The local hour a YOUNG character's sky should read, or NO_FORCED_HOUR
+## when this character is old enough to live under the real one
+## (DawnClause, docs/concept/arrival.md).
+##
+## `_arrival_unix_seconds` is when this character first opened their eyes
+## and `_arrival_real_hour` is the local hour it really was then, both set
+## at spawn. Days elapsed is measured in REAL time because the sky is: an
+## in-game day is DawnClause.REAL_HOURS_PER_IN_GAME_DAY of it. A character
+## loaded from a save has no recorded arrival and so is never shifted,
+## which is exactly the "a save made on day 9 loads on day 9" rule.
+func _dawn_shifted_local_hour(longitude: float) -> float:
+	if _arrival_real_hour < 0.0:
+		return NO_FORCED_HOUR
+	var now := Time.get_datetime_dict_from_system(true)
+	var real_hour := _solar_position.local_hour(
+		float(now.hour) + float(now.minute) / 60.0 + float(now.second) / 3600.0, longitude
+	)
+	var elapsed_real_hours := (
+		float(Time.get_unix_time_from_system() - _arrival_unix_seconds) / 3600.0
+	)
+	var days := elapsed_real_hours / DawnClause.REAL_HOURS_PER_IN_GAME_DAY
+	if days >= DawnClause.CONVERGENCE_DAYS:
+		# Converged: stop asking, and stop paying for the call every frame.
+		_arrival_real_hour = -1.0
+		return NO_FORCED_HOUR
+	return DawnClause.local_hour_for(real_hour, days, _arrival_real_hour)
+
+
+## When this character first opened their eyes, and what the local hour
+## really was then. Set only on a NEW character (see
+## _record_arrival_for_first_light); a loaded save leaves them at -1 and is
+## never shifted. Not persisted on purpose: the shift exists for a first
+## impression, and a character old enough to have been saved has had one.
+var _arrival_real_hour := -1.0
+var _arrival_unix_seconds := 0
+
+
+## Marks this instant as a new character's arrival, so their first days
+## open at first light (docs/concept/arrival.md). Called from the NEW-game
+## spawn only.
+func _record_arrival_for_first_light(longitude: float) -> void:
+	_arrival_unix_seconds = int(Time.get_unix_time_from_system())
+	var now := Time.get_datetime_dict_from_system(true)
+	_arrival_real_hour = _solar_position.local_hour(
+		float(now.hour) + float(now.minute) / 60.0 + float(now.second) / 3600.0, longitude
 	)
 
 
@@ -2595,6 +3100,12 @@ func _build_survival_bar() -> void:
 	var warmth := _make_survival_meter_row(container, Color(0.9, 0.45, 0.2))
 	_warmth_fill = warmth["fill"]
 	_warmth_label = warmth["label"]
+	# The same row widget as the four above, so a fifth meter cannot drift
+	# from them. A violet no other meter uses: thirst already owns the blue,
+	# and mana is the one reading here that is not about a body.
+	var mana := _make_survival_meter_row(container, Color(0.55, 0.4, 0.9))
+	_mana_fill = mana["fill"]
+	_mana_label = mana["label"]
 
 	_wallet_label = Label.new()
 	_scaled_font(_wallet_label, UiTheme.BASE_FONT_SIZE - 2)
@@ -2917,7 +3428,7 @@ func _build_condition_chips() -> void:
 ## not changed rebuilds nothing.
 func _update_condition_chips(local_player: Player) -> void:
 	var chips: Array = HudReadouts.condition_chips(
-		local_player.survival, local_player.current_mode
+		local_player.survival, local_player.current_mode, local_player.active_effects()
 	)
 	var signature := HudReadouts.chips_signature(chips)
 	if signature == _condition_chips_signature:
@@ -2943,6 +3454,53 @@ func _update_condition_chips(local_player: Player) -> void:
 		_apply_scaled_font(label, UiTheme.BASE_FONT_SIZE - 2)
 		card.add_child(label)
 		_condition_chips_row.add_child(card)
+
+
+## Where this character is on their journey, permanently
+## (docs/concept/discovery.md): the ring, how far out that is at walking
+## scale, and how much ground they have recorded.
+##
+## Reported after the first build of the discovery layer: *"no card or XP
+## visible"*. Instrumenting a `--solo` launch showed the wiring was fine --
+## frame one paid its 2 XP and produced the float -- and that EVERYTHING it
+## fed was transient: a ~1 s receipt that only re-fires after 512 px of
+## walking, and a crossing card six chunks out. A player who wanders inside
+## their spawn chunk met the whole layer once, during the loading fade.
+##
+## So it gets a surface that never goes away, in the same bottom-left column
+## as the condition chips. The "known" count ticking up every chunk is the
+## visible proof that walking records ground, which is the thing that could
+## not be spotted at all before.
+func _build_place_card() -> void:
+	_place_card = PanelContainer.new()
+	_place_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place_card.visible = false
+	var label := Label.new()
+	_apply_scaled_font(label, UiTheme.BASE_FONT_SIZE - 2)
+	_place_card.add_child(label)
+	_add_hud_card(_hud_bottom_left_column, _place_card)
+
+
+## Every client frame, guarded on the text actually changing -- the reading
+## only moves when the player crosses a chunk edge, so this is a string
+## compare on all but a handful of frames.
+##
+## Hidden entirely until the world knows where home is: a distance of -1 is
+## "no spawn yet", and a chip that guessed would be claiming the origin is
+## home.
+func _update_place_card(local_player: Player) -> void:
+	if _place_card == null or local_player == null or _chunk_manager == null:
+		return
+	var distance := _chunk_manager.chunks_from_spawn(local_player.current_tile())
+	if distance < 0:
+		_place_card.visible = false
+		return
+	var text := Discovery.place_chip(distance, _chunk_manager.explored_chunks().size())
+	_place_card.visible = true
+	if text == _place_card_text:
+		return
+	_place_card_text = text
+	(_place_card.get_child(0) as Label).text = text
 
 
 ## What is in hand and how close it is to breaking (docs/concept/hud.md "The
@@ -3075,6 +3633,14 @@ func _build_message_stack() -> void:
 	_easter_egg_banner = _make_message_banner(14)
 	_cast_banner = _make_message_banner(16)
 	_planner_banner = _make_message_banner(16)
+	# The crossing card (docs/concept/discovery.md) -- a three-line passage
+	# rather than a one-line result, so it reads at the same size as the
+	# other prose banners rather than at a result's.
+	_discovery_banner = _make_message_banner(14)
+	# The arrival briefing (docs/concept/arrival.md), last so it sits under
+	# everything else: it is shown once, at the one moment nothing else is
+	# competing for the stack.
+	_arrival_banner = _make_message_banner(14)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -4255,6 +4821,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if lp != null:
 			_refresh_skill_window(lp)
+	elif event.is_action_pressed(WEAVE_TOGGLE_ACTION):
+		_weave_window.toggle()
+		var weaver := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if weaver != null:
+			# Opening on what is already woven, so the window is a view of
+			# this character rather than a blank slate each time.
+			if _weave_draft.is_empty():
+				_weave_draft = weaver.woven_draft()
+			_refresh_weave_window(weaver)
 	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
 		_handle_escape()
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -4596,7 +5171,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
 					+ "  /quests <entity_id>  /emergence"
-					+ "  /spawn <species> [count]  /give <item_id> [count]"
+					+ "  /spawn <species> [count]  /arena [species] [count]"
+					+ "  /give <item_id> [count]"
 					+ "  /craft <recipe_id>  /gold <amount>  /learn [spell_id]"
 					+ "  /village  /river  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
@@ -4673,6 +5249,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_ecotest_command(args)
 		"spawn":
 			_handle_spawn_command(args, local_player)
+		"arena":
+			_handle_arena_command(args, local_player)
 		"give":
 			_handle_give_command(args, local_player)
 		"craft":
@@ -5136,6 +5714,55 @@ func _handle_spawn_command(args: Array, local_player: Player) -> void:
 			_creatures, species, local_player.position + offset, _chunk_manager, TerrainRenderer.TILE_SIZE
 		)
 	_dev_console.log_line("Spawned %d %s." % [count, species])
+
+
+## /arena [species] [count] -- stages a real fight around the player, so the
+## spell and skill layers can be battletested without first arranging the
+## circumstances that would produce one (docs/concept/arena.md).
+##
+## Measured before it existed (test_battle_loop.gd): the combat machinery is
+## sound end to end. What is missing is the ENCOUNTER, and three deliberate
+## decisions stand in the way -- a new character owns no motes, mana is
+## entirely the class lens (a warrior has 0.0 and can never cast), and the
+## hearth is safe on purpose so the nearest real fight is 16 chunks out.
+## This works around all three without changing any of them.
+##
+## Reuses /spawn's own species resolution (friendly aliases and all) and the
+## same CreatureRenderer.spawn_single, so the opposition is real creatures
+## and not a second kind of thing.
+func _handle_arena_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to stage a fight around.")
+		return
+
+	var typed := String(args[0]) if args.size() >= 1 else ARENA_DEFAULT_SPECIES
+	var species := ConsoleSpecies.resolve(typed)
+	if species == "":
+		_dev_console.log_line(
+			"Unknown species '%s'. Try: %s" % [typed, ", ".join(ConsoleSpecies.spawnable())]
+		)
+		return
+
+	var count := ARENA_DEFAULT_COUNT
+	if args.size() >= 2:
+		count = int(args[1])
+	var offsets := Arena.ring_offsets(count, Arena.ring_radius_px_for(species))
+	for offset in offsets:
+		_creature_renderer.spawn_single(
+			_creatures, species, local_player.position + offset,
+			_chunk_manager, TerrainRenderer.TILE_SIZE
+		)
+
+	# Both halves of "you can actually test a spell now": one of every atom
+	# in the pouch, and a pool to spend if this character's class gave them
+	# none. mana_pool_for only ever fills a vacuum -- a mage keeps their own.
+	for atom_id in Arena.loadout_motes():
+		local_player.grant_mote(String(atom_id))
+	var lent := local_player.max_mana <= 0.0
+	local_player.max_mana = Arena.mana_pool_for(local_player.max_mana)
+	local_player.mana = local_player.max_mana
+
+	_dev_console.log_line(Arena.report_line(species, offsets.size(), lent))
 
 
 func _handle_give_command(args: Array, local_player: Player) -> void:
@@ -5914,6 +6541,13 @@ func _update_survival_bar(local_player: Player) -> void:
 	_warmth_fill.size.x = _health_bar.fill_width(s.warmth, 1.0, SURVIVAL_BAR_WIDTH)
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
 	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
+	# A character with no mana pool at all (nothing has rolled their stats
+	# yet) reads as empty rather than dividing by zero.
+	var mana_fraction := (
+		local_player.mana / local_player.max_mana if local_player.max_mana > 0.0 else 0.0
+	)
+	_mana_fill.size.x = _health_bar.fill_width(mana_fraction, 1.0, SURVIVAL_BAR_WIDTH)
+	_mana_label.text = meter_label_text("Mana", mana_fraction)
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
 
 
@@ -6632,12 +7266,72 @@ func _on_hotbar_slot_dropped(index: int, payload: Dictionary) -> void:
 		local_player.assign_hotbar_slot(index, String(payload.get("item_id", "")))
 
 
-## A fixed row of locked placeholder slots for future abilities -- there is no
-## spell/ability system yet (see docs/progress.md), so these are an honest
-## stub, not fake functionality.
+## The four spells on keys 6-9 (docs/concept/spell_runtime.md). Built as
+## empty slots and filled from the character's own known spells by
+## _update_spell_bar, the same build-then-fill shape the hotbar uses.
+##
+## It was a row of locked placeholders under the comment "there is no
+## spell/ability system yet", which had been false for a long time: a
+## parser, an executor, a book of twenty-four authored spells and a guild
+## that teaches them were all already here, and the bar said none of it.
 func _build_spell_bar() -> void:
 	for i in SPELL_BAR_SLOT_COUNT:
-		_spell_bar.add_child(_make_hud_slot(HUD_SLOT_LOCKED_COLOR))
+		var slot := _make_hud_slot(HUD_SLOT_LOCKED_COLOR)
+		var label := Label.new()
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.theme = _ui_theme
+		slot.add_child(label)
+		_spell_bar.add_child(slot)
+
+
+## Fills each slot from the spell really behind it, and marks the one the
+## cast key would repeat.
+##
+## Reads Player.spell_in_slot / selected_spell_id rather than keeping a
+## second list: the row is a VIEW of what the character knows, so learning
+## one at a guild fills the next slot with no bookkeeping here.
+func _update_spell_bar(local_player: Player) -> void:
+	for index in SPELL_BAR_SLOT_COUNT:
+		if index >= _spell_bar.get_child_count():
+			return
+		var slot := _spell_bar.get_child(index) as PanelContainer
+		var label := slot.get_child(0) as Label
+		var spell_id := String(local_player.spell_in_slot(index))
+		label.text = _spell_slot_caption(index, spell_id)
+		var style := slot.get_theme_stylebox("panel") as StyleBoxFlat
+		if style == null:
+			continue
+		var loaded := spell_id != "" and spell_id == String(local_player.selected_spell_id())
+		style.border_color = UiTheme.ACCENT if loaded else Color(1, 1, 1, 0.2)
+		style.set_border_width_all(SPELL_SLOT_LOADED_BORDER_WIDTH if loaded else 1)
+
+
+## What one slot says: its key and the spell's own name, or just the key
+## when nothing has been learned for it yet. The key is drawn because the
+## row is four unlabelled boxes otherwise, and "which key casts this" is
+## the only question a player has of it.
+func _spell_slot_caption(index: int, spell_id: String) -> String:
+	var key := str(index + SPELL_SLOT_FIRST_KEY_DIGIT)
+	if spell_id == "":
+		return key
+	return "%s\n%s" % [key, _spell_book.name_for(spell_id)]
+
+
+## One shared book for the captions -- parsing twenty-four spells four
+## times a frame to print four names would be absurd, and SpellBook caches
+## its ASTs statically anyway.
+var _spell_book := SpellBook.new()
+
+## The digit the first spell slot answers to, so the caption and
+## Keybindings' own defaults (6-9) cannot disagree silently -- pinned by
+## test.
+const SPELL_SLOT_FIRST_KEY_DIGIT := 6
+
+## How thick a loaded slot's border is. Thicker than an idle slot's single
+## pixel, because "which spell is loaded" has to read at a glance from the
+## corner of the screen.
+const SPELL_SLOT_LOADED_BORDER_WIDTH := 2
 
 
 ## A HUD slot frame. `droppable` makes it a DragSlot (see drag_slot.gd) so
@@ -6726,6 +7420,7 @@ func _on_peer_connected(peer_id: int) -> void:
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
@@ -6761,6 +7456,16 @@ func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(multiplayer.get_unique_id())
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
+	# This character's first morning (docs/concept/arrival.md). NEW game
+	# only: _spawn_local_singleplayer_from_save is a separate function and
+	# never records an arrival, which is what makes a loaded save read the
+	# real sky.
+	_record_arrival_for_first_light(
+		_geo_coordinates.longitude_for_tile(
+			int(player.position.x / TerrainRenderer.TILE_SIZE),
+			EarthChunkGenerator.WORLD_WIDTH_TILES
+		)
+	)
 	player.respawn_position = player.position
 	# BEFORE apply_class: the class start node it grants is a real web node, and
 	# what that node is worth to this character depends on the resonance the
@@ -6773,6 +7478,7 @@ func _spawn_local_singleplayer() -> void:
 		_pending_appearance
 	)
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# AFTER add_child: _ready() has just wired inventory_changed ->
 	# sync_hotbar, so the grant's own emit actually reaches something (see
 	# Player.grant_starter_items's own doc comment). Only this NEW-game path
@@ -6785,6 +7491,12 @@ func _spawn_local_singleplayer() -> void:
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
+	# LAST, and after setup: current_tile() needs the tile size setup hands
+	# it, and the briefing's bearing is measured from that tile. NEW game
+	# only -- _spawn_local_singleplayer_from_save is a separate function and
+	# never greets a character who has been living here (docs/concept/
+	# arrival.md).
+	_show_arrival_briefing(player)
 
 
 ## Restores a previously saved character (see docs/concept/persistence.md):
@@ -6803,6 +7515,23 @@ func _spawn_local_singleplayer_from_save() -> void:
 	var saved_position: Vector2 = save_data.get("position", Vector2.ZERO)
 	player.position = saved_position
 	player.respawn_position = save_data.get("respawn_position", saved_position)
+	# Where home is, for a character who already has one.
+	#
+	# `set_spawn_tile` had exactly ONE call site -- `_compute_dry_land_spawn_
+	# tile`, which only the NEW-game path runs -- so a loaded character left
+	# `_spawn_configured` false and two things went quiet at once: every
+	# `record_footfall` returned `{}`, so the whole discovery layer was dark
+	# (no ground recorded, no XP, no crossing card, docs/concept/
+	# discovery.md), and `_difficulty_tier_at` answered HARD for every chunk
+	# on the planet, so bear, lion and venomous snake could spawn on the
+	# doorstep of a resumed game.
+	#
+	# The character's own `respawn_position`, not `saved_position`: the rings
+	# are centred on where this character STARTED, and re-centring them on
+	# wherever they logged out would turn the far country into the hearth
+	# every time they loaded. BEFORE the first `update_with_progress` below,
+	# because chunk loading reads the difficulty tier as it streams.
+	_chunk_manager.set_spawn_tile(_tile_for_position(player.respawn_position))
 	# Same ordering reason as _spawn_local_singleplayer, from the saved seed
 	# instead of the creator's; apply_save_dict below re-applies it anyway, but
 	# apply_class runs first and must already know this character's genome.
@@ -6814,6 +7543,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 		save_data.get("appearance", {})
 	)
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
@@ -6953,6 +7683,10 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 			print("[spawn] no curated river bank qualified -- falling back to the Loire at Nantes")
 		else:
 			_session_spawn_candidate = pick["tile"]
+			# Kept, not just printed: the arrival briefing's place line is
+			# "You are on the Loire, in spring", and this is the only place
+			# the game ever knows which river that is.
+			_spawn_river_name = String(pick["river"])
 			print("[spawn] the %s at tile %s" % [pick["river"], pick["tile"]])
 	# The same bank nudge as before: chunks around the candidate are loaded
 	# (with loading-overlay progress), then the nearest tile that is neither
@@ -7060,6 +7794,14 @@ func _process(delta: float) -> void:
 		_chunk_manager.advance_world_age(
 			TimeLapse.calendar_seconds(delta, _ecology_time_scale)
 		)
+		# A sleeping character puts the night behind them through this SAME
+		# clock (docs/concept/sleep.md) -- the door /ecotest's TimeLapse
+		# already uses -- so the sun, the season, the fruit and the ecology
+		# all move together and a rest never runs on a second clock. The
+		# player counts its own hours down and hands back what the frame was
+		# worth; World only pushes it.
+		if focus_player != null and focus_player.is_resting():
+			_chunk_manager.advance_world_age(focus_player.rest_step(delta))
 		# Real in-flight regional-trade caravans (see docs/concept/trade.md)
 		# read the clock rather than a delta, so they belong with the clock:
 		# once, right after it moves. They used to run per slice, back when
@@ -7705,6 +8447,13 @@ func _client_process(delta: float) -> void:
 		perf_started = _perf_section("cli_chunk_update", perf_started)
 
 	var player_tile := local_player.current_tile()
+	# Before the minimap, so the ground under the player is on the explored
+	# record the same frame it is walked (docs/concept/discovery.md).
+	_discovery_step(local_player, delta)
+	_update_place_card(local_player)
+	_expire_arrival_card(delta, _has_left_the_arrival_tile(local_player))
+	if _perf_report != null:
+		perf_started = _perf_section("cli_discovery", perf_started)
 	_update_minimap(player_tile, delta)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_minimap", perf_started)
@@ -7712,6 +8461,7 @@ func _client_process(delta: float) -> void:
 	_update_crafting_window(local_player)
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
+	_update_spell_bar(local_player)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_windows", perf_started)
 	_update_creature_panels(local_player, delta)
@@ -7770,6 +8520,24 @@ func _client_process(delta: float) -> void:
 	# together instead of the readout drifting away from the sky.
 	if _forced_local_hour != NO_FORCED_HOUR:
 		utc_hour = _solar_position.utc_hour_for_local(_forced_local_hour, longitude)
+	else:
+		# A brand-new character opens their eyes at first light, whatever
+		# the wall clock says, and the real-Earth clock comes back on its
+		# own within a few in-game days (DawnClause, docs/concept/
+		# arrival.md). Measured as possibly the single biggest factor in a
+		# bad first impression: the sun is driven by the REAL clock at the
+		# spawn latitude, so a game shown to someone after work opens in
+		# darkness with Cold chips in spring, and they never see the world
+		# the screenshots promise.
+		#
+		# The clause is the IDENTITY for an old character, so a save made
+		# on day 9 loads on day 9 under the real sky -- the game never
+		# lies about the planet for longer than the first few days of a
+		# life. A console-pinned clock wins outright: /time means what it
+		# says.
+		var shifted := _dawn_shifted_local_hour(longitude)
+		if shifted != NO_FORCED_HOUR:
+			utc_hour = _solar_position.utc_hour_for_local(shifted, longitude)
 
 	var elevation := forced_elevation_for(
 		_forced_sky,

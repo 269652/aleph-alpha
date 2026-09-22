@@ -1,6 +1,7 @@
 extends GutTest
 
 const CreatureInfo = preload("res://src/world/creature_info.gd")
+const CombatPacing = preload("res://src/gameplay/combat_pacing.gd")
 
 var info: CreatureInfo
 
@@ -68,16 +69,35 @@ func test_max_health_scales_up_with_level():
 	assert_gt(level_5.max_health, level_1.max_health)
 
 
+## Two factors now, not one. The authored table is the BIOLOGY -- a bear
+## outweighs a wolf -- and the level roll is the individual. On top of both
+## sits the reference exchange (docs/concept/combat.md): a uniform scale
+## that makes a fight last long enough for the animal in it to land two
+## bites. Composed here from the game's own constants rather than restated,
+## so retuning either cannot make this test lie.
 func test_max_health_matches_the_level_scaling_formula():
 	var info_at_level_5 := CreatureInfo.new("herbivore", 4)
 	var base: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["herbivore"]
-	var expected := base * (1.0 + (info_at_level_5.level - 1) * CreatureInfo.LEVEL_HEALTH_SCALE)
+	var expected := (
+		base
+		* (1.0 + (info_at_level_5.level - 1) * CreatureInfo.LEVEL_HEALTH_SCALE)
+		* CombatPacing.EXCHANGE_HEALTH_SCALE
+	)
 	assert_almost_eq(info_at_level_5.max_health, expected, 0.01)
 
 
-func test_a_level_1_creatures_max_health_equals_the_species_base():
+## A level-1 individual is the species base times the exchange scale and
+## nothing else -- the level term vanishes at level 1, the pacing term does
+## not. Before the exchange scale existed this read "equals the species
+## base", which is the sentence that had a wolf dying in three swings.
+func test_a_level_1_creatures_max_health_is_the_species_base_at_fighting_pace():
 	var level_1 := CreatureInfo.new("herbivore", 0)
-	assert_almost_eq(level_1.max_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["herbivore"], 0.01)
+	assert_eq(level_1.level, 1, "precondition: seed 0 rolls level 1")
+	assert_almost_eq(
+		level_1.max_health,
+		CreatureInfo.MAX_HEALTH_BY_SPECIES["herbivore"] * CombatPacing.EXCHANGE_HEALTH_SCALE,
+		0.01
+	)
 
 
 func test_boar_is_an_aggressive_herbivore_that_is_not_a_predator():

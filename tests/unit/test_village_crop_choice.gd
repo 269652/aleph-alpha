@@ -153,3 +153,99 @@ func test_the_reported_village_stops_sowing_what_it_cannot_eat():
 	)
 	assert_ne(chosen, "wheat", "205 wheat and half rations is what this fixes")
 	assert_eq(chosen, "herb", "and the good actually at zero is the one it sows")
+
+
+# -- a starving village plants what actually feeds it -----------------------
+#
+# Reported live with the panels open: *"The farmers produce mostly herbs
+# even though it says it can feed 0 / 10 ... the supply chain needs to be
+# stable, so that happiness can saturate at 100% and unlock second tier
+# buildings"*.
+#
+# Measured on three real villages, with the settlement step really running
+# (tools/probe_village_cropping.gd -- a first pass that only LOADED chunks
+# read an empty satisfaction and would have reported the wrong defect):
+#
+#     satisfaction: { "wood": 1.0, "herb": 0.0, "kind:food": 0.0 }
+#     scores:       { "herb": 0.0, "carrot": 0.0, "potato": 0.0, "wheat": inf }
+#     a wheat-farmer sows: herb
+#     a herb-farmer  sows: herb
+#
+# A hungry village has BOTH goods at 0.0, so the scores tie -- and a tie is
+# the normal state of a village that needs feeding, not an edge case. The
+# tie was broken by declaration order, and `herb` is declared first, so
+# every field in a starving village sowed the crop that feeds it least: a
+# 20g bunch of herbs against a 170g potato, eight and a half times the food
+# per harvest. Hence "mostly herbs" and "feeds 0 of 10" in the same panel.
+#
+# The score itself is right and is not touched: a good sitting at 0.0 is
+# worth more than one at 0.9. What is added is what happens when two crops
+# are equally needed -- the one that really feeds more wins, on the
+# catalog's own real produce masses.
+
+
+func test_a_starving_village_sows_the_crop_that_feeds_it_most():
+	var starving := {"herb": 0.0, VillageEstates.FOOD_KIND_TOKEN: 0.0}
+	for default_crop in ["wheat", "herb", "carrot", ""]:
+		assert_eq(
+			VillageCropChoice.choose(starving, false, default_crop), "potato",
+			"a %s-farmer in a starving village should sow the heaviest food crop" % default_crop
+		)
+
+
+## ...and the rule it must not break: a FED village that lacks herbs still
+## sows herbs, because then the scores do not tie and the worst-supplied
+## good really is the herb.
+func test_a_fed_village_still_sows_the_good_it_lacks():
+	var fed := {"herb": 0.0, VillageEstates.FOOD_KIND_TOKEN: 0.9}
+	assert_eq(VillageCropChoice.choose(fed, false, "wheat"), "herb")
+
+
+## And the reverse: a village with herbs and no food sows food, as it always
+## did -- the score, not the weight, decides that.
+func test_a_village_with_herbs_and_no_food_sows_food():
+	var hungry := {"herb": 0.9, VillageEstates.FOOD_KIND_TOKEN: 0.0}
+	var sown := VillageCropChoice.choose(hungry, false, "wheat")
+	assert_true(
+		sown == "potato" or sown == "carrot", "expected a food crop, got %s" % sown
+	)
+
+
+## The weights are the ItemCatalog's own real produce masses, not numbers
+## invented here -- so "which crop feeds more" cannot drift from what the
+## world says a carrot weighs.
+func test_the_crop_food_weights_are_the_catalogs_own_real_masses():
+	var catalog := ItemCatalog.new()
+	for crop_id in VillageCropChoice.FOOD_WEIGHT_KG:
+		assert_almost_eq(
+			float(VillageCropChoice.FOOD_WEIGHT_KG[crop_id]),
+			catalog.make(crop_id).mass_kg, 0.0001,
+			"%s's weight must be the catalog's own" % crop_id
+		)
+	# Every crop that answers food has to have one, or the tie-break is
+	# silently deciding on a zero.
+	for crop_id in VillageCropChoice.SOWABLE:
+		if VillageCropChoice.SOWABLE[crop_id].has(VillageEstates.FOOD_KIND_TOKEN):
+			assert_true(
+				VillageCropChoice.FOOD_WEIGHT_KG.has(crop_id),
+				"%s answers food and has no weight" % crop_id
+			)
+
+
+## Deterministic: the same reading always sows the same crop.
+func test_the_same_reading_always_sows_the_same_crop():
+	var reading := {"herb": 0.0, VillageEstates.FOOD_KIND_TOKEN: 0.0}
+	var first := VillageCropChoice.choose(reading, false, "wheat")
+	for _i in 8:
+		assert_eq(VillageCropChoice.choose(reading, false, "wheat"), first)
+
+
+## The floor is bounded by the two readings that define it, never eyeballed:
+## strictly above the starving villages measured, and no higher than the
+## half-fed case the occupation tie-break was written for.
+func test_the_hunger_floor_sits_between_the_two_readings_that_define_it():
+	assert_gt(VillageCropChoice.HUNGRY_BELOW, 0.0, "a starving village must fall below it")
+	assert_lte(
+		VillageCropChoice.HUNGRY_BELOW, 0.5,
+		"a half-fed village must not, or the occupation tie-break never runs"
+	)

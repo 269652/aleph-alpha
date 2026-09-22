@@ -242,7 +242,23 @@ func _will_fight(context: Dictionary) -> bool:
 ## real hit. `.get(..., false)` defaults both new keys to "ordinary
 ## creature" so a context dict built before this feature existed (as every
 ## test predating it does) keeps behaving exactly as it always did.
+## A creature that WAITS FOR ITS MOMENT is the same shape as a world boss
+## and for the opposite reason: it perceives nothing until its own condition
+## is met. Two do (docs/concept/monsters.md), and neither is flipped by
+## being hit:
+##
+##   the Curupira (entry 5) waits for a FOOTPRINT -- EcologicalGrudge, read
+##   off the ecosystem simulation -- so it ignores a sustainable hunter;
+##   without this gate it would be a jaguar that happens to be red.
+##
+##   the Alp (entry 3) waits for a SLEEPER in the dark -- NightMare -- so it
+##   is the one creature a player becomes safe from by standing up.
+##
+## CreatureMarker sets is_aggroed from whichever rule owns the species.
 func _perceives_threats(context: Dictionary) -> bool:
-	if not context.get("is_world_boss", false):
+	if (
+		not context.get("is_world_boss", false)
+		and not context.get("waits_for_its_moment", false)
+	):
 		return true
 	return context.get("is_aggroed", false)

@@ -93,9 +93,22 @@ not for the raw act of foraging/farming itself.
   minimum allocated-node count); `Player.allocate_skill`/`unlock_keystone` apply
   the bonuses live (max-health heals, attack-damage folds into swings). Rows you
   can't afford or haven't gated are greyed out.
-- 🚧 Partial — XP from non-combat sources: two real "ecological literacy" triggers
-  are wired (below), a first scoped slice of the gap rather than the whole
+- 🚧 Partial — XP from non-combat sources: three real triggers are wired —
+  two "ecological literacy" ones (below) and **exploration**
+  ([discovery.md](discovery.md), 2026-09-20) — rather than the whole
   crafting/foraging/quests roster.
+  - ✅ **Newly-walked ground** — `EarthChunkManager.record_footfall` pays
+    the first footfall in a chunk, and only the first, at the price the
+    journey ring itself declares: `Discovery.xp_for_distance` is
+    `JourneyRing.demands_at`'s packing list and nothing else, so the
+    hearth pays what an off-peak harvest pays and the far country — the
+    only ground where bear, lion and venomous snake exist — pays exactly
+    two level-1 kills. Before it, distance from spawn appeared in no XP
+    formula anywhere, which made the whole danger gradient a pure tax: more
+    dangerous, no more rewarding. Deriving the step from
+    `EcologicalLiteracy.HARVEST_XP_BASE` and `Player.XP_PER_KILL` rather
+    than picking it keeps the "no eyeballed constants" pillar above, and
+    the division is asserted exact for the real ring table.
   - ✅ **Peak-timed fruit harvest** — `FruitingModel.is_peak_ripe` is a real,
     tested definition against the model's own output (the plateau where
     `hanging_at` has reached its own `crop_potential`, before any of the crop

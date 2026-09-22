@@ -35,6 +35,16 @@ const DialogueBeat = preload("res://src/dialogue/dialogue_beat.gd")
 
 signal topic_chosen(topic_id: String)
 
+## The player chose to hand this villager the goods their household is
+## short of (docs/concept/errands.md). Carries ErrandDelivery's own offer
+## dictionary -- what moves, whose household, which settlement -- so World
+## can perform the transfer without rebuilding it.
+signal give_requested(offer: Dictionary)
+
+## ErrandDelivery.offer_from_frame's dictionary for the villager on screen,
+## or {} when there is nothing to offer. Cleared the moment it is taken.
+var _give_offer: Dictionary = {}
+
 var _beats: Array = []
 var _name_label: Label
 var _response_label: Label
@@ -92,7 +102,15 @@ func is_open() -> bool:
 ## directly as the response instead of becoming a button -- offering the
 ## player a button to click for "nothing more to say" would be a strange
 ## thing to do with an honest empty answer (dialogue.md pillar 2).
-func open_for(npc_id: String, speaker_name: String, greeting: String, beats: Array) -> void:
+## `give_offer` is ErrandDelivery.offer_from_frame's own dictionary for
+## this villager (docs/concept/errands.md), or {} when there is nothing to
+## offer. The window renders it and reports a press; it never performs the
+## transfer -- World owns the inventory, the market and the purse, exactly
+## as it owns the seen ledger behind topic_chosen.
+func open_for(
+	npc_id: String, speaker_name: String, greeting: String, beats: Array,
+	give_offer: Dictionary = {}
+) -> void:
 	visible = true
 	_name_label.text = speaker_name
 	_response_label.text = greeting
@@ -102,6 +120,7 @@ func open_for(npc_id: String, speaker_name: String, greeting: String, beats: Arr
 		_response_label.text = "%s\n\n%s" % [greeting, OfflineRenderer.render(deflects[0])]
 
 	_beats = beats.filter(func(b): return str(b.get("kind", "")) != DialogueBeat.KIND_DEFLECT)
+	_give_offer = give_offer
 	_rebuild_topic_list()
 
 
@@ -109,11 +128,50 @@ func _rebuild_topic_list() -> void:
 	for child in _topics_container.get_children():
 		_topics_container.remove_child(child)
 		child.queue_free()
+	# The errand first: it is the one entry here that CHANGES the world
+	# rather than reporting on it, and a player who came to hand over three
+	# rock should not have to read past the weather to do it.
+	var give: Control = _give_entry()
+	if give != null:
+		_topics_container.add_child(give)
 	if _beats.is_empty():
-		_topics_container.add_child(_empty_label())
+		if give == null:
+			_topics_container.add_child(_empty_label())
 		return
 	for beat in _beats:
 		_topics_container.add_child(_topic_button(beat))
+
+
+## The give verb's own row: a button when the player really can hand
+## something over, a plain sentence when they cannot (docs/concept/
+## errands.md, "Refusals are sentences" -- a dead greyed button teaches
+## nothing, a line naming what is needed teaches the errand), and nothing
+## at all when this villager's household is short of nothing.
+func _give_entry() -> Control:
+	if _give_offer.is_empty():
+		return null
+	if bool(_give_offer.get("available", false)):
+		var button := Button.new()
+		button.text = String(_give_offer.get("label", "Give"))
+		button.pressed.connect(_on_give_pressed)
+		return button
+	var reason := String(_give_offer.get("reason", ""))
+	if reason == "":
+		return null
+	var label := Label.new()
+	label.text = reason
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return label
+
+
+## Reports the press and withdraws the offer: the goods have left the
+## player's hands, so the row that offered them must not survive to be
+## pressed again. World re-opens the window (or does not) on its own terms.
+func _on_give_pressed() -> void:
+	var offer := _give_offer
+	_give_offer = {}
+	_rebuild_topic_list()
+	give_requested.emit(offer)
 
 
 func _empty_label() -> Label:

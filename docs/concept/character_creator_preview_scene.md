@@ -41,6 +41,119 @@ edge of a pond and some trees where the char should stroll around."*
 
 ## Mechanism
 
+### Staging — the hero is the subject, everything else frames it
+
+Everything below this heading was originally a *scatter*: every object
+sampled from the same rectangle, obstacle-checked against everything
+already placed. That is a fine way to fill a meadow and a hopeless way to
+compose a portrait, and three rendered seeds
+(`tools/probe_diorama_render.gd`) showed it plainly — the two trees piled
+into the middle of the panel and stood between the camera and the hero, the
+pond parked against whichever of four edges the seed rolled, and the hero
+itself ended up half outside the frame on two seeds out of three.
+
+Reported: *"redo and professionalize the Diorama. Make the character way
+bigger and a nicer scenery."*
+
+**The footprint is staged in depth.** Three bands, as fractions of the
+footprint's own height so the staging survives a footprint change:
+
+| Band | Holds | Why |
+| --- | --- | --- |
+| Back (`BACK_BAND_FRACTION`) | the two framing trees, the ambient boar | behind everything the hero does |
+| Middle | the pond | the hero walks in front of the water |
+| Front (`HERO_BAND_FRACTION`) | the hero's walkable lane | nearest the camera, so it reads largest |
+
+**The trees are assigned, not rolled.** One to each side edge, rooted in
+the back band, with only the depth and a little inward drift coming from
+the seed. Each trunk stands `TREE_FRAME_INSET_FRACTION` of the tree art's
+own drawn width in from its edge — under 0.5, so part of each canopy sits
+*outside* the frame. That is what makes them frame rather than merely
+stand there: a canopy filling an upper corner reads as the scene
+continuing past the panel. The original "a tree must be fully inside the
+frame" rule (`tree_bounds`) is superseded for placement, but what it was
+really guarding survives as a test — the *trunk*, the thing that anchors a
+tree to the ground, is always well inside the frame, and most of the
+canopy comes with it.
+
+**The pond sits in the middle ground**, on an x range computed to clear
+both trunks by its own half-width. A trunk in open water reads as a bug,
+and with the trees' sides assigned rather than rolled, that range can be
+computed instead of rejection-sampled.
+
+**The hero owns a lane across the front**, inset by its own drawn extent
+*and* past both framing trunks. Keeping the hero in frame is not the same
+as keeping it in the picture: a rendered seed had it hard against the left
+edge, tucked under that side's canopy, with the whole middle of the panel
+empty beside it.
+
+**The panel opens composed.** The hero is built at its lane's centre
+facing the camera and holds one ordinary `IDLE` beat before it starts
+picking actions. It used to spawn at a random clear point across the whole
+footprint and roll its first action, so the opening frame — the first
+thing a player ever sees of the character they are making — caught it
+mid-stride with its back to the camera whenever its first stroll target
+lay upstage.
+
+### How big the hero actually reads
+
+This turned out to have a closed form, and it is the reason several
+earlier passes at "the character is too small" changed nothing:
+
+```
+hero_screen_fraction = hero_drawn_height / FOOTPRINT.y
+```
+
+The camera cancels out entirely. The view's zoom is
+`view_width / FOOTPRINT.x` and its height is
+`view_width * FOOTPRINT.y / FOOTPRINT.x` (one uniform zoom — see
+`DIORAMA_VIEW_SIZE`), so `hero_height * zoom / view_height` reduces to the
+ratio above. Every previous pass widened the panel *and* the footprint at
+a fixed ratio, which is exactly the operation this formula is blind to:
+the hero stayed at **20.5%** of its own portrait through all of them.
+
+Halving the footprint's height is the only thing that moves it.
+`192x96 -> 96x48` takes the hero to **40.9%** at the same 496x248 panel —
+the same little scene at twice the magnification, not a differently shaped
+one. Both axes halve together so the 2:1 aspect (and with it
+`DIORAMA_VIEW_SIZE`, derived from that ratio) is unchanged, and 96x48 is
+still a whole number of ground tiles.
+
+Measured, not assumed — `tools/probe_diorama_subject_sizes.gd` renders each
+subject alone at a known zoom and reads its opaque bounding box back in
+world units:
+
+| Subject | Drawn size (world units) |
+| --- | --- |
+| hero | 10.0 x 19.8 |
+| tree (full grown) | 25 x 33 |
+| ambient boar, as it arrived | 30.0 x 46.5 |
+
+The subject of the portrait was the smallest thing in it, and the boar —
+more than twice the hero's height and three times its width — was the
+biggest. The boar is scenery now: no combat UI, and scaled against the
+hero's own height (`BOAR_HEIGHT_FRACTION_OF_HERO`).
+
+Two things about that scaling are worth writing down, because both were
+tests passing while a rendered frame said otherwise:
+
+- **A `CreatureMarker` owns its own `scale`.** `_apply_action_scale`
+  recomputes it from the species profile and the animal's current growth on
+  every animation step, so a value written from outside lasts until the
+  marker's next frame. The boar hangs under a scaling *holder*, re-derived
+  each frame — which also keeps it at the size it was composed at as the
+  animal grows.
+- **An illustrated animal's texture is mostly padding.** Every frame is
+  composited onto one shared 340x330 canvas with its feet on a shared
+  baseline (`IllustratedAnimalSprite.CANVAS_SIZE`/`BASELINE_Y`), so
+  `texture.get_height()` says nothing about how big the animal reads.
+  `get_used_rect()` is the honest measure.
+
+`CreatureMarker.set_status_bars_visible` is the marker's own API for the
+first of those — which bars exist, and which are independently gated, is
+the marker's business, and a caller poking at its children would silently
+miss the next bar added.
+
 ### Layout — pure, seeded, testable
 
 `src/rendering/character_preview_layout.gd` (pure `RefCounted`, no Godot
@@ -89,6 +202,32 @@ both were visible the moment the scene was actually looked at:
   eyeballed margin — and the no-clear-spot fallback is the inset rect's
   centre rather than the footprint's corner (which put three quarters of a
   tree outside the frame).
+  - *Superseded for the trees themselves by the staging section above* —
+    a framing tree is now assigned to a side edge and deliberately
+    overhangs it, so `tree_bounds` no longer places them. The rule it
+    states is very much alive: it is the shared statement of "how much
+    room a tree's own drawn body needs" that both the pond's trunk
+    clearance and the hero lane's own inset are modelled on, and the
+    hero's lane applies exactly this reasoning to the hero's own rig
+    (`hero_drawn_width`/`hero_drawn_height`, read off `CharacterView.
+    HEAD_TOP_Y` and its `SCALE` rather than pinned).
+- **The pond's silhouette resolves at a fixed cell COUNT, not a fixed cell
+  size.** `CharacterPreviewDiorama`'s pond grid used to size its cells at
+  one real world tile, which quietly made the pond's *shape* depend on how
+  big the pond happened to be — the corner-erosion pass that gives it an
+  organic edge only has as much detail as it has cells. That was already a
+  blunt 4×3 rectangle at the old footprint and collapsed to 2×2 at the
+  halved one: no interior cell left to keep solid, nothing to erode, and a
+  centre cell bordering the shore on every side. `POND_GRID_COLUMNS` fixes
+  the resolution instead, so a pond looks like a pond at any size.
+  - Two things fell out of that. `biome_at_global` had been conflating the
+    incoming *world tile* size with the pond's own cell size — the same
+    number until now — and it also has to test a tile by **overlap**
+    rather than by whether its centre falls in the water: at the shipped
+    scene the whole pond is about one world tile across, so a centre test
+    answered "land" for tiles a fish was swimming in the middle of, and a
+    fish checks the tile it wants to step onto before committing to it
+    (`FishMarker._compute_is_water_tile`). It froze where it floated.
 
 ### Stroll — pure, testable
 
@@ -346,6 +485,25 @@ which is a frame, not a freeze.
 
 ## Status / mechanisms
 
+- ✅ **The staged composition is built and tested** — depth bands, framing
+  trees assigned to the side edges, a middle-ground pond that clears both
+  trunks, a hero lane inset by the hero's own drawn extent and by the
+  trunks, a boar that reads as scenery, and a composed opening frame. The
+  hero fills 40.9% of its own portrait, up from 20.5%.
+- ✅ **Verified against rendered frames, not reasoned about.**
+  `tools/probe_diorama_render.gd` frames the diorama exactly as
+  `main_menu.gd` does and saves both the opening frame and a settled one
+  per seed; `tools/probe_diorama_subject_sizes.gd` measures each subject
+  alone. Both were necessary: the boar-is-smaller-than-the-hero assertion
+  passed twice while a rendered frame showed the boar still dominating,
+  first because it measured the sprite's mostly-empty canvas and then
+  because it measured a scale the marker had not yet overwritten.
+- ⬜ **The panel still overruns the Character tab's first unscrolled view**
+  by ~12px (`test_the_diorama_fits_within_the_first_unscrolled_view_of_
+  the_character_tab`). Pre-existing and untouched by the staging work:
+  `DIORAMA_VIEW_SIZE` is derived from `FOOTPRINT`'s aspect ratio, which
+  halving both axes leaves unchanged, so the panel is still exactly
+  496x248 and the overrun is exactly what it was.
 - ✅ All four pieces described above are built and tested: seeded layout
   (`character_preview_layout.gd`), pure stroll motion
   (`character_stroll.gd`), the Godot-coupled assembly

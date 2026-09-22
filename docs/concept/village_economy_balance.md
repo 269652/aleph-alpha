@@ -280,6 +280,107 @@ fraction is carried exactly as it already is for that market.
 A herbalist's forty herbs on the farmhouse shelf are, from now on, forty
 herbs the cottagers have.
 
+## Mechanism 6 — the works keep up with the mouths
+
+Asked directly, after the after-measurement above: *"fix the food
+production deficit so a fed village keeps its stock."*
+
+### What was measured, second pass
+
+The same village, with the probe extended to count harvests and to ask
+the assembly what it would build (`tools/probe_village_economy.gd`,
+`tools/probe_field_room.gd`):
+
+| fact | measured |
+|---|---|
+| farming households | 2 farmers, 1 herbalist, each with a six-bed field; 1 fisher with a pond |
+| farmhouses standing | **3** (at (20,19), (24,19), (6,24)), with fields |
+| farmhouses the settlement *counts* | **1** — `_standing_building_ids_in_chunk` deduplicates by id, so `_settlement_building_counts` cannot count a second farmhouse at all |
+| harvest onto the farmhouse shelves | 299 units in 20 lived days over 3 fields: **5.0 per field per day** |
+| the yield the roster is sized by | `FIELD_YIELD_PER_WORK_BLOCK` 278 per 900 s = **18.5 per field per day** |
+| meals eaten | 10 households × 2.4 = 24 a day |
+| the assembly's vote with the food reading at 0.00 | **a trade hall** |
+| room for another field | 499 of 509 clear farmhouse origins fit a field; both walkers find one |
+
+So the deficit is not room, and not a village too poor to build. It is
+three faults, each a number the village reasons with that is not the
+number the world produces:
+
+1. **The food works are gated on the wrong people.** Mechanism 7 of
+   [village_estates.md](village_estates.md) lets a village petition for
+   another farmhouse while fewer stand than its demand asks for — and then
+   asks `VillageLabor.can_staff`, which wants a *husbandman*. But a field
+   is worked by whoever's **trade** it is: `VillageFarm` hands a farmer
+   their field whatever their estate, and the only field this village had
+   was being worked by a cottager. A village nobody has yet risen in can
+   never pass that gate, so it votes for a trade hall while it starves.
+   ✅ **Fixed**: the assembly state carries `field_hands`, the households
+   whose trade works a field, and the next farmstead is wanted while one of
+   them stands without a field (`test_village_assembly.gd`). A caller that
+   has not counted keeps the estate gate.
+2. **Farmhouses are not counted.** ✅ The settlement's building count
+   deduplicated, so "outnumbered" was judged against one farmhouse however
+   many stood — with fault 1 fixed alone the village would have voted for
+   a fourth. `_settlement_building_counts` now counts the records that
+   stand (`test_earth_chunk_manager_building_counts.gd`).
+3. **The roster is sized against a yield the field does not give.** ✅ The
+   stub-world measurement behind `FIELD_YIELD_PER_WORK_BLOCK` is 3.7× what
+   a real field yields once the walk to it is in the day: a villager's two
+   work blocks are 27.5 s of a 60 s lived day, and the walk between the
+   cottage on the street and the field behind the farmhouse, at about
+   1.25 tiles a second, eats most of it — the beds stood mostly empty
+   (`tools/probe_field_timeline.gd`), and the water a tank at its drinking
+   reserve refuses ([village_water.md](village_water.md) mechanism 3) is a
+   smaller loss behind that. So the roster reads the real figure:
+   `VillageFarm.FIELD_YIELD_PER_LIVED_DAY` 5.0 over
+   `SECONDS_PER_LIVED_DAY` 60, and `SettlementFoodDemand
+   .yield_per_producer_per_assessment` is 2.5 — a field hand feeds two
+   households, a founding five needs three, a village of ten needs five
+   (`test_settlement_food_demand.gd`).
+
+### What the fix is
+
+- **The count is real.** `EarthChunkManager._field_hands_for_settlement`
+  counts, off the settlement's own regenerated roster, the households whose
+  trade works a field, and `_village_assembly_state` hands it to the
+  assembly as `field_hands` (`test_earth_chunk_manager_field_hands.gd`).
+- **The founding roster is founded once.** `SettlementGenerator` staffs the
+  founding ten to their own demand, then picks the carter and the sawyer,
+  and only then conscripts the grown village's larger demand — from
+  newcomers, never the wagon or the saw. A single pass off the end of the
+  whole roster reached the founding carter and handed the wagon to somebody
+  else on every reload (`test_settlement_generator.gd`).
+- **A growth farmhouse is sited where its field fits.**
+  `VillageRenderer.farm_plot_with_field` is the one search for a
+  farmstead's plot — the next frontage with room for a field and its fence
+  (`_field_fits_at`, [village_farms.md](village_farms.md)), the outskirts
+  when the streets are full — and both the founding placement and
+  `EarthChunkManager._growth_site_for` ask it, against the landmarks and the
+  ground a project is already rising on
+  (`test_earth_chunk_manager_farm_growth_site.gd`). A farmhouse the
+  assembly votes itself was sited by the plain frontage ladder before,
+  which is a farmhouse with nowhere to sow waiting to happen.
+
+### What it costs in ground
+
+Five farmsteads for ten households is the historical ratio, and it is
+paid in frontage: each is a 3×2 house on the street with a fenced 3×2
+field behind it, so the last street of a founding village is now a belt of
+farms right up to the chunk's south edge. Two packing tests measured it,
+and a third caught the belt packing two farmsteads yard to yard on the
+outskirts with no column for the rail line their fields share — the
+search keeps one clear column or row between two yards now
+(`VillageFarm.yards_touch`, [village_farms.md](village_farms.md)).
+A village of fourteen with its food works really standing has a plot or
+two of frontage left, where it used to have four (the growth test that
+asked for a house after a rung now asks for a farmstead, which the
+outskirts can always take). And a mill's spur is three columns wide at
+most and cannot lane through a field, so timber that appears *beyond* the
+farm belt is timber the village cannot reach: **0 of 12** stub villages
+healed a mill from a forest on their south edge, **12 of 12** from one on
+their north. The heal test paints its timber on the north; the south
+case is a known gap below.
+
 ## Interaction with other docs
 
 - [traveling_merchants.md](traveling_merchants.md) — the cart, the buy
@@ -339,6 +440,18 @@ herbs the cottagers have.
   leave, stall before ledger before shelf, a sawmill is nobody's larder,
   fractions carried, no debt).
 
+- ✅ **Mechanism 6 — the works keep up with the mouths** (2026-09-20).
+  The trade-worked gate (`VillageAssembly` `field_hands`,
+  `test_village_assembly.gd`, 48), the real farmhouse count
+  (`test_earth_chunk_manager_building_counts.gd`, 3), the real-field
+  yield (`VillageFarm.FIELD_YIELD_PER_LIVED_DAY`,
+  `test_settlement_food_demand.gd`, 16), the founding-first conscription
+  (`test_settlement_generator.gd`, 33), the field-hand count off the
+  roster (`test_earth_chunk_manager_field_hands.gd`, 3) and the
+  field-aware growth site (`VillageRenderer.farm_plot_with_field`,
+  `test_earth_chunk_manager_farm_growth_site.gd`, 3). The measurement is
+  under "Measured after, second pass" below.
+
 ### Measured after
 
 The same probe, the same village, both fixes in (the table under "What
@@ -363,6 +476,53 @@ was measured" is the before):
 - **Food reads 1.00 at three samples** where it never did, and the cart
   never touches it — the shelves never reach the 60 units ten households
   keep, so nothing is for sale.
+
+### Measured after, second pass
+
+The same probe and the same village with mechanism 6 in. The roster the
+chunk now founds is three farmers, a herbalist and a fisher — five
+producers for ten households — with four farmhouses and a fisher's hut
+standing where there were two fields and a pond:
+
+| seconds | roster | food on the shelves | food satisfaction | harvested so far | herb on the shelves | purse | wallets | broke | worst need |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 150 | 10 | 40 | 1.00 | 38 | 38 | 0 | 0 | 10 of 10 | income |
+| 300 | 10 | 37 | 1.00 | 80 | 35 | 240 | 150 | 0 of 10 | work |
+| 450 | 10 | 42 | 1.00 | 139 | 40 | 480 | 282 | 0 of 10 | work |
+| 600 | 10 | 45 | 1.00 | 195 | 43 | 720 | 416 | 0 of 10 | work |
+| 750 | 11 | 19 | 0.64 | 226 | 17 | 369 | 509 | 0 of 11 | work |
+| 900 | 11 | 4 | 0.08 | 269 | 2 | 633 | 655 | 0 of 11 | food |
+| 1050 | 11 | 6 | 0.15 | 327 | 4 | 897 | 803 | 0 of 11 | food |
+| 1200 | 11 | 8 | 0.23 | 360 | 6 | 1161 | 977 | 0 of 11 | food |
+
+- **A fed village of ten keeps its stock.** For the whole first half the
+  shelves hold 37–45 units and food reads 1.00 at every sample, where the
+  first pass read 0.29 → 1.00 → 0.54 → 1.00 → 0.38 → 0.21 → 0.00 and
+  ended at 2 units. Four fields brought in 360 units over twenty lived
+  days: 4.5 a field a day, the number the roster is now sized by.
+- **The deficit comes back with the eleventh household**, and it is a
+  producer who cannot produce. The newcomer's trade is fisher, so the
+  demand counts them (six producers wanted, six present) and the assembly
+  wants no farmhouse (four field hands, four farmhouses) — but a fisher's
+  works is a pond beside their house, and at this measurement a pond was
+  dug at founding and on a later visit (`_dig_fisher_ponds_if_missing`),
+  never in play. The probe's field report shows them with no pond and no
+  shelf. Eleven mouths on four fields and one pond is what drains the
+  shelves from 45 to 4. Not a fault in the count, and closed since in
+  [village_ponds.md](village_ponds.md) ("A pond dug the day the fisher's
+  house stands"): they move into the roof that let them in on the next
+  settlement step ([village_growth.md](village_growth.md), "…and nobody
+  ever moved in"), the ground settles around it the same step, and the
+  pond is dug beside it and handed to them.
+- **Herb reads 1.00 throughout**; fuel read 0.00 at two samples (450 and
+  600 s) while a trade-hall project started and took its wood, and the
+  purse fell once, 720 → 369, at the sample the newcomer arrived, then
+  climbed again at the old rate. The purse dip was root-caused by the
+  next mechanism: an arrival re-derives the village, and the
+  re-derivation made a fresh market and wiped the purse with it — kept
+  now ([village_ponds.md](village_ponds.md), "And the re-derivation keeps
+  the village's market"). The fuel dip is recorded so the next
+  measurement starts from it.
 
 ### Two regressions the measurement found, and closed
 
@@ -394,20 +554,43 @@ honestly show through the step.
 
 ## Known gaps, stated rather than papered over
 
-- **A fed village eats what it grows, and the food reading is a stock.**
-  The wage's first consequence is that everybody eats: in the table
-  above the food on the shelves climbs to 28 and then drains to 0 over
-  the second half, because ten villagers who can all afford a meal eat
-  more than one farmhouse and one fisher's hut grow — a deficit poverty
-  used to hide. The answer already designed for it is
-  [village_estates.md](village_estates.md) mechanism 7 (a works that
-  feeds people scales with the people); nothing here changes it. What
-  this doc does change is how hard that bites: the estate layer reads
-  food's satisfaction off stock rather than off the flow of meals (that
-  doc's own known gap), so a village growing exactly what it eats holds
-  no stock and reads short. Mechanism 4 keeps the target as low as the
-  village's own day allows; wiring the flow is the separate pass that
-  doc already names.
+- **A fed village eats what it grows — closed for the village as
+  founded, open past it.** The first pass found ten villagers who could
+  all afford a meal eating more than one farmhouse and a pond grow;
+  mechanism 6 sizes the works to the mouths and the second measurement
+  holds its stock. Past the founding ten the works must keep growing
+  with the village; a newcomer who fishes now digs their pond the day
+  their house stands ([village_ponds.md](village_ponds.md), "A pond dug
+  the day the fisher's house stands" — a completed building settles the
+  ground around the people already standing), where measured before that they
+  counted as a producer and produced nothing until the chunk was next
+  loaded. The
+  estate layer also still reads food's satisfaction off stock rather
+  than off the flow of meals ([village_estates.md](village_estates.md)'s
+  own gap), so a village growing exactly what it eats holds no stock and
+  reads short; mechanism 4 keeps the target as low as the day allows.
+- **The yield is the commute's.** A field hand feeds two households
+  because the walk between cottage and field eats most of the work
+  window, not because a field grows little. Housing the farmer at the
+  farmstead, or dropping the midday walk home, would lift the yield
+  toward the stub world's 18.5 a day and cut the farm belt to a third —
+  the lever for a village that wants its frontage back. The water a tank
+  at its drinking reserve refuses is the smaller lever behind it.
+- **A household's stored occupation ignores conscription.** The
+  household store keeps the trade an identity rolled, the roster the
+  village works by conscripts field hands over it, and the two disagree
+  for exactly the conscripted households (the probe's household list
+  shows two carters and two farmers where the roster has one and three).
+  Production follows the roster, so the shelves are right; the census,
+  the labour supply and the spare-capacity rule read the store, so they
+  are wrong by the conscripted few.
+- **The farm belt walls the south.** A mill's spur is three columns wide
+  at most and cannot lane through a field, so timber that appears beyond
+  the belt of farmsteads on a village's last street is timber a later
+  visit cannot reach (0 of 12 stub villages healed a south-side mill,
+  12 of 12 a north-side one). A growth farmstead sited on the outskirts
+  has its doorstep laid but not the spur `farm_plot_with_field` returns;
+  its villager walks the open ground home.
 - **Meal gold is a sink.** A meal bought on the stall or off a shelf
   destroys its coin; it does not return to the purse. With the wage
   bill covered twice over by exports that is affordable, and routing the

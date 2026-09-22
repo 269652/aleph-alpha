@@ -58,3 +58,27 @@ func test_swing_duration_matches_the_real_attack_swing_length():
 		var result := CharacterActionPicker.pick_next(rng)
 		if result.action == CharacterActionPicker.Action.SWING:
 			assert_almost_eq(result.duration, CharacterActionPicker.SWING_DURATION, 0.001)
+
+
+## How long ONE named action lasts, without rolling which action it is --
+## the diorama's opening beat is a fixed IDLE (see
+## CharacterPreviewDiorama._finish_build) but should still last as long as
+## any other idle does, rather than carrying a duration of its own.
+func test_duration_of_stays_inside_that_actions_own_range():
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for action in CharacterActionPicker.DURATION_RANGE:
+		var span: Vector2 = CharacterActionPicker.DURATION_RANGE[action]
+		for draw in 20:
+			var duration: float = CharacterActionPicker.duration_of(action, rng)
+			assert_between(duration, span.x, span.y, "action %s" % action)
+
+
+## And it is the same span pick_next would have used for that action --
+## read from one table, not restated.
+func test_duration_of_agrees_with_pick_next():
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	var picked: Dictionary = CharacterActionPicker.pick_next(rng)
+	var span: Vector2 = CharacterActionPicker.DURATION_RANGE[picked["action"]]
+	assert_between(picked["duration"], span.x, span.y)

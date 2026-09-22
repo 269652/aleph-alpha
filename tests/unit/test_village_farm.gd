@@ -1451,3 +1451,39 @@ func test_a_shared_line_leaves_the_ground_showing_through():
 			TerrainRenderer.is_overlay_only_modification(String(shared_id)),
 			"%s would paint a bare earth square over ground somebody walks" % shared_id
 		)
+
+
+# -- two farmsteads keep a rail line between their yards ------------------
+#
+# docs/concept/village_farms.md "One search, whoever asks": two fields can
+# share ONE line of rails, so two farmhouses need at least one clear column
+# or row between their footprints for that line to stand on. Measured on
+# the stub villages once the founding roster raised five farmsteads: the
+# outskirts search packed farmhouses at (6,24) and (9,24) shoulder to
+# shoulder, and each field's inner rail line fell on the other's beds --
+# 28 open sides across the villages sampled.
+
+func test_farmsteads_side_by_side_with_no_column_between_touch_yards():
+	assert_true(VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(9, 24)))
+
+
+func test_farmsteads_one_clear_column_apart_do_not_touch_yards():
+	assert_false(VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(10, 24)))
+	assert_false(VillageFarm.yards_touch(Vector2i(20, 19), Vector2i(24, 19)))
+
+
+func test_farmsteads_stacked_with_no_row_between_touch_yards():
+	assert_true(VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(6, 26)))
+	assert_false(VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(6, 27)))
+
+
+func test_farmsteads_touching_at_a_corner_touch_yards():
+	assert_true(VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(9, 26)))
+	assert_false(VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(10, 26)))
+
+
+func test_yards_touch_is_symmetric():
+	assert_eq(
+		VillageFarm.yards_touch(Vector2i(9, 24), Vector2i(6, 24)),
+		VillageFarm.yards_touch(Vector2i(6, 24), Vector2i(9, 24))
+	)

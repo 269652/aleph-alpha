@@ -118,6 +118,46 @@ below), `play_attack_swing`-style visual, then resolve.
    note, same reasoning) plus a new procedural effect sprite per atom (see
    below), at the target.
 
+### A spell is a blow
+
+One rule, and everything in this section is downstream of it:
+
+> **Damage the player deals is the same behavioural event however it is
+> delivered.** A creature that a spell hurts turns on the caster, and a
+> creature a spell kills pays what a creature a sword kills pays.
+
+`CreatureMarker.struck_by(attacker, amount, force)` is the door a blow is
+supposed to come through. It takes the damage, records the attacker, and
+sets `is_aggroed` — three things a fight needs — and `take_damage` does only
+the first. A spell that calls `take_damage` directly is therefore not a
+weaker attack; it is a *different kind of act*, one the world does not
+notice being done to it.
+
+That is not a nuance. It is the difference between magic being combat and
+magic being an exploit:
+
+- **A creature a spell hurts must fight back.** Otherwise the caster's
+  correct play against anything in the game is to stand outside its reach
+  and tap a key, which is neither a fight nor interesting.
+- **A creature a spell kills must pay.** XP and a mote
+  ([spell_weaving.md](spell_weaving.md)) hang off the kill, and the
+  Magicraft loop is fed by kills. A mage — the one class built around that
+  loop — killing only with spells would be the one character who can never
+  fill a Weave.
+- **The cast must answer.** A swing that lands puts a number on the thing
+  it hit ([feedback.md](feedback.md)); a cast that lands must too, or the
+  player cannot tell a spell that hit from one that whiffed.
+
+Force is the one exception, and deliberately so: a spell's damage passes
+`Vector2.ZERO` force, so the braced-windup rule in `apply_knockback` is
+untouched. Knockback remains the business of the `push`/`pull`/`gravity_shift`
+atoms, which ask for it by name. Being burned makes an animal angry; it does
+not shove it.
+
+The same rule binds anything else the player throws. A thrown stone that
+damages a creature without angering it is the same bug wearing different
+clothes.
+
 ### Per-atom mechanics
 
 `spell_atom_catalog.gd`'s own `mag_ref`/`dur_ref` shape is the organizing
@@ -126,17 +166,17 @@ axis — not the `category` field, which only drives the *visual* palette
 
 | Shape | Atoms | Mechanic |
 |---|---|---|
-| **Instant, magnitude** | `fire_damage`, `frost_damage`, `shock_damage`, `poison_damage` | `target.take_damage(magnitude)` — duck-typed, already shared by Player and CreatureMarker, already mitigation-aware (armor/block on Player, boss-aggro gate on creatures). All four are mechanically identical for now — no elemental-interaction/resistance model exists yet (magic.md's own open question); they differ only in visual color. |
+| **Instant, magnitude** | `fire_damage`, `frost_damage`, `shock_damage`, `poison_damage` | `target.struck_by(caster, magnitude)` where the target has it (every `CreatureMarker` does), falling back to `target.take_damage(magnitude)` where it does not — both duck-typed, both already mitigation-aware (armor/block on Player, boss-aggro gate on creatures). **The door matters more than the number**: see *A spell is a blow* below. All four are mechanically identical for now — no elemental-interaction/resistance model exists yet (magic.md's own open question); they differ only in visual color. |
 | | `minor_heal`, `major_heal` | Restore `health`/`info.health` toward `max_health`/`info.max_health`, clamped. |
 | | `push`, `pull` | `MeleeAttack.knockback_vector`-shaped math (away from / toward the caster) → `CreatureMarker.apply_knockback`. Player currently has **no** `apply_knockback` sink (nothing in this game has ever knocked the player back) — add a minimal, symmetric one so a hostile-cast push/pull isn't creature-only. |
 | | `teleport` | `target.position = target.position + facing_direction * magnitude` (pixels). No dry-land validation (that's `_compute_dry_land_spawn_tile`-grade expensive, chunk-aware work, wrong cost for an instant cast) — an honest, documented gap, not a silent one. |
 | | `accelerate_growth` | Targets whatever `FarmPlot` sits at the caster's faced tile (`TileTargeting.facing_tile`, the same single-adjacent-tile resolution `build`/`destroy` already use) and calls its real `advance(magnitude)` — the exact hook `FarmPlot`'s own per-tick simulation already uses, just with a bigger delta. No-op (mana still spent) if nothing is there — "even an affordable spell still has to land" (magic.md, Constraint layer 2). |
 | **Timed, no magnitude** | `ignite`, `blight` | A new `IgniteModel`, mirroring `VenomModel` exactly (`damage_per_second(stacks)`), tracked via the existing `DebuffStack` and ticked by a new `_ignite_step`/`_blight_step` mirroring `Player._venom_step` line for line — including a CreatureMarker-side equivalent, since `DebuffStack` itself is target-agnostic even though its only current consumer (venom) is Player-only. |
 | | `freeze`, `root` | A `DebuffStack`-tracked "rooted" status; `_authority_step` zeroes `input_direction` while active (Player), and the creature-movement step skips its own movement resolution while active (CreatureMarker) — `freeze`/`root` are mechanically identical (both "can't move for duration"); they stay distinct atoms because their cost/tier differ and their visuals will. |
-| | `slow` | A `DebuffStack`-tracked multiplier folded into `Player.current_speed_multiplier`'s existing product chain as one more term, and into whatever the creature-side movement-speed equivalent is. |
+| | `slow` | A `DebuffStack`-tracked multiplier folded into `Player.current_speed_multiplier`'s existing product chain as one more term, and into `CreatureMarker._advance` — the one choke point every intent's movement already funnels through, which the herd-disease slowdown had been using alone. ✅ both sides, 2026-09-21; before that `grep -c SLOW` over `creature_marker.gd` returned **0**, so Frost Lance (`frost_damage |> slow`) slowed nothing in the world and half a two-atom spell was decoration. |
 | | `suppress_mutation` | Tracked via `DebuffStack` as a real, queryable status; not yet consulted by anything (mutation induction itself is Tier 2 below) — honestly inert until that lands, not faked. |
 | | `illuminate` | A local light radius flag for duration — cosmetic-only for now (no light-rendering system exists to attach to yet beyond the existing day/night tint); tracked via `DebuffStack` so it's real, queryable state even before a renderer consumes it. |
-| | `calm`, `fear` | `CreatureBehavior.decide(context)` is a **pure function of a context Dictionary** the caller builds (includes `"temperament"`) — not a hardcoded read of the creature's own permanent `CreatureInfo.temperament`. `fear`/`calm` don't touch `creature_behavior.gd` at all: `CreatureMarker` overrides the context's `"temperament"` value for the debuff's duration before calling `decide()` (forcing a `flee` read for `fear`, a passive one for `calm`) — additive at the call site, zero changes to the pure decision function itself. |
+| | `calm`, `fear` | `CreatureBehavior.decide(context)` is a **pure function of a context Dictionary** the caller builds (includes `"temperament"`) — not a hardcoded read of the creature's own permanent `CreatureInfo.temperament`. `fear`/`calm` don't touch `creature_behavior.gd` at all: `CreatureMarker` overrides the context's `"temperament"` value for the debuff's duration before calling `decide()` — additive at the call site, zero changes to the pure decision function itself. 🚧 **Both atoms do the same one thing, and against a calm animal that thing is nothing.** `_will_fight` is the only reader of temperament and it asks `== "aggressive"`, so every other string behaves identically: the two atoms take the fight out of something aggressive and change nothing about a deer. `calm` is complete — an already-calm animal has nothing to calm — but `fear` promises flight it cannot cause, and causing it would mean a real `flees_regardless` fact threaded into the pure decider rather than a temperament rename. Named rather than papered over. |
 | | `reveal` | `EarthChunkManager.mark_chunk_explored(chunk_coord)` for every chunk within radius of the target point — the real, live `ExploredTiles` wrapper, whose own doc comment already flags it as session-only/unpersisted (an existing, named gap this doesn't need to fix). Currently has exactly one caller (`/map`); this becomes the second. Marking is permanent (`ExploredTiles` has no unmark), so `dur_ref` reads here as "how far a reveal-pulse radius reaches," not "how long before it's forgotten." |
 | | `summon_wisp` | Tracked via the same generic `DebuffStack` status dispatch as every other timed atom (`SpellStatusEffects.SUMMON_WISP`) — simpler than an actual companion node, and deliberately **not** `BondedCompanionMarker` reused directly, since that class is permanent, capped, and save-persisted (`Player.bonded_companions`); entangling a timed summon with that already-shipped system risks its persistence contract for no benefit. Real, queryable state today; no visual companion node or combat behavior yet (a further-simplified scope than a first pass at this doc proposed — named here rather than silently shipped as something it isn't). |
 | **Timed, with magnitude** | `shield` | A simple bespoke `_shield_absorb_remaining`/`_shield_time_remaining` pair on Player (mirrors `Block`'s own "bespoke field, not a generic system" precedent), consumed inside `take_damage` before armor mitigation, expiring at zero or at `duration`, whichever first. |
@@ -210,7 +250,49 @@ tested pure generation, matching this codebase's established boundary.
   the physical key-press itself (no artificial cooldown, unlike melee's
   `ATTACK_COOLDOWN` — mana affordability already throttles repeat casts, and
   melee has no "ammo" cost to do the same job).
-- No spell-selection UI exists yet, so the "cast" key always casts
-  `Player.DEFAULT_CAST_SPELL_ID` ("fire_bolt") — `cast_spell(spell_id)`
-  itself already accepts any known id; only the "which spell" binding is a
-  placeholder.
+- ✅ **A spell you chose** (2026-09-21). Measured before: `cast_spell`
+  accepted any known id and had exactly one caller, which passed
+  `Player.DEFAULT_CAST_SPELL_ID` — so the cast key cast Fire Bolt for ever
+  and twenty-three authored spells were unreachable except by weaving one
+  from scratch. Meanwhile `World._build_spell_bar` filled four slots with
+  locked placeholders under the comment *"there is no spell/ability system
+  yet"*, which had been false for a long time.
+
+  **Four slots on keys 6–9**, symmetric with the hotbar's 1–5 for items: a
+  number key activates a slot, and the bar has been four slots wide since
+  it was a stub. A slot holds the Nth entry of `known_spell_ids()`, so the
+  row grows as a guild teaches ([mage_guild.md](mage_guild.md)) rather than
+  being a second list to keep in step. Pressing its key **casts that spell
+  and selects it**; the `cast` key then repeats the selection, so the
+  deliberate act and the quick one are the same act.
+
+  A cycle key was rejected: with four slots a direct key is one press
+  instead of up to four, and cycling gives no answer to *"which one is
+  loaded right now"* without a readout anyway.
+
+  The woven draft still wins when there is one ([spell_weaving.md](spell_weaving.md)):
+  a character who has arranged atoms meant to cast *that*. The selection is
+  what the key falls back to, which is what `DEFAULT_CAST_SPELL_ID` used to
+  hardcode.
+
+  An empty slot refuses with a sentence rather than doing nothing, the same
+  rule every other verb in this overhaul follows
+  ([feedback.md](feedback.md)).
+
+- ✅ **A spell is a blow** (2026-09-22) — see *A spell is a blow* above.
+  `struck_by` had **exactly one caller in the whole game**, the melee swing,
+  so every other way the player dealt damage went through the door that does
+  not notice. Measured: a creature burned to death by Fire Bolt never turned
+  on the caster, paid no XP, and dropped no mote — so the risk-free way to
+  kill anything was to stand at `TOUCH_RANGE` and tap the cast key, and the
+  mage was the one class whose own kills could not feed its own Weave. Now
+  `SpellAtomEffects` takes the caster and prefers `struck_by`; the kill
+  credit that lived inside `_perform_attack` is a shared `_credit_kill` both
+  the swing and the cast call; and a cast that lands answers with its total.
+  The same change routes the thrown stone through the same door.
+
+- ✅ **Mana on screen** (2026-09-21). There was no mana readout anywhere:
+  the one resource every cast spends was invisible, and *"Not enough mana"*
+  was the first a player heard of it. It is now a meter in the same card as
+  hunger, thirst, stamina and warmth — the same row widget, so it cannot
+  drift from them — in a violet no other meter uses.

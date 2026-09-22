@@ -648,6 +648,29 @@ them rather than shoving them about.
   deliberately kept OUT of the UI-scale registry (they are freed and rebuilt
   as the player's state changes; a dictionary keyed by them would grow all
   session). Tested (`test_hud_readouts.gd`).
+- ✅ **Every timed thing riding on you, on the same row** (2026-09-21).
+  The chips took the survival meters and nothing else, so a character could
+  be venomed, burning, blighted, frozen, rooted, slowed, shielded and fed a
+  damage-boosting meal at the same moment and the HUD showed **none of it**
+  — every one of those already tracked, already ticked, already carrying
+  its own `time_remaining`. Only the reading was missing, which is why it
+  reuses this row rather than building a second piece of furniture.
+
+  `Player.active_effects()` gathers them in the one
+  `{"debuff_id", "stacks", "time_remaining"}` shape `DebuffStack` and
+  `FoodConsumption` both already emit, so a new kind of buff reaches the
+  screen by being listed once rather than by somebody remembering a fifth
+  argument. Each chip says how long is left — a chip that only says
+  *Burning* answers nothing a player can act on — rounding **up**, because
+  half a second is still a second to act in and a chip reading "0s" while
+  the thing still burns would be a lie. Stacks are shown only above one,
+  since `VenomModel` caps at three and the difference between one and three
+  is the difference between an irritation and a death sentence. Harm reads
+  in `NEGATIVE` and help in `ACCENT`; anything unnamed reads as harm and as
+  **its own id**, because a silent chip is exactly how an effect goes
+  unnoticed. Meter problems still come first: starving outranks being
+  briefly slowed, and the row must not reorder as effects come and go.
+  Tested (`test_effect_chips.gd`, 14).
 - ✅ **Held-item card** — `HudReadouts.held_item_line` /
   `World._update_held_item_card`, above the hotbar: what is equipped and its
   `ItemWear.condition_for` grade. Hides the card, not the label. Tested

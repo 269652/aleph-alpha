@@ -1031,6 +1031,7 @@ func test_strong_aggressive_predator_attacks_a_nearby_player():
 	var player := _add_stub_player(Vector2(108, 100))  # within attack range
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0, "a strong predator should damage the player")
 
@@ -1067,6 +1068,7 @@ func test_venomous_snake_applies_venom_when_it_attacks_the_player():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	snake._process(0.2)
+	_let_the_jaws_close(snake)
 
 	assert_gt(player.damage_taken, 0.0, "the snake should still deal ordinary bite damage")
 	assert_eq(player.venom_applications, 1, "a venomous snake's bite should apply venom")
@@ -1077,6 +1079,7 @@ func test_nonvenomous_predator_does_not_apply_venom():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0)
 	assert_eq(player.venom_applications, 0, "an ordinary predator's bite should not apply venom")
@@ -1144,6 +1147,7 @@ func test_infected_predator_spreads_disease_when_it_bites_the_player():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0, "the bite should still deal ordinary damage")
 	assert_eq(player.disease_bites, [DiseaseModel.PREDATOR])
@@ -1154,6 +1158,7 @@ func test_healthy_predator_does_not_spread_disease_when_it_bites_the_player():
 	var player := _add_stub_player(Vector2(108, 100))
 
 	predator._process(0.2)
+	_let_the_jaws_close(predator)
 
 	assert_gt(player.damage_taken, 0.0)
 	assert_eq(player.disease_bites.size(), 0)
@@ -4505,3 +4510,396 @@ func test_a_hunt_across_open_ground_still_closes_on_its_prey():
 	var before := marker.position
 	marker._apply_decision({"intent": "hunt", "direction": Vector2.RIGHT}, 0.5)
 	assert_gt(marker.position.x, before.x, "a predator must still be able to hunt")
+
+
+# -- One-shot rows: the flinch and the collapse (docs/concept/monsters.md) --
+#
+# No species has hurt or death art yet (pinned on the art side by
+# test_hurt_and_death_never_borrow_another_species_row), and neither row is
+# allowed to borrow another -- so the ONLY way to exercise this path is to
+# hand a marker a sheet that claims the rows. That is exactly the point:
+# every test below that does NOT install the stub pins today's behaviour,
+# unchanged, for every creature actually in the game.
+
+const IllustratedAnimalSpriteForMarker = preload("res://src/rendering/illustrated_animal_sprite.gd")
+
+
+## An IllustratedAnimalSprite stand-in that declares whatever rows a test
+## asks for, each sliced to a given number of 2x2 frames. Answers the whole
+## surface CreatureMarker._animation_step actually calls on _illustrated --
+## has_action/generate_textures/faces_left/marker_scale/waterline_offset_y
+## -- and nothing more, so a new call added there fails loudly here rather
+## than silently taking the procedural branch.
+class StubIllustrated:
+	# EXTENDS the real class rather than duck-typing it: _illustrated is a
+	# typed property, so a stand-in that merely answers the same method
+	# names cannot be assigned to it at all (set() silently refuses the
+	# type mismatch, and every test here then measures the REAL sprite,
+	# quietly passing for the wrong reason). Subclassing also means a
+	# signature that drifts from the base fails loudly at parse time.
+	extends IllustratedAnimalSpriteForMarker
+
+	## action -> frame count.
+	var rows := {}
+
+	func has_action(_species: String, action: String) -> bool:
+		return rows.has(action)
+
+	## Frame i is (i+2)x(i+2) pixels -- a different SIZE per index, so a
+	## test can tell WHICH frame of a row is showing from marker.texture
+	## alone. Uniform frames would make every "is it on the right frame"
+	## assertion below pass no matter what the animation did.
+	func generate_textures(_species: String, action: String) -> Array[ImageTexture]:
+		var out: Array[ImageTexture] = []
+		for i in int(rows.get(action, 0)):
+			var side := i + 2
+			out.append(ImageTexture.create_from_image(Image.create(side, side, false, Image.FORMAT_RGBA8)))
+		return out
+
+	func faces_left(_species: String) -> bool:
+		return false
+
+	func marker_scale(_species: String, _action: String = "walk") -> float:
+		return 1.0
+
+	func waterline_offset_y(_species: String) -> float:
+		return 0.0
+
+
+## Installs illustrated art claiming `rows` on the marker under test, and
+## returns it. Frame counts are what set each row's DURATION (one
+## ANIMATION_FRAME_DURATION apiece), so the timings below are derived from
+## the row handed in, never from a number typed twice.
+func _give_illustrated_rows(rows: Dictionary) -> StubIllustrated:
+	var stub := StubIllustrated.new()
+	stub.rows = rows
+	marker.set("_illustrated", stub)
+	return stub
+
+
+func _row_duration(frames: int) -> float:
+	return float(frames) * CreatureMarker.ANIMATION_FRAME_DURATION
+
+
+## A survivable hit flinches, for exactly as long as the hurt row lasts.
+func test_a_hit_plays_the_hurt_row_when_the_species_has_one():
+	_give_illustrated_rows({"walk": 8, "hurt": 3})
+	marker.take_damage(1.0)
+	assert_eq(marker.current_action(), "hurt")
+
+
+## ...and then hands the creature straight back to whatever the AI is doing.
+## A one-shot row that never cleared would leave the animal permanently
+## stuck mid-flinch.
+func test_the_flinch_ends_when_its_row_has_played_out():
+	_give_illustrated_rows({"walk": 8, "hurt": 3})
+	marker.take_damage(1.0)
+	var elapsed := 0.0
+	while elapsed < _row_duration(3) + 0.05:
+		marker._process(0.05)
+		elapsed += 0.05
+	assert_ne(marker.current_action(), "hurt")
+
+
+## The flinch is paced by its OWN clock, started at the moment of the hit --
+## not by the shared _elapsed_time every cycling action reads. A row that
+## began mid-cycle has to start at frame 0, or half the flinches in a fight
+## would show only their tail end.
+func test_the_flinch_restarts_from_the_top_on_a_second_hit():
+	_give_illustrated_rows({"walk": 8, "hurt": 4})
+	marker.take_damage(1.0)
+	for _i in 3:
+		marker._process(_row_duration(4) * 0.25)
+	marker.take_damage(1.0)
+	var almost := _row_duration(4) * 0.75
+	var elapsed := 0.0
+	while elapsed < almost:
+		marker._process(0.05)
+		elapsed += 0.05
+	assert_eq(marker.current_action(), "hurt", "a second hit must restart the row, not inherit the first's clock")
+
+
+## Today's species, unchanged: no hurt art anywhere, so a hit changes
+## nothing about what the creature is showing.
+func test_a_hit_on_a_species_without_hurt_art_starts_no_flinch():
+	marker.take_damage(1.0)
+	assert_ne(marker.current_action(), "hurt")
+
+
+## A lethal hit must not flinch on its way out -- the death row is the one
+## that plays, and only one row can play at a time.
+func test_a_lethal_hit_skips_the_flinch_entirely():
+	_give_illustrated_rows({"walk": 8, "hurt": 3, "death": 5})
+	marker.take_damage(marker.info.max_health)
+	assert_eq(marker.current_action(), "death")
+
+
+## The body collapses before the marker goes. Without this, a death row has
+## nowhere to play at all: _die() freed the marker in the same frame the
+## killing blow landed.
+func test_a_lethal_hit_plays_the_death_row_before_the_marker_goes():
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	marker.take_damage(marker.info.max_health)
+	assert_false(marker.is_queued_for_deletion(), "the body must still be there to collapse")
+	var elapsed := 0.0
+	while elapsed < _row_duration(5) + 0.05:
+		marker._process(0.05)
+		elapsed += 0.05
+	assert_true(marker.is_queued_for_deletion(), "and gone once the row has played")
+
+
+## The region's mortality books hear about it AT ONCE, not when the row
+## ends. A death deferred to the end of an animation is a death that a
+## chunk unload mid-collapse would lose outright -- and the aggregate
+## simulation restocking whatever the player just hunted is the exact bug
+## _book_death_against_the_region was added to close.
+func test_the_death_is_booked_at_once_not_when_the_row_ends():
+	var world := StubWorldRecordingDeaths.new()
+	marker.setup(world, TILE_SIZE)
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	marker.take_damage(marker.info.max_health)
+	assert_eq(world.death_positions.size(), 1, "booked on the killing blow, before the body has finished falling")
+
+
+## The carcass lands where the body finally came to rest, not on top of a
+## creature still visibly collapsing.
+func test_the_carcass_lands_when_the_death_row_finishes():
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	var before := get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size()
+	marker.take_damage(marker.info.max_health)
+	assert_eq(get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size(), before, "not while the body is still falling")
+	var elapsed := 0.0
+	while elapsed < _row_duration(5) + 0.05:
+		marker._process(0.05)
+		elapsed += 0.05
+	assert_eq(get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size(), before + 1)
+
+
+## A corpse does nothing else -- it does not wander off, graze, or take
+## another step while the row plays out. Dead outranks every state a live
+## creature can be in.
+func test_a_collapsing_body_does_not_move():
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	marker.take_damage(marker.info.max_health)
+	var resting := marker.position
+	for _i in 3:
+		marker._process(0.05)
+	assert_eq(marker.position, resting)
+
+
+## ...and cannot be killed a second time on the way down, which would book
+## the death twice and spawn two carcasses.
+func test_a_collapsing_body_cannot_be_killed_again():
+	var world := StubWorldRecordingDeaths.new()
+	marker.setup(world, TILE_SIZE)
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	marker.take_damage(marker.info.max_health)
+	marker.take_damage(marker.info.max_health)
+	assert_eq(world.death_positions.size(), 1)
+
+
+## The death row plays IN ORDER, one frame per ANIMATION_FRAME_DURATION,
+## off its own clock rather than the shared _elapsed_time -- so the collapse
+## reads as a collapse and not as a random pose.
+func test_the_death_row_plays_its_frames_in_order():
+	var stub := _give_illustrated_rows({"walk": 8, "death": 4})
+	var frames := stub.generate_textures("herbivore", "death")
+	marker.take_damage(marker.info.max_health)
+	for index in 4:
+		assert_eq(
+			marker.texture.get_size(),
+			frames[index].get_size(),
+			"frame %d of the collapse" % index
+		)
+		marker._process(CreatureMarker.ANIMATION_FRAME_DURATION)
+
+
+## And it STOPS on its final frame (see
+## IllustratedAnimalSprite.HOLDS_LAST_FRAME_ACTIONS) -- the pose the body
+## actually comes to rest in, rendered for a real step before the carcass
+## replaces it. A row that wrapped instead would snap the corpse back
+## upright for exactly that frame, which is the whole reason a death row
+## cannot simply reuse the cycling path.
+func test_the_body_comes_to_rest_on_the_death_rows_last_frame():
+	var stub := _give_illustrated_rows({"walk": 8, "death": 3})
+	var frames := stub.generate_textures("herbivore", "death")
+	marker.take_damage(marker.info.max_health)
+	var elapsed := 0.0
+	while elapsed < _row_duration(3):
+		marker._process(0.05)
+		elapsed += 0.05
+	assert_false(marker.is_queued_for_deletion(), "precondition: the resting pose is still on screen")
+	assert_eq(
+		marker.texture.get_size(),
+		frames[frames.size() - 1].get_size(),
+		"a wrapped row would be showing frame 0 -- the creature back on its feet"
+	)
+# -- a bear is not a boar (docs/concept/predator_profiles.md) ------------
+#
+# Measured before SpeciesBite existed: every species in the game bit for
+# one ATTACK_DAMAGE (6.0) on one ATTACK_COOLDOWN (0.8 s), sensed at one
+# radius and fled below half health, so the only difference between a
+# mouse and a bear was the sprite and the hit points. That is why the
+# world's difficulty rings gated nothing a player could feel.
+
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+
+
+func _bite_of(species: String) -> float:
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new(species)
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	add_child(victim)
+	biter._try_attack(victim)
+	_let_the_jaws_close(biter)
+	var dealt: float = victim.damage_taken
+	biter.queue_free()
+	victim.queue_free()
+	return dealt
+
+
+func test_each_species_bites_for_its_own_profile_not_one_shared_number():
+	for species in ["wolf", "bear", "boar"]:
+		if not SpeciesBite.has_profile(species):
+			continue
+		assert_almost_eq(
+			_bite_of(species), SpeciesBite.bite_damage_for(species), 0.001,
+			"%s must bite for its own profile" % species
+		)
+
+
+func test_a_bear_bites_harder_than_a_boar():
+	if not (SpeciesBite.has_profile("bear") and SpeciesBite.has_profile("boar")):
+		pass_test("both profiles are needed for this comparison")
+		return
+	assert_gt(_bite_of("bear"), _bite_of("boar"), "the animal the rings gate you from hits harder")
+
+
+func test_a_species_with_no_profile_still_bites_the_shared_default():
+	assert_almost_eq(
+		_bite_of("not_a_real_species"), CreatureMarker.ATTACK_DAMAGE, 0.001,
+		"an unknown species falls back rather than dealing zero"
+	)
+
+
+func test_the_cooldown_between_bites_is_the_species_own():
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new("bear")
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	add_child(victim)
+	biter._try_attack(victim)
+	_let_the_jaws_close(biter)
+	if SpeciesBite.has_profile("bear"):
+		assert_almost_eq(
+			biter._attack_cooldown_remaining,
+			SpeciesBite.bite_cooldown_seconds_for("bear"), 0.001
+		)
+	biter._try_attack(victim)
+	assert_eq(victim.damage_taken, _bite_of("bear"), "a second bite inside the cooldown lands nothing")
+	biter.queue_free()
+	victim.queue_free()
+
+
+# -- and a hunter can actually catch you --------------------------------
+#
+# Measured in adversarial review, and the sharpest fact about the world's
+# difficulty gradient: HUNT_SPEED is 36.0 px/s while Player.BASE_SPEED is
+# 40.0, so EVERY pursuer in the game today is outwalked -- not outrun,
+# outWALKED -- by a player who never touches the sprint key. A ring that
+# gates which species may spawn gates nothing at all when none of them can
+# close a metre on you.
+
+func test_a_hunting_predator_runs_at_its_own_species_pace():
+	var hunter := CreatureMarker.new()
+	hunter.info = CreatureInfo.new("wolf")
+	add_child(hunter)
+	assert_almost_eq(
+		hunter.hunt_speed(),
+		SpeciesBite.profile_for("wolf")["pursuit_speed_tiles_per_second"] * float(TerrainRenderer.TILE_SIZE),
+		0.001
+	)
+	hunter.queue_free()
+
+
+func test_at_least_one_real_predator_is_faster_than_a_walking_player():
+	var fastest := 0.0
+	var fastest_species := ""
+	for species in SpeciesBite.species_list():
+		var speed: float = (
+			SpeciesBite.profile_for(species)["pursuit_speed_tiles_per_second"]
+			* float(TerrainRenderer.TILE_SIZE)
+		)
+		if speed > fastest:
+			fastest = speed
+			fastest_species = species
+	assert_gt(
+		fastest, PlayerScript.BASE_SPEED,
+		"something on this planet (%s) must be able to close on a walking player" % fastest_species
+	)
+
+
+func test_a_species_with_no_profile_still_hunts_at_the_shared_pace():
+	var hunter := CreatureMarker.new()
+	hunter.info = CreatureInfo.new("not_a_real_species")
+	add_child(hunter)
+	assert_almost_eq(hunter.hunt_speed(), CreatureMarker.HUNT_SPEED, 0.001)
+	hunter.queue_free()
+
+
+const PlayerScript = preload("res://scenes/player.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
+
+func test_the_restated_tile_size_is_the_renderers_own():
+	assert_eq(CreatureMarker.TILE_SIZE_PX, TerrainRenderer.TILE_SIZE)
+
+
+## A death that begins PARTWAY through a step has to stop that step too.
+## Three ticks at the top of _process run unconditionally and can each kill
+## -- disease, a spell's ignite/blight, a Death Cap's weakened roll -- and
+## each is followed by a guard that asked only whether the marker had been
+## FREED. A creature with death art has not been freed at that point, it is
+## collapsing, so the rest of the step went on to run its AI: a dead animal
+## finishing the frame by wandering off.
+func test_a_death_that_begins_mid_step_stops_the_rest_of_that_step():
+	_give_illustrated_rows({"walk": 8, "death": 5})
+	marker.apply_disease_bite(DiseaseModel.CARRION)  # lethal-capable archetype
+	var resting := marker.position
+	# A huge delta drives DiseaseModel's per-second death chance past 1.0 --
+	# deterministic regardless of seed, the same trick
+	# test_a_lethal_disease_death_leaves_a_carcass_and_frees_the_marker uses.
+	marker._process(1000.0)
+	assert_eq(marker.current_action(), "death", "precondition: the disease tick killed it")
+	assert_eq(marker.position, resting, "a collapsing body must not finish the step by wandering")
+
+
+## And the same guard still reads correctly for a species with NO death art,
+## which is every species today: the marker really is freed, and the rest of
+## the step is skipped exactly as it always was.
+func test_a_death_without_death_art_still_stops_the_step_by_being_freed():
+	marker.apply_disease_bite(DiseaseModel.CARRION)
+	marker._process(1000.0)
+	assert_true(marker.is_queued_for_deletion())
+
+
+## Real frames until a committed creature's windup runs out
+## (docs/concept/predator_profiles.md, "The telegraph, in the engine"): a
+## bite is no longer instantaneous -- `_try_attack` COMMITS, and the jaws
+## close a windup later, re-checking reach. Driven off the creature's OWN
+## remaining clock rather than a round number, so this cannot go stale when
+## a species' telegraph changes.
+func _let_the_jaws_close(biter) -> void:
+	var guard := 0
+	while biter.is_winding_up() and guard < 600:
+		biter._process(1.0 / 60.0)
+		guard += 1

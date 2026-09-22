@@ -137,6 +137,31 @@ stands with nowhere to farm. Placed with the same self-healing
 older village gains its farmhouses on its next visit rather than only at
 founding.
 
+**One search, whoever asks** (2026-09-20). `VillageRenderer
+.farm_plot_with_field` is the field-aware plot: the next free frontage
+whose ground fits a field and, since the rule below, its fence
+(`_field_fits_at`), and the outskirts (`VillageLayout.outskirt_plot`)
+when the streets are full. The founding placement asks it for each
+farmstead in turn, judged against the farmhouses already standing, and
+the growth path (`EarthChunkManager._growth_site_for`) asks the same
+function for a farmhouse the assembly votes itself — against the
+landmarks and the ground a project is already rising on — so a farmhouse
+raised through the village's own ledger is never one the founding rule
+would have refused ([village_economy_balance.md](village_economy_balance.md)
+mechanism 6).
+
+**Two yards keep a line between them.** Two fields can share one line of
+rails, and that line needs a cell to stand on: the search refuses a plot
+whose footprint would touch a standing farmhouse's, side by side or at a
+corner (`VillageFarm.yards_touch`), so one clear column or row always
+lies between two yards. The street frontage lays farmhouses at that pitch
+by itself; the outskirts search did not, and once the founding roster
+raised five farmsteads it packed (6,24) and (9,24) together on the stub
+villages, each field's inner rail line falling on the other's beds — 28
+open sides across the villages sampled
+(`test_every_farmstead_really_gets_its_enclosure`, and
+`test_no_two_farmsteads_stand_yard_to_yard` pins the rule at the siting).
+
 **One rule, two callers** (2026-09-19). "Has real room" and "here is your
 field" were two separate copies of the same question — `_field_fits_at` at
 siting, `_workable_field_of` at derivation — and they had drifted. The
@@ -741,6 +766,15 @@ and 0. `FIELD_YIELD_PER_WORK_BLOCK` was re-measured at **278** from 225 by
 the same test that pinned the old one — the roster had been sized against a
 field that lost beds every night.
 
+That number is the stub world's, a villager standing at a field with no
+walk to it, and it is no longer what the roster is sized by. A real field
+on a real chunk yields about **five units a lived day**
+(`FIELD_YIELD_PER_LIVED_DAY`, 299 units in twenty lived days over three
+fields), 3.7× less, because the walk between cottage and field eats most
+of a 27.5-second work window; `SettlementFoodDemand` reads the real
+figure ([village_economy_balance.md](village_economy_balance.md)
+mechanism 6).
+
 ### Every field sows wheat, for now (2026-09-19) — superseded
 
 Asked directly, with a field of unrecognisable purple plants in shot: *"i
@@ -807,6 +841,34 @@ crop that would relieve a good sitting at 0.0 is worth more than one
 relieving a good at 0.9, which is the same "a household with all the bread
 in the world and no fuel is cold" minimum rule `EstateConsumption` already
 applies one level up.
+
+**A tie is the normal state of a hungry village, and it decides the crop.**
+Reported live with the panels open: *"The farmers produce mostly herbs even
+though it says it can feed 0 / 10 ... the supply chain needs to be stable,
+so that happiness can saturate at 100% and unlock second tier buildings"*.
+Measured on three real villages with the settlement step really running
+(`tools/probe_village_cropping.gd`):
+
+```
+satisfaction: { "wood": 1.0, "herb": 0.0, "kind:food": 0.0 }
+scores:       { "herb": 0.0, "carrot": 0.0, "potato": 0.0, "wheat": inf }
+a wheat-farmer sows: herb
+```
+
+Both goods at 0.0 means every food crop scores **identically** — and that
+is what a village which needs feeding always looks like, not an edge case.
+The tie fell through to declaration order, and `herb` is declared first, so
+every field in a starving village sowed the crop that feeds it least: a 20g
+bunch of herbs against a 170g potato, eight and a half times the food per
+harvest.
+
+So below `HUNGRY_BELOW` the tie is broken by **what the harvest really
+weighs** (`FOOD_WEIGHT_KG`, the `ItemCatalog`'s own real produce masses,
+test-pinned against them), and only then by the farmer's own crop. Above
+it, nothing changes. The floor is bounded by the two readings that define
+it — strictly above the starving villages measured, no higher than the
+half-fed case the occupation rule was written for — and both bounds are
+test-pinned rather than asserted.
 
 **Occupation survives as a tie-break, not as the rule.** Among crops the
 village needs equally, an herbalist reaches for herbs. `VillageFarm.
@@ -1110,6 +1172,16 @@ ordinary ground is the rule, not an accident, so standing in it is allowed.
   doorstep is already a road cell by then, and an ordinary `place_building`
   refuses that. Idempotent, so a reload raises no second set and an older
   village gains its farmhouses on the next visit.
+- ✅ **A growth farmhouse is sited where its field fits** (2026-09-20).
+  `VillageRenderer.farm_plot_with_field` is the one search for a farmstead's
+  plot; `_place_farms_if_missing` and `EarthChunkManager._growth_site_for`
+  both ask it (`test_earth_chunk_manager_farm_growth_site.gd`: the site
+  fits a field, it is the founding search's own answer, and the next farm
+  keeps off the first one's ground).
+- ✅ **Two yards keep a rail line between them** (2026-09-20).
+  `VillageFarm.yards_touch` (pure, `test_village_farm.gd`, 5 pins) and the
+  shared search refusing a touching plot; every farmstead on the stub
+  villages fully enclosed again (`test_village_renderer.gd`).
 - ✅ **`NpcMarker._step_farm`.** The villager walks out to their own field
   during their work block and really tills, waters and harvests it through
   the same `FarmPlot` lifecycle a player's own plot uses. Each farming

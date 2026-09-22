@@ -165,7 +165,10 @@ func butcher(meat_yield_bonus: float = 0.0) -> String:
 			)
 		"meat":
 			WorldItemBus.item_dropped.emit(
-				ItemStack.new(_item_catalog.make("meat"), Butchering.meat_count(meat_yield_bonus, mass_ratio)),
+				ItemStack.new(
+					_item_catalog.make("meat"),
+					Butchering.meat_count(meat_yield_bonus, mass_ratio, species)
+				),
 				position
 			)
 		"guts":

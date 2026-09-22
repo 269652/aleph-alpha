@@ -430,6 +430,20 @@ the same already-measured function the founding roster is staffed against,
 so the number of farmhouses and the number of farmers cannot disagree.
 Everything else keeps "one, ever".
 
+**And it is worked by trade, not by estate** (2026-09-20). The petition
+then asked `VillageLabor.can_staff`, which wants a husbandman — but a
+field is worked by whoever's trade it is (`VillageFarm` hands a farmer
+their field whatever their estate), so a village nobody had yet risen in
+could never pass the gate and voted itself a trade hall while its shelves
+stood empty. The assembly state now carries `field_hands`, the households
+whose trade works a field, counted off the settlement's real roster; the
+next farmstead is wanted while one of them stands without a farmhouse,
+and the estate gate is kept only by a caller that has not counted.
+`_settlement_building_counts` counts every farmhouse that stands rather
+than the kinds of building present, so "fewer than the demand asks for"
+is judged against the real number. Both measured and specified in
+[village_economy_balance.md](village_economy_balance.md) mechanism 6.
+
 ### The land decides which works, and a fisher's works is their house
 
 A remedy has to be a building the village could actually work. Three food

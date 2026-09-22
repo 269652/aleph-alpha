@@ -25,6 +25,14 @@ const ACTIONS := [
 	# fish/lasso/mount already are. Doubles Player.BASE_SPEED back to the old
 	# flat SPRINT_SPEED while held (see Player.current_speed).
 	{"action": "sprint", "label": "Sprint", "default": KEY_SHIFT},
+	# The one unconditional answer to a blow (docs/concept/dodge.md). A
+	# combat verb has to be reachable by the hand already holding WASD, and
+	# the three keys in that reach are taken -- attack has Space, block has
+	# Ctrl, sprint has Shift. Every letter A-Z is bound (test_keybindings.gd
+	# caught `rest` reaching for one), and a number would read as a sixth
+	# hotbar slot. Tab is free, sits under the left hand, and is not a focus
+	# key in this project, whose UI is built rather than themed.
+	{"action": "dodge", "label": "Dodge", "default": KEY_TAB},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
 	# Deliberately its own action, not folded into "pickup" (E), matching
 	# every other verb's own dedicated action -- see docs/concept/
@@ -32,6 +40,12 @@ const ACTIONS := [
 	# other action except M/N/O; N for "eNter" is a real, available key.
 	{"action": "enter", "label": "Enter / Leave Building", "default": KEY_N},
 	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
+	# Sleeping through a night (docs/concept/sleep.md). NOT R -- every
+	# letter on the keyboard is already bound (R is primary_action), which
+	# test_keybindings.gd caught the moment this verb tried to take one.
+	# A number would read as a sixth hotbar slot, so it gets the first
+	# punctuation key with nothing attached to it.
+	{"action": "rest", "label": "Rest Until First Light", "default": KEY_PERIOD},
 	# The "put this down" complement to E's "pick this up into hand" (see
 	# docs/concept/stone.md's held-item concept, generalized to any real
 	# physical object in docs/concept/wild_crops.md) -- stashes whatever
@@ -88,12 +102,26 @@ const ACTIONS := [
 	{"action": "hotbar_3", "label": "Hotbar Slot 3", "default": KEY_3},
 	{"action": "hotbar_4", "label": "Hotbar Slot 4", "default": KEY_4},
 	{"action": "hotbar_5", "label": "Hotbar Slot 5", "default": KEY_5},
+	# Four spells on 6-9, symmetric with the hotbar's 1-5 for items: a
+	# number key activates a slot (docs/concept/spell_runtime.md). The spell
+	# bar has been four slots wide since it was a row of locked
+	# placeholders, and these are the first four digits the hotbar leaves
+	# free. A cycle key was rejected: with four slots a direct key is one
+	# press instead of up to four.
+	{"action": "spell_1", "label": "Spell Slot 1", "default": KEY_6},
+	{"action": "spell_2", "label": "Spell Slot 2", "default": KEY_7},
+	{"action": "spell_3", "label": "Spell Slot 3", "default": KEY_8},
+	{"action": "spell_4", "label": "Spell Slot 4", "default": KEY_9},
 	{"action": "toggle_inventory", "label": "Toggle Inventory", "default": KEY_I},
 	{"action": "toggle_crafting", "label": "Toggle Crafting", "default": KEY_C},
 	{"action": "toggle_quest_log", "label": "Toggle Quest Log", "default": KEY_U},
 	# Moved off K (the very next key over, an easy muscle-memory shift) to
 	# make room for "kick" -- see docs/concept/stone.md.
 	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_L},
+	# M for the weave: the spell-composition surface (docs/concept/
+	# spell_weaving.md). Free, and the obvious letter for Magic once I, C,
+	# U and L are taken by the inventory, crafting, quests and the web.
+	{"action": "toggle_weave", "label": "Toggle Spell Weave", "default": KEY_M},
 	# P for planner (docs/concept/planner_mode.md). A mode toggle is a real
 	# control, so it gets a real key rather than only the HUD button it had
 	# -- which, being a focusable Button, was answering the ATTACK key

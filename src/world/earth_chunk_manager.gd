@@ -152,6 +152,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
@@ -285,6 +286,8 @@ const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageFinder = preload("res://src/world/village_finder.gd")
 const ExploredTiles = preload("res://src/world/explored_tiles.gd")
 const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
+const Discovery = preload("res://src/gameplay/discovery.gd")
+const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
 
 ## Where player-made tile modifications (Phase 3 building) are persisted,
 ## keyed per chunk -- terrain itself is deterministically regenerable (see
@@ -1662,6 +1665,59 @@ func explored_chunks() -> Array:
 
 func is_chunk_explored(chunk_coord: Vector2i) -> bool:
 	return _explored_tiles.is_visited(chunk_coord)
+
+
+## The chunk the last footfall was recorded in, and how far out that was --
+## the two pieces of state a crossing needs, kept here rather than in World
+## because the explored record they belong with is here (see
+## docs/concept/discovery.md).
+var _has_footfall := false
+var _last_footfall_chunk := Vector2i.ZERO
+var _last_footfall_distance := Discovery.NO_PREVIOUS_DISTANCE
+
+
+## How many chunks `player_global_tile` is from home, Chebyshev -- the same
+## distance `RegionDifficulty` tiers by and `record_footfall` reports from.
+##
+## `-1` when no spawn has been set yet, which the caller must render as "not
+## known" rather than as zero: a world that has not decided where home is
+## would otherwise be claiming the origin is home.
+func chunks_from_spawn(player_global_tile: Vector2i) -> int:
+	if not _spawn_configured:
+		return -1
+	return JourneyRing.distance_chunks(
+		Discovery.chunk_of(player_global_tile), _spawn_chunk_coord
+	)
+
+
+## One footfall: the player is standing on `player_global_tile`.
+##
+## Marks the chunk underfoot on the SAME `ExploredTiles` `/map` and
+## `MapProjection` read -- which, before this existed, only the `reveal`
+## spell atom ever wrote to -- and hands back `Discovery`'s whole report for
+## the caller to pay and to say out loud. One chunk per footfall, the one
+## underfoot: the streamer loads a 5x5 neighbourhood and the camera shows a
+## fraction of one chunk, so marking all 25 would be the map claiming
+## knowledge the player never had.
+##
+## `{}` means nothing happened, and is the ordinary answer on all but a
+## handful of frames: the player is still in the chunk they were already in.
+## Also `{}` before `set_spawn_tile` -- a world that has not decided where
+## home is cannot say how far out you are, and guessing the origin would pay
+## far-country rates for the ground under a fresh character's feet.
+func record_footfall(player_global_tile: Vector2i) -> Dictionary:
+	if not _spawn_configured:
+		return {}
+	var chunk := Discovery.chunk_of(player_global_tile)
+	if _has_footfall and chunk == _last_footfall_chunk:
+		return {}
+	_has_footfall = true
+	_last_footfall_chunk = chunk
+	var is_new_ground := _explored_tiles.mark_visited(chunk)
+	var distance := JourneyRing.distance_chunks(chunk, _spawn_chunk_coord)
+	var report := Discovery.report_for(_last_footfall_distance, distance, is_new_ground)
+	_last_footfall_distance = distance
+	return report
 
 
 func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
@@ -4330,8 +4386,18 @@ func _settlement_present_building_ids(chunk_coord: Vector2i) -> Array:
 ## anybody is standing in it.
 func _settlement_building_counts(chunk_coord: Vector2i) -> Dictionary:
 	var counts := {}
-	for building_id in _standing_building_ids_in_chunk(chunk_coord):
-		counts[building_id] = int(counts.get(building_id, 0)) + 1
+	# The RECORDS, not _standing_building_ids_in_chunk: that list names each
+	# KIND once, which is what every "already stands" check wants and
+	# exactly what a count must not do. Measured (tools/probe_field_room.gd)
+	# on a real village with three farmhouses standing: `"farmhouse": 1`,
+	# so mechanism 7's "outnumbered" was judged against one however many
+	# stood (docs/concept/village_economy_balance.md mechanism 6).
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk != null:
+		for origin_local in chunk.buildings:
+			var building_id: String = chunk.buildings[origin_local].get("id", "")
+			if building_id != "":
+				counts[building_id] = int(counts.get(building_id, 0)) + 1
 	for building_id in _construction_project_store.completed_blueprint_ids_in_chunk(chunk_coord):
 		counts[building_id] = int(counts.get(building_id, 0)) + 1
 	return counts
@@ -5317,6 +5383,69 @@ func _step_village_immigration(settlement_id: String, market, household_ids: Arr
 	_settlement_immigration_carry[settlement_id] = result["carry"]
 	for i in int(result["arrivals"]):
 		admit_household(chunk_coord)
+	# ...and moved in, really (docs/concept/village_growth.md "...and
+	# nobody ever moved in"): the roof that let them in is one nobody on
+	# the roster owns, and a household is housed by owning one.
+	_house_the_waiting(chunk_coord)
+
+
+## Every household with nowhere to live takes a standing house nobody on
+## the roster owns -- one the village raised for nobody in particular, or
+## one a household that left still held -- oldest waiting first, one
+## household to a roof (docs/concept/village_growth.md "...and nobody ever
+## moved in"). True when somebody moved in.
+##
+## A household is housed by OWNING a house (VillageCensus.of reads the
+## store's property registry), and the only way one ever came to own one
+## was a project completed in its name. So a newcomer let in because a
+## roof stood empty stood under none: the ladder owed them a house of
+## their own, which a village with its frontage spent could not site, and
+## they waited for ever beside the empty ones. Measured with the economy
+## probe: a fisher who arrived at 750 s worked no water for the rest of
+## the run while two houses stood empty.
+##
+## Taking the house is a real transfer of the property (grant_property),
+## so the census, the ladder and the readout see them housed at once, and
+## the ground settles around them the same step (_settle_the_ground): the
+## house's record says who lives there now, a fisher's pond is dug beside
+## it and handed to them, and their home is its door.
+func _house_the_waiting(chunk_coord: Vector2i) -> bool:
+	if not _loaded_chunks.has(chunk_coord):
+		return false
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	var census := _village_census_for(chunk_coord, household_ids)
+	var waiting: Array = census["unhoused_household_ids"]
+	if waiting.is_empty():
+		return false
+	var roster := {}
+	for household_id in household_ids:
+		roster[household_id] = true
+	# Spare roofs, in the deterministic (y, x) order buildings_in_chunk
+	# already keeps; a roof whose owner is on the roster is somebody's.
+	var spare: Array = []
+	for record in buildings_in_chunk(chunk_coord):
+		if BuildingCatalog.capacity_of(record.get("id", "")) <= 0:
+			continue
+		var origin_local: Vector2i = record.get("origin_local", Vector2i.ZERO)
+		var owner := VillageCensus.household_owning(chunk_coord, origin_local, _household_store)
+		if owner == "" or not roster.has(owner):
+			spare.append(origin_local)
+	var moved_in := false
+	# Oldest waiting first: the roster is in arrival order.
+	for household_id in household_ids:
+		if spare.is_empty():
+			break
+		if not waiting.has(household_id):
+			continue
+		var origin_local: Vector2i = spare.pop_front()
+		_household_store.grant_property(
+			household_id, ConstructionProject.for_site(chunk_coord, origin_local, "", "").property_id()
+		)
+		moved_in = true
+	if moved_in:
+		_settle_the_ground(chunk_coord)
+	return moved_in
 
 
 ## settlement_id -> VillageImmigration's own sub-unit carry, the same
@@ -5385,6 +5514,20 @@ func admit_household(chunk_coord: Vector2i) -> String:
 	return household_id
 
 
+## Settles the ground of the village standing in `chunk_coord` around the
+## people already in it (VillageRenderer.settle_the_ground): the houses
+## their owners live in, the fields, the ponds, the huts, and who works
+## what -- without rebuilding a villager. A no-op unless the village is
+## really on screen, like _respawn_village below.
+func _settle_the_ground(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	_village_renderer.settle_the_ground(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		self, _loaded_villages[chunk_coord]
+	)
+
+
 ## Re-derives the village standing in `chunk_coord`, so the people on screen
 ## are the households that really live there.
 ##
@@ -5422,6 +5565,11 @@ func _respawn_village(chunk_coord: Vector2i) -> void:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return
+	# The market this village already trades in -- its purse and its stall
+	# -- read off the villagers BEFORE they are freed, and handed back to
+	# the spawn so the re-derived village keeps trading in it
+	# (test_earth_chunk_manager_village_respawn.gd).
+	var market = village_market_for_settlement(EntityRef.for_settlement(chunk_coord))
 	for node in _loaded_villages[chunk_coord]:
 		if is_instance_valid(node):
 			node.free()
@@ -5433,7 +5581,8 @@ func _respawn_village(chunk_coord: Vector2i) -> void:
 		TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
 		self,
-		_current_sun_elevation_deg
+		_current_sun_elevation_deg,
+		market
 	)
 
 
@@ -9314,6 +9463,17 @@ func _mirror_disturbances_to_the_river() -> void:
 		_water_shader.padded_disturbance_ages(),
 		count
 	)
+
+
+## The sun's elevation the world is currently drawing with, in degrees.
+##
+## `set_sun_position` has pushed this into the hillshade every tick since
+## the sky was wired; nothing could READ it. The gameplay layer needs it to
+## know when it is dark (docs/concept/spell_weaving.md's
+## `hungry_in_the_dark`), and the honest source for that is the same sun the
+## player is standing under, not a second clock.
+func current_sun_elevation_deg() -> float:
+	return _current_sun_elevation_deg
 
 
 func current_weather(player_pixel: Vector2) -> String:
@@ -14551,9 +14711,15 @@ func _reconcile_chunk_creatures(chunk_coord: Vector2i) -> void:
 			alive.append(creature)
 
 	var chunk: Chunk = _loaded_chunks[chunk_coord]
+	# The SAME chunk and salts spawn_creatures itself uses (herbivores 1,
+	# predators 2), or this pass and that one would disagree about how many
+	# animals belong here and a chunk would gain and lose one on every
+	# stream (see CreatureRenderer.marker_count_for).
 	var target := _creature_renderer.marker_count_for(
-		_ecosystem.herbivore_population(chunk_coord)
-	) + _creature_renderer.marker_count_for(_ecosystem.predator_population(chunk_coord))
+		_ecosystem.herbivore_population(chunk_coord), chunk_coord, 1
+	) + _creature_renderer.marker_count_for(
+		_ecosystem.predator_population(chunk_coord), chunk_coord, 2
+	)
 
 	if alive.size() > target:
 		alive = _thin_creatures(alive, alive.size() - target)
@@ -19235,7 +19401,33 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		# The settlement's own charter (docs/concept/settlement_charter.md
 		# mechanism 4): the village reads the same gate the player does.
 		"tier": settlement_tier_of(settlement_id),
+		# Who really works a field here (docs/concept/village_economy_balance
+		# .md mechanism 6): the next farmstead is voted for while one of
+		# them stands without one, whatever estate they hold.
+		"field_hands": _field_hands_for_settlement(settlement_id),
 	}
+
+
+## How many of this settlement's households hold a trade that works a
+## field (VillageFarm.crop_for) -- read off the roster the village really
+## SPAWNS, conscription included, because that roster is who farms.
+## _occupation_of_household re-rolls a founder's trade from their seed and
+## so cannot see a conscripted farmer; this is the reading the assembly's
+## food works are sized by, so it has to.
+func _field_hands_for_settlement(settlement_id: String) -> int:
+	var households := _households_in_settlement(settlement_id).size()
+	if households <= 0:
+		return 0
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var roster: Dictionary = _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		households, _is_dry_local(chunk_coord), seeded_region_for_chunk(chunk_coord)
+	)
+	var hands := 0
+	for npc in roster.npcs:
+		if VillageFarm.crop_for(npc.occupation) != "":
+			hands += 1
+	return hands
 
 
 ## The needs graph for the village in `chunk_coord`, or [] where there is no
@@ -19535,6 +19727,19 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 		)
 		return null if industry.is_empty() else industry["origin"]
 
+	if building_id == VillageFarm.FARM_BUILDING_ID:
+		# A farmstead is sited where its FIELD fits, on the outskirts when
+		# the streets are full -- the founding placement's own search
+		# (VillageRenderer.farm_plot_with_field), so a farmhouse the village
+		# raises through its own ledger is never one with nowhere to sow
+		# (docs/concept/village_economy_balance.md mechanism 6). Reserves
+		# what founding reserves: the landmarks, and the ground a project
+		# is already rising on.
+		var farm: Dictionary = _village_renderer.farm_plot_with_field(
+			chunk_coord, CHUNK_SIZE, self, _landmark_cells_in(chunk_coord), is_occupied
+		)
+		return null if farm.is_empty() else farm["origin"]
+
 	# is_paved lets the plot's own tie-back cross the paving this village
 	# has ALREADY laid -- another street's row, an earlier plot's doorstep,
 	# the square. Without it every junction reads as blocked ground and the
@@ -19548,6 +19753,98 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 		_is_dry_local(chunk_coord), Callable(), is_paved
 	)
 	return null if plot.is_empty() else plot["origin"]
+
+
+## The GLOBAL cells this chunk's settlement landmarks stand on (the well,
+## the stall, the gate): what the founding farm pass reserves against
+## (VillageRenderer.spawn_village), re-derived the way
+## _well_position_for_settlement re-derives the well, so growth siting
+## keeps a field off the well exactly as founding did.
+func _landmark_cells_in(chunk_coord: Vector2i) -> Dictionary:
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord),
+		seeded_region_for_chunk(chunk_coord)
+	)
+	return _village_renderer._landmark_cells(settlement.landmarks, TerrainRenderer.TILE_SIZE, self)
+
+
+## A player really hands a household the goods it is short of
+## (docs/concept/errands.md). The one transfer that turns every
+## production-shortfall projection in this game into something a player can
+## act on, and the only place it happens.
+##
+## Atomic, or it did not happen (that doc's pillar 2). The goods leave
+## `player.inventory` and enter the SAME Market object
+## Quest.production_shortfall_quests_for reads
+## (`_market_store.market_for(settlement_id)`), the household pays out of
+## its OWN finite Wallet -- the purse wages come out of, so no coin is
+## conjured and docs/concept/economy.md's one-faucet rule is untouched --
+## and the whole thing is recorded as a real witnessed Event so
+## docs/concept/npc.md's memory, rumour and recognition layers see it with
+## no new bookkeeping. A village too poor to pay still takes the delivery
+## and carries the remainder as a debt.
+##
+## `offer` is ErrandDelivery.offer_from_frame's own dictionary, straight
+## from the conversation window. What it PROMISED is re-checked against
+## what the player really carries at this instant, so an offer built a
+## moment ago can never take goods that are no longer there: the deal is
+## re-settled from live inventory, and a player who has since eaten the
+## fish hands over the fish they still have, not the fish they had.
+##
+## Returns ErrandDelivery.settle's own dictionary (given/units/value/paid/
+## debt/clears), or a zero deal when there is nothing to move.
+func deliver_errand(offer: Dictionary, player) -> Dictionary:
+	var settlement_id := String(offer.get("settlement_id", ""))
+	var household_id := String(offer.get("household_id", ""))
+	var promised: Array = offer.get("given", [])
+	if settlement_id == "" or household_id == "" or promised.is_empty() or player == null:
+		return ErrandDelivery.settle([], {}, 0, Callable())
+
+	var household = _household_store.get_household(household_id)
+	if household == null:
+		return ErrandDelivery.settle([], {}, 0, Callable())
+	var market = _market_store.market_for(settlement_id)
+
+	# What was promised, re-read as a shortfall against what is really in
+	# the player's hands right now -- so the deal is settled from live
+	# state and can never move goods that are gone.
+	var wanted: Array = []
+	for entry in promised:
+		wanted.append({"item_id": String(entry["item_id"]), "need": int(entry["count"])})
+	var carried: Dictionary = player.inventory_counts()
+	var deal := ErrandDelivery.settle(
+		wanted, carried, int(household.wallet.balance),
+		func(item_id: String) -> float: return market.price_for(item_id)
+	)
+	if int(deal["units"]) <= 0:
+		return deal
+
+	for entry in deal["given"]:
+		var item_id := String(entry["item_id"])
+		var count := int(entry["count"])
+		player.inventory.remove(item_id, count)
+		market.add_stock(item_id, count)
+	var paid := int(deal["paid"])
+	if paid > 0 and household.wallet.spend(paid):
+		player.wallet.add(paid)
+
+	var delivered := Event.new(ERRAND_DELIVERED_EVENT_TYPE, _world_age_seconds)
+	delivered.actors = [household_id]
+	delivered.witnesses = [settlement_id]
+	delivered.importance = 0.3
+	for entry in deal["given"]:
+		delivered.tags.append(String(entry["item_id"]))
+	_event_store.append(delivered)
+	_memory_store.witness_event(delivered, _world_age_seconds)
+	return deal
+
+
+## The event a real delivery writes (deliver_errand). Its own type rather
+## than a generic trade event: docs/concept/npc.md's recognition ladder
+## treats "this person carried my household through a shortage" as a
+## different memory from "this person sold me a fish."
+const ERRAND_DELIVERED_EVENT_TYPE := "errand_delivered"
 
 
 ## This settlement's real census (VillageCensus) -- who has a roof, how
@@ -19799,9 +20096,21 @@ func _place_completed_building_project(project) -> void:
 		return
 	var origin_tile: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
 	var seed_value := _house_site_seed(project.chunk_coord, origin_tile, building_id)
-	_place_building_over_roads(
+	if not _place_building_over_roads(
 		project.chunk_coord, project.origin, building_id, seed_value, project.household_id, true
-	)
+	):
+		return
+	# The ground settles around what now stands, the moment it stands.
+	# Placed alone, a newcomer's house carried the household that owns it
+	# and nothing about who lives there, so their trade reached its record,
+	# their pond was dug and their hut raised only on the next chunk load
+	# -- measured with the town at eleven households: a fisher counted as
+	# a producer with no water to work for the rest of the run
+	# (docs/concept/village_ponds.md, "A pond dug the day the fisher's
+	# house stands"). Not a re-derivation of the village: that restarted
+	# every villager's errand and was measured costing the fields a cycle
+	# and the village half its roster.
+	_settle_the_ground(project.chunk_coord)
 
 
 ## Construction sites: chunk_coord -> {origin_local -> Node2D}, one per

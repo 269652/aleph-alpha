@@ -63,6 +63,14 @@ const MAX_HEALTH_BY_SPECIES := {
 	"arctic_fox": 24.0,
 	"tapir": 27.0,
 	"jaguar": 34.0,
+	# The Curupira (docs/concept/monsters.md, entry 5): a rainforest
+	# guardian, not an apex predator. Its threat is that it has already
+	# decided about you -- see EcologicalGrudge.
+	"curupira": 42.0,
+	# The Alp (docs/concept/monsters.md, entry 3): a night-mare, not a
+	# carnivore. Frail -- it is never meant to be fought, only woken
+	# away from.
+	"alp": 18.0,
 	"goat": 20.0,
 	"sheep": 18.0,
 	"alpaca": 20.0,
@@ -129,6 +137,8 @@ const MAX_STAMINA_BY_SPECIES := {
 	"arctic_fox": 30.0,
 	"tapir": 25.0,
 	"jaguar": 25.0,
+	"curupira": 35.0,
+	"alp": 40.0,
 	"goat": 30.0,
 	"sheep": 22.0,
 	"alpaca": 24.0,
@@ -170,6 +180,9 @@ const MAX_MANA_BY_SPECIES := {
 	"arctic_fox": 10.0,
 	"tapir": 5.0,
 	"jaguar": 10.0,
+	# The one predator with a real pool: it is a spirit of the forest.
+	"curupira": 30.0,
+	"alp": 45.0,
 	"goat": 5.0,
 	"sheep": 5.0,
 	"alpaca": 5.0,
@@ -207,6 +220,8 @@ const DIET_BY_SPECIES := {
 	"arctic_fox": "Hunter",
 	"tapir": "Grazer",
 	"jaguar": "Hunter",
+	"curupira": "Guardian",
+	"alp": "Night-mare",
 	"goat": "Grazer",
 	"sheep": "Grazer",
 	"alpaca": "Grazer",
@@ -230,6 +245,12 @@ const DIET_BY_SPECIES := {
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
+## The temperament that fights rather than flees. Named so the handful of
+## rules that ask "would this animal take a swing at you" can say so instead
+## of repeating a bare string -- CreatureBehavior._will_fight and
+## CreatureMarker.steers_clear_of_players both read it.
+const AGGRESSIVE := "aggressive"
+
 ## how this is used -- fighting back only needs "aggressive" temperament, not
 ## is_predator, so a boar fights without hunting other creatures for food.
 ## tapir deliberately stays "calm" despite sharing boar's shape family --
@@ -246,6 +267,8 @@ const TEMPERAMENT_BY_SPECIES := {
 	"arctic_fox": "aggressive",
 	"tapir": "calm",
 	"jaguar": "aggressive",
+	"curupira": "aggressive",
+	"alp": "aggressive",
 	"goat": "calm",
 	"sheep": "calm",
 	"alpaca": "calm",
@@ -299,6 +322,8 @@ const PREDATOR_SPECIES := {
 	"jackal": true,
 	"arctic_fox": true,
 	"jaguar": true,
+	"curupira": true,
+	"alp": true,
 	"mountain_lion": true,
 	"bear": true,
 	"lion": true,
@@ -344,6 +369,36 @@ const LEVEL_RANGE := 5
 ## e.g. 0.25 means a level-5 individual (the max) has double the base HP.
 const LEVEL_HEALTH_SCALE := 0.25
 
+## What each level above 1 adds to every OTHER magnitude a creature has --
+## its bite above all (docs/concept/combat.md, "A level is a bigger
+## animal").
+##
+## Before this existed, `LEVEL_HEALTH_SCALE` had no counterpart and
+## `CreatureMarker.bite_damage()` read the species and never the level, so a
+## level-5 wolf carried TWICE THE HEALTH AND THE IDENTICAL 6-DAMAGE BITE. A
+## bigger animal was a longer chore rather than a greater danger.
+##
+## 0.18 and not 0.25, and the difference is not a matter of taste:
+## `SpeciesBite.MINIMUM_TIME_TO_KILL_SECONDS` says no animal may take a
+## full-health player from alive to dead faster than five seconds, because
+## below that there is no "you are in trouble" phase to read. This is the
+## LARGEST hundredth for which every biting species, at every level it can
+## roll, still clears that floor -- measured, the binding animal is the
+## bear, and at 0.19 a level-5 bear kills a reference player too fast to
+## read. Pinned from both sides by test_level_scaling.gd.
+const LEVEL_DAMAGE_SCALE := 0.18
+
+
+## How much bigger this individual is than the smallest of its kind. One
+## function, so every axis that grows with a level grows by the same amount
+## and none of them can drift apart.
+static func level_growth(level: int) -> float:
+	return 1.0 + maxi(0, level - 1) * LEVEL_DAMAGE_SCALE
+
+## How long a fight has to last, so the mechanics built for it get a turn
+## (docs/concept/combat.md, "The reference exchange").
+const CombatPacing = preload("res://src/gameplay/combat_pacing.gd")
+
 var species: String
 var display_name: String
 var diet: String
@@ -374,9 +429,32 @@ func _init(a_species: String, seed_value: int = 0) -> void:
 	is_world_boss = WORLD_BOSS_SPECIES.get(a_species, false)
 	level = 1 + (absi(seed_value) % LEVEL_RANGE)
 	var base_max_health: float = MAX_HEALTH_BY_SPECIES.get(a_species, 10.0)
-	max_health = base_max_health * (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)
+	# The reference exchange (docs/concept/combat.md): a fight has to last
+	# long enough for the animal in it to land two bites, or the telegraph
+	# the player is meant to read never becomes a pattern. Measured before
+	# this line existed, the default character felled a wolf in three
+	# swings -- 1.5 s, against a dodge cooldown of exactly 1.5 s.
+	#
+	# Applied to the INSTANCE and never to the table above. Everything else
+	# that reads max_health reads it as a ratio (fight-or-flight, the health
+	# bar, BossAggro's threshold, the hit-flash severity), so a uniform
+	# scale leaves all of them where they were -- and Taming derives
+	# PREDATOR_BREAK_FREE_MULTIPLIER from the TABLE, which therefore does
+	# not move either.
+	max_health = (
+		base_max_health
+		* (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)
+		* CombatPacing.EXCHANGE_HEALTH_SCALE
+	)
 	health = max_health
-	max_stamina = MAX_STAMINA_BY_SPECIES.get(a_species, 10.0)
+	# Scaled for coherence -- a bigger animal is bigger on every axis it
+	# has. Both are read by NOTHING in the game today (grep for
+	# `info.stamina` and `info.max_mana` returns no consumers), so the
+	# growth is inert; it is applied anyway so that the day something reads
+	# them, it reads a number that already grew. Named in combat.md rather
+	# than shipped as though it did something.
+	var growth := level_growth(level)
+	max_stamina = float(MAX_STAMINA_BY_SPECIES.get(a_species, 10.0)) * growth
 	stamina = max_stamina
-	max_mana = MAX_MANA_BY_SPECIES.get(a_species, 5.0)
+	max_mana = float(MAX_MANA_BY_SPECIES.get(a_species, 5.0)) * growth
 	mana = max_mana

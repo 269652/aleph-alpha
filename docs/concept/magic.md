@@ -545,10 +545,34 @@ as a contract because each step is a precondition of the next.
 - 🚧 **Scrolls and gems are still unbuilt.** Scroll-learning writes to the
   same known set tuition now writes to, so the vessel is what is missing,
   not the destination.
-- 🚧 **No spell-selection UI**, so the cast key still casts
-  `DEFAULT_CAST_SPELL_ID`. A learned spell is real, persisted and castable
-  through `cast_spell`, but nothing yet lets a player *choose* it at the
-  keyboard.
+- ✅ **A spell you chose** (2026-09-21) — corrected here on 2026-09-22,
+  because this entry went on claiming the opposite after it had shipped.
+  The cast key no longer casts `DEFAULT_CAST_SPELL_ID`: a four-slot bar
+  holds the Nth entry of `known_spell_ids()`, its keys cast *and* select,
+  and the cast key repeats the selection. `DEFAULT_CAST_SPELL_ID` survives
+  only as the fallback when nothing is selected.
+- ✅ **The starting hand is one spell per delivery** (2026-09-22).
+  `STARTING_SPELL_IDS` was `["fire_bolt"]`, and Fire Bolt is `cast(touch)`
+  — `SpellTargeting.TOUCH_RANGE` is **24 px** against the sword's
+  `ATTACK_RANGE` of **20**. So **nothing a normal player could cast reached
+  further than a sword**, ever: the mage traded 15 `max_health` for the
+  privilege of standing inside a bear's windup, and the three authored
+  projectile spells were parsed, priced, tested and reachable only through
+  the `/learn` dev console.
+
+  The hand now teaches the three verbs a caster has rather than the same
+  verb once — `fire_bolt` (touch, the jab), `spark` (projectile, **120 px**,
+  the reason to be a caster at all) and `minor_heal` (self, the answer to
+  having been hit). Three rather than four, so the fourth slot is visibly
+  where the first spell a guild teaches lands.
+
+  Pinned by rule and not by list: `test_spell_tuition.gd` asserts the hand
+  *reaches further than a sword*, *teaches more than one delivery*, and is
+  *castable from the pool a new mage is really born with* (the class lens
+  plus the start node the web hands them free). Widening it broke fourteen
+  tests in two suites that had named `minor_heal` as "a spell you do not
+  know" and assumed a newly learned spell lands in slot 1 — both now derive
+  what they need, so the next change to the hand cannot do it again.
 - 🚧 **The guild has no interior trade UI**; `/learn` is the hand on it, the
   same honest scoping every other station interaction in `player.gd` has
   until an interaction UI exists.

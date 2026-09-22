@@ -108,7 +108,72 @@ static func diagnostics_lines(
 ##
 ## Nothing wrong on dry land returns nothing at all: the HUD is quiet when
 ## there is nothing to say, rather than showing a row of green "OK" badges.
-static func condition_chips(meters, movement_mode: String) -> Array:
+## Every timed thing riding on the character, named. The key is the id the
+## system that owns it already uses, so there is no second vocabulary to
+## keep in step.
+##
+## Measured before this existed: the chip row took the survival meters and
+## nothing else, so a character could be venomed, burning, blighted,
+## frozen, rooted, slowed, shielded and fed a damage-boosting meal at the
+## same moment and the HUD showed none of it. Every one of those was
+## already tracked, already ticked and already carried its own
+## `time_remaining` -- only the reading was missing.
+const EFFECT_LABELS := {
+	"venom": "Venomed",
+	"ignite": "Burning",
+	"blight": "Blighted",
+	"freeze": "Frozen",
+	"root": "Rooted",
+	"slow": "Slowed",
+	"fear": "Afraid",
+	"calm": "Calmed",
+	"shield": "Shielded",
+	"stamina_regen": "Rested",
+	"damage_boost": "Emboldened",
+}
+
+## Which of those are good news. Everything not listed reads as harm, which
+## is the safe direction: an unrecognised effect shown in the warning colour
+## is a player checking something that turned out to be fine, while the
+## reverse is a player ignoring something that was killing them.
+const HELPFUL_EFFECTS := {
+	"shield": true,
+	"stamina_regen": true,
+	"damage_boost": true,
+	"calm": true,
+}
+
+
+## One chip for one timed effect: its name, how long it has left, and how
+## many stacks if more than one.
+##
+## The seconds are what a player can act on -- a chip that only says
+## *Burning* answers nothing -- and they round UP, because half a second
+## left is still a second to do something in and a chip that read "0s"
+## while the thing was still burning would be a lie.
+##
+## An id nobody named reads as itself rather than vanishing: a silent chip
+## is exactly how an effect goes unnoticed, which is the bug this closes.
+static func effect_chip(effect: Dictionary) -> Dictionary:
+	var id := String(effect.get("debuff_id", ""))
+	var label := String(EFFECT_LABELS.get(id, id))
+	var seconds := int(ceilf(maxf(float(effect.get("time_remaining", 0.0)), 0.0)))
+	var stacks := int(effect.get("stacks", 1))
+	var text := "%s %ds" % [label, seconds]
+	if stacks > 1:
+		text = "%s x%d %ds" % [label, stacks, seconds]
+	return _chip(text, UiTheme.ACCENT if HELPFUL_EFFECTS.has(id) else UiTheme.NEGATIVE)
+
+
+## `effects` is every live timed entry on the character, in the
+## {"debuff_id", "stacks", "time_remaining"} shape `DebuffStack` and
+## `FoodConsumption` both already emit -- so a caller hands over the arrays
+## it already holds rather than translating them.
+##
+## They come AFTER the meters and before the place, because a meter problem
+## outranks a spell: starving is worse news than being briefly slowed, and
+## the row must not reorder as effects come and go.
+static func condition_chips(meters, movement_mode: String, effects: Array = []) -> Array:
 	var severe: Array = []
 	var warnings: Array = []
 
@@ -133,6 +198,8 @@ static func condition_chips(meters, movement_mode: String) -> Array:
 		warnings.append(_chip("Malnourished", UiTheme.ACCENT))
 
 	var chips: Array = severe + warnings
+	for effect in effects:
+		chips.append(effect_chip(effect))
 	var place := _place_chip_text(movement_mode)
 	if place != "":
 		chips.append(_chip(place, UiTheme.TEXT_MUTED))

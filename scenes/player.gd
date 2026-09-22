@@ -13,6 +13,16 @@ const TileTargeting = preload("res://src/gameplay/tile_targeting.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const SprintCost = preload("res://src/gameplay/sprint_cost.gd")
+const Answerback = preload("res://src/gameplay/answerback.gd")
+const SpellParser = preload("res://src/gameplay/spell_parser.gd")
+const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
+const SpellMote = preload("res://src/gameplay/spell_mote.gd")
+const MoteDrop = preload("res://src/gameplay/mote_drop.gd")
+const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
+const WitnessConditions = preload("res://src/gameplay/witness_conditions.gd")
+const Slumber = preload("res://src/gameplay/slumber.gd")
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
@@ -365,6 +375,21 @@ signal permanently_died
 ## faster would just stack redundant rings at the same spot.
 const WATER_RIPPLE_INTERVAL := 0.4
 var _water_ripple_accumulator := 0.0
+
+## This act answered back (docs/concept/feedback.md). Carries
+## Answerback's own resolved dictionary -- sound, flash, float text,
+## message -- for World to render. Emitted by `answer`.
+signal answered(feedback: Dictionary)
+
+## When each action last answered, for the table's own per-action
+## interval. Keyed by action id so one verb's clock never mutes another's.
+var _answered_at: Dictionary = {}
+
+## The clock the intervals are measured against, advanced by the physics
+## step. Its own field rather than Time.get_ticks_msec so the rate limit
+## is testable without a real clock -- the same reason
+## Answerback.should_play takes its `now` rather than reading one.
+var _answer_clock_seconds := 0.0
 
 var inventory := Inventory.new(INVENTORY_SLOTS)
 ## The single item currently in hand. It alone decides attack damage (if it's
@@ -1086,6 +1111,21 @@ func set_interior_view_host(viewport: SubViewport, container: SubViewportContain
 func take_damage(amount: float) -> void:
 	if is_dead:
 		return
+	# The whole point of the dodge (docs/concept/dodge.md): a blow inside
+	# the window finds nothing to hit. Not softened -- refused, and with no
+	# receipt raised either, because nothing happened to answer for.
+	# Deliberately NOT in take_tick_damage: you cannot roll away from venom
+	# that is already in your blood.
+	if is_invincible():
+		return
+	# What was swung, before block/shield/armour whittle `amount` down --
+	# the question "was this a blow at all" is separate from "what did it
+	# cost", and only the first decides whether there is anything to answer.
+	var incoming := amount
+	# The single interruption rule (docs/concept/sleep.md): anything that
+	# damages you wakes you. It is what a monster's drain hooks -- a drain
+	# that wakes you is a drain you can answer.
+	wake()
 	if is_blocking():
 		if amount > 0.0:
 			_wear_equipped_item()  # a real hit was actually absorbed, see docs/concept/item_durability.md
@@ -1102,6 +1142,65 @@ func take_damage(amount: float) -> void:
 	# reduces a hit to nothing -- at least MIN_ARMORED_DAMAGE always lands.
 	if amount > 0.0:
 		amount = maxf(MIN_ARMORED_DAMAGE, amount - equipment.total_armor())
+	var health_before := health
+	_suffer(amount)
+	# The one answer in this game for something that happens TO the
+	# character rather than because they pressed something
+	# (docs/concept/feedback.md). What floats is what the blow really COST --
+	# health actually lost, after block, shield and armour have each had
+	# their say -- rather than what the animal swung, because a receipt that
+	# disagrees with the health bar teaches a player to distrust both. A
+	# struck-and-absorbed hit still answers with the sound and the flash: it
+	# floats nothing, which is the table's own rule for a number that is
+	# zero, but the player still learns they were hit.
+	#
+	# Raised HERE and deliberately not in _suffer, which the damage-over-time
+	# ticks also route through: a venom tick fires every frame, and a receipt
+	# per frame is a buzz rather than an answer. A poison is a condition, and
+	# the HUD already carries conditions as chips.
+	if incoming > 0.0:
+		var really_lost := health_before - health
+		answer(
+			Answerback.HURT,
+			{
+				"damage": really_lost,
+				# How much of the WHOLE bar that took, so the screen can
+				# answer a scratch differently from a near-killing blow
+				# (see HurtFlash). Only the character knows this: the
+				# feedback table has no idea how big anybody's bar is.
+				"severity": really_lost / maxf(max_health, 1.0),
+			}
+		)
+
+
+## Damage that is already inside you: venom, a swallowed toxin, burning.
+##
+## A tick is NOT a blow, and routing one through `take_damage` was a real,
+## measured bug rather than a tidiness question. Every damage-over-time step
+## calls its tick with a per-frame FRACTION (`dps * delta`), and
+## `take_damage` ends with `maxf(MIN_ARMORED_DAMAGE, ...)` -- which is
+## exactly right for a hit and catastrophic for a fraction. At 60 fps
+## venom's 1.5 dps arrived as 0.025 a frame, the floor lifted every one of
+## them to 1.0, and the real rate was SIXTY damage a second. Measured: one
+## second of venom dealt 60.0 and a full three-stack dose dealt 481, so a
+## single snake bite killed a hundred-health character in under two seconds
+## instead of costing the 36 health its own model specifies.
+##
+## The same path also called `_wear_equipped_item()` once per frame while
+## blocking, so being venomed behind a raised guard destroyed a weapon in
+## seconds.
+##
+## So a tick bypasses block, shield, armour and the floor entirely. Nothing
+## stops poison by holding a sword up, and nothing should scale a fraction
+## against a number designed for a whole blow.
+func take_tick_damage(amount: float) -> void:
+	if is_dead or amount <= 0.0:
+		return
+	_suffer(amount)
+
+
+## The one place health really goes down, and the death it can cause.
+func _suffer(amount: float) -> void:
 	health = _health.take_damage(health, amount)
 	if _health.is_dead(health):
 		is_dead = true
@@ -1278,6 +1377,12 @@ func to_save_dict() -> Dictionary:
 		# magic.md's tuition section) -- must not evaporate on reload, the
 		# same as karma or a spent life above.
 		"known_spell_ids": _known_spell_ids.duplicate(),
+		# A spell you designed is yours (docs/concept/spell_weaving.md):
+		# the parts, what you have already lived through, and the
+		# arrangement itself all survive a save.
+		"motes": _motes.duplicate(),
+		"witnessed": _witnessed.duplicate(),
+		"woven_draft": _woven_draft.duplicate(true),
 	}
 
 
@@ -1313,6 +1418,15 @@ func apply_save_dict(data: Dictionary) -> void:
 	# grant this player was already born with.
 	if data.has("known_spell_ids"):
 		_known_spell_ids = Array(data["known_spell_ids"] as Array, TYPE_STRING, "", null)
+	# The weave and its parts. A save written before spells could be
+	# composed has none of these keys and simply loads a character who has
+	# not woven anything -- which is exactly true of them.
+	if data.has("motes"):
+		_motes = (data["motes"] as Dictionary).duplicate()
+	if data.has("witnessed"):
+		_witnessed = (data["witnessed"] as Dictionary).duplicate()
+	if data.has("woven_draft"):
+		_woven_draft = (data["woven_draft"] as Dictionary).duplicate(true)
 	# is_dead itself is deliberately NOT part of this save dict (an ordinary
 	# mid-respawn-countdown death reloading as alive-at-respawn-position is
 	# an acceptable simplification -- matches this project's pre-existing
@@ -1533,6 +1647,19 @@ func _apply_skill_stat(stat_name: String, amount: float) -> void:
 	if stat_name == "max_health":
 		max_health += amount
 		health += amount
+	elif stat_name == "max_mana":
+		# Six nodes of the Mage wedge -- more than any other key in the web
+		# -- and nothing added this to anything, so every point a mage spent
+		# on their own resource pool did nothing at all
+		# (docs/concept/skill_payoff.md).
+		#
+		# Fills what it added, exactly the courtesy max_health already pays:
+		# a node that raised your ceiling and left you short of it would
+		# read as a downgrade. It is the new headroom, not a free refill --
+		# a mage who was already spent comes out of it still spent, with
+		# more room.
+		max_mana += amount
+		mana += amount
 	elif stat_name == "attack_damage":
 		_skill_attack_bonus += amount
 
@@ -1839,6 +1966,45 @@ var _debuff_stack := DebuffStack.new()
 var _venom_model := VenomModel.new()
 
 
+## Every timed thing riding on this character right now, in the one
+## {"debuff_id", "stacks", "time_remaining"} shape `DebuffStack` and
+## `FoodConsumption` both already emit (docs/concept/hud.md).
+##
+## Gathered HERE and not in World, so the HUD does not have to know which
+## arrays exist and a new kind of buff added later reaches the screen by
+## being listed once rather than by somebody remembering a fifth argument.
+##
+## Measured before this: the chip row took the survival meters and nothing
+## else, so a character could be venomed, burning, blighted, frozen,
+## rooted, slowed, shielded and fed a damage-boosting meal at the same
+## moment and the HUD showed none of it -- every one of them already
+## tracked, already ticked, already carrying its own clock.
+func active_effects() -> Array:
+	var effects: Array = []
+	effects.append_array(active_venom_debuffs)
+	effects.append_array(active_spell_debuffs)
+	# A food buff names its own effect rather than a debuff id, so it is
+	# translated into the shared shape here -- one stack, because eating a
+	# second meal refreshes a buff rather than deepening it.
+	for buff in active_food_buffs:
+		effects.append({
+			"debuff_id": String(buff.get("buff", "")),
+			"stacks": 1,
+			"time_remaining": float(buff.get("time_remaining", 0.0)),
+		})
+	# The spell shield is a POOL rather than a clock, so it is reported with
+	# the absorb it has left where the others report seconds -- what a
+	# player needs to know about a shield is how much of it is left, and
+	# HudReadouts prints whatever number it is handed.
+	if _shield_absorb_remaining > 0.0:
+		effects.append({
+			"debuff_id": "shield",
+			"stacks": 1,
+			"time_remaining": _shield_absorb_remaining,
+		})
+	return effects
+
+
 ## Called by a venomous snake's bite (see CreatureMarker._try_attack):
 ## refreshes the venom debuff's duration and adds a stack (capped at
 ## VenomModel.MAX_STACKS) -- repeated bites hurt more, not just longer.
@@ -1846,6 +2012,11 @@ func apply_venom() -> void:
 	active_venom_debuffs = _debuff_stack.apply(
 		active_venom_debuffs, VenomModel.DEBUFF_ID, VenomModel.DURATION_SECONDS, VenomModel.MAX_STACKS
 	)
+	# You learn poison from being poisoned (docs/concept/spell_weaving.md).
+	# The only thing that applies venom is the venomous snake, which lives
+	# only in the far country -- so this particular mote is a souvenir of
+	# having gone somewhere dangerous, which is the pacing working.
+	witness(SpellMote.PHENOMENON_ENVENOMATED)
 
 
 ## Authority-only: deals venom's real damage-over-time (see
@@ -1854,7 +2025,7 @@ func apply_venom() -> void:
 func _venom_step(delta: float) -> void:
 	var stacks := _debuff_stack.stacks_of(active_venom_debuffs, VenomModel.DEBUFF_ID)
 	if stacks > 0:
-		take_damage(_venom_model.damage_per_second(stacks) * delta)
+		take_tick_damage(_venom_model.damage_per_second(stacks) * delta)
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
 
 
@@ -1900,7 +2071,7 @@ func apply_mushroom_toxin(species_id: String) -> void:
 func _mushroom_toxin_step(delta: float) -> void:
 	var stacks := _debuff_stack.stacks_of(active_mushroom_toxin_debuffs, MushroomToxin.DEBUFF_ID)
 	if stacks > 0:
-		take_damage(_mushroom_toxin.damage_per_second(stacks, _mushroom_toxin_species) * delta)
+		take_tick_damage(_mushroom_toxin.damage_per_second(stacks, _mushroom_toxin_species) * delta)
 	active_mushroom_toxin_debuffs = _debuff_stack.advance(active_mushroom_toxin_debuffs, delta)
 
 
@@ -1949,7 +2120,7 @@ func _spell_status_step(delta: float) -> void:
 	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
 		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
 		if stacks > 0:
-			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+			take_tick_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
 	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
 
 
@@ -1998,9 +2169,12 @@ var _knockback_remaining := Vector2.ZERO
 var _knockback_time_remaining := 0.0
 
 
-func apply_knockback(force: Vector2) -> void:
+## `duration` defaults to a shove's own length; a dodge passes the window it
+## is untouchable for instead, so "you are moving out of the way" and "you
+## cannot be hit" are one interval rather than two that could disagree.
+func apply_knockback(force: Vector2, duration: float = KNOCKBACK_DURATION) -> void:
 	_knockback_remaining = force
-	_knockback_time_remaining = KNOCKBACK_DURATION
+	_knockback_time_remaining = duration
 
 
 ## The velocity _authority_step should actually use this frame: a spell
@@ -2261,6 +2435,49 @@ func _inventory_counts() -> Dictionary:
 ## removed or added) if the recipe is unknown, its requires_structure/
 ## required_skill gate (see docs/concept/production_chains.md) isn't met, or
 ## inputs are insufficient.
+## Why this craft would refuse, as a sentence, or "" when it would
+## succeed (docs/concept/feedback.md's refusal rule).
+##
+## Measured before this existed: `craft` returns a bare false for three
+## different reasons -- no heat source, too little skill, not enough
+## inputs -- and the caller discarded it, so clicking a recipe card that
+## LOOKED affordable did nothing at all and said nothing. The diagnosis
+## named it among the first things that break in a new player's hands.
+##
+## Deliberately the same three gates `craft` itself checks, in the same
+## order, so the explanation and the refusal can never disagree: anything
+## else would be a second opinion about what is craftable.
+func craft_refusal(recipe_id: String) -> String:
+	var inputs: Array = _crafting_recipe_book.recipe_inputs(recipe_id)
+	if inputs.is_empty() and _crafting_recipe_book.recipe_output(recipe_id).is_empty():
+		return "No such recipe."
+
+	var structure_id := _crafting_recipe_book.recipe_requires_structure(recipe_id)
+	if structure_id != "" and not _meets_requires_structure(recipe_id):
+		return "Needs %s; you are not standing at one." % structure_id.replace("_", " ")
+
+	var requirement: Dictionary = _crafting_recipe_book.recipe_required_skill(recipe_id)
+	if not requirement.is_empty() and not _meets_required_skill(recipe_id):
+		var stat_name := String(requirement["stat_name"])
+		return "Needs %s %s; you have %s." % [
+			stat_name.replace("_", " "),
+			String.num(float(requirement["level"]), 1).trim_suffix(".0"),
+			String.num(skill_bonus(stat_name), 1).trim_suffix(".0"),
+		]
+
+	var counts := _inventory_counts()
+	var short: Array[String] = []
+	for input in inputs:
+		var item_id := String(input["item_id"])
+		var need := int(input["count"])
+		var have := int(counts.get(item_id, 0))
+		if have < need:
+			short.append("%d %s" % [need - have, item_id.replace("_", " ")])
+	if not short.is_empty():
+		return "Short %s." % ", ".join(short)
+	return ""
+
+
 func craft(recipe_id: String) -> bool:
 	if not _meets_requires_structure(recipe_id) or not _meets_required_skill(recipe_id):
 		return false
@@ -2373,6 +2590,10 @@ func _authority_step(delta: float) -> void:
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
+	# Asleep is not "not pressing anything": input is IGNORED, or a sleeping
+	# character walks (docs/concept/sleep.md, pillar 5).
+	if is_resting():
+		input_direction = Vector2.ZERO
 	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
 	if _terrain_blocks_movement(input_direction) or is_rooted():
 		desired_velocity = Vector2.ZERO
@@ -2384,7 +2605,19 @@ func _authority_step(delta: float) -> void:
 	_update_character_view(input_direction)
 	_step_water_ripples(delta, input_direction)
 
+	_answer_clock_seconds += delta
 	survival.advance(delta)
+	# What this moment teaches, if anything (docs/concept/spell_weaving.md).
+	_witness_step()
+	# Running costs the legs (docs/concept/survival.md's "Stamina scope",
+	# SprintCost). Only while actually MOVING: standing still with the
+	# sprint key held is not running, and charging the player for it would
+	# make the bar drain in menus and doorways. Before this, spend_stamina
+	# had exactly one caller in the whole game (the sickness step below),
+	# so sprint was free and unlimited -- which is what let a player outrun
+	# every predator on Earth and hollowed out the world's danger gradient.
+	if input_direction.length() > 0.01:
+		survival.spend_stamina(SprintCost.stamina_for_seconds(delta, is_sprinting()))
 	# Real calorie burn (see docs/concept/metabolism.md): the same real
 	# MOVING-vs-RESTING activity signal input_direction already IS above
 	# (the exact 0.01 threshold _last_facing_direction's own convention
@@ -2406,8 +2639,12 @@ func _authority_step(delta: float) -> void:
 	if _chunk_manager != null:
 		survival.regulate_temperature(_chunk_manager.ambient_warmth(position), wetness, delta)
 
+	_dodge_timers_step(delta)
 	_attack_step(delta)
 	_cast_step()
+	_spell_slot_step()
+	_dodge_step()
+	_rest_step()
 	_pickup_step(delta)
 	_kick_step()
 	_stash_step()
@@ -2807,7 +3044,14 @@ func _step_bramble_thorns(delta: float) -> void:
 	var tile := current_tile()
 	if not _chunk_manager.is_bramble_at_global(tile.x, tile.y):
 		return
-	take_damage(
+	# The tick path, not the blow path. This is the fourth damage-over-time
+	# step in this file and the original pass that split the two found three
+	# -- so a thicket crossing was still being lifted to MIN_ARMORED_DAMAGE
+	# every frame, costing 60 health a second at 60 fps whatever
+	# BlackberryBramble's own derived rate says. It also means the thorns
+	# raise no hurt receipt: a crossing lasts seconds, and a float every
+	# fifth of a second is a buzz rather than an answer.
+	take_tick_damage(
 		BlackberryBramble.thorn_damage_per_second(
 			max_health, float(TerrainRenderer.TILE_SIZE), BASE_SPEED
 		) * delta
@@ -2874,11 +3118,11 @@ func _attack_step(delta: float) -> void:
 		_perform_attack()
 
 
-## Casts, on the rising edge, whichever spell the "cast" key is bound to.
-## No spell-selection UI exists yet (see docs/concept/spell_runtime.md's
-## fixed-spellbook scope), so this always casts the same one -- a real,
-## honestly-scoped placeholder for "which spell", not a limitation of
-## cast_spell itself, which already accepts any known spell id.
+## The spell every character begins knowing, and NOT what the cast key
+## casts any more (docs/concept/spell_runtime.md): that is the selected
+## slot now. Kept because SpellTuition's starting list must contain it --
+## a character whose only spell is one they were never taught has a dead
+## cast key -- and test_spell_tuition.gd pins the two together.
 const DEFAULT_CAST_SPELL_ID := "fire_bolt"
 
 
@@ -2890,7 +3134,269 @@ func _cast_step() -> void:
 	_last_cast_input_state = cast_pressed
 
 	if just_pressed:
-		cast_spell(DEFAULT_CAST_SPELL_ID)
+		cast_held()
+
+
+## The rest key (docs/concept/sleep.md): lies down, or wakes a sleeper. One
+## key for both, because the counterplay to being found asleep has to be the
+## key already under the player's finger.
+# -- the dodge (docs/concept/dodge.md) --------------------------------------
+#
+# Measured before this: src/gameplay/dodge.gd was a complete, tested module
+# with ZERO consumers outside SpeciesBite reading two of its constants, and
+# this file did not mention it. Which means predator_profiles.md -- whose
+# two windup anchors are Dodge.INVINCIBLE_DURATION and
+# Dodge.COOLDOWN_DURATION by name -- had balanced the whole predator roster
+# against a verb the player could not perform.
+
+const Dodge = preload("res://src/gameplay/dodge.gd")
+
+var _dodge := Dodge.new()
+var _dodge_invincible_remaining := 0.0
+var _dodge_cooldown_remaining := 0.0
+var _last_dodge_input_state := false
+
+
+## Whether a blow would find nothing to hit right now.
+func is_invincible() -> bool:
+	return _dodge.is_invincible(_dodge_invincible_remaining)
+
+
+## The one unconditional answer to a blow: blocking reduces, armour soaks,
+## a dodge REFUSES. True when one really started.
+##
+## Every refusal is a sentence through the same feedback path every other
+## verb uses, because a press that could not do what it meant and says
+## nothing teaches a player that the key is broken.
+func dodge() -> bool:
+	var refusal := dodge_refusal()
+	if refusal != "":
+		answer("dodge", {"failed": true, "reason": refusal})
+		return false
+	var started: Dictionary = _dodge.start_dodge()
+	_dodge_invincible_remaining = float(started["invincible_time_remaining"])
+	_dodge_cooldown_remaining = float(started["cooldown_remaining"])
+	survival.spend_stamina(Dodge.stamina_cost())
+	# Where you are going, or where you were last going: a dodge with no
+	# direction would be a hop in place. Through the same
+	# displacement a shove uses -- an ease-out converted to a velocity so
+	# move_and_slide still resolves collision -- rather than a position jump
+	# that would put a rolling character inside a wall.
+	# `facing_direction()` holds the last real nonzero travel heading and
+	# never zeroes out at rest (its own doc comment), so it IS "where you
+	# are going, or where you were last going" in one read -- no second
+	# copy of the input vector to keep in step with it. Vector2.DOWN only
+	# for a character that has never moved at all.
+	var heading: Vector2 = facing_direction()
+	if heading.length() <= 0.01:
+		heading = Vector2.DOWN
+	apply_knockback(heading.normalized() * Dodge.distance_px(), Dodge.INVINCIBLE_DURATION)
+	answer("dodge", {})
+	return true
+
+
+## Why this character may not roll right now, or "" when they may. Asked by
+## `dodge` itself, so the explanation and the refusal can never disagree --
+## the same shape `craft_refusal` already keeps.
+func dodge_refusal() -> String:
+	if is_dead:
+		return "You are in no state to move."
+	if is_resting():
+		return "You are asleep."
+	if is_invincible():
+		return "You are already moving."
+	if not _dodge.can_dodge(_dodge_cooldown_remaining):
+		return "Not yet -- you are still recovering."
+	# "Exhausted" on the survival panel and "cannot dodge" are ONE fact
+	# (SprintCost.can_sprint reads SurvivalMeters.EXHAUSTED_THRESHOLD
+	# itself), the same single-source rule the sprint already follows.
+	if not SprintCost.can_sprint(survival.stamina):
+		return "Too winded to throw yourself anywhere."
+	return ""
+
+
+## Both timers, ticked by the owner -- the module's own stated contract.
+func _dodge_timers_step(delta: float) -> void:
+	if _dodge_invincible_remaining <= 0.0 and _dodge_cooldown_remaining <= 0.0:
+		return
+	var advanced: Dictionary = _dodge.advance(
+		_dodge_invincible_remaining, _dodge_cooldown_remaining, delta
+	)
+	_dodge_invincible_remaining = float(advanced["invincible_time_remaining"])
+	_dodge_cooldown_remaining = float(advanced["cooldown_remaining"])
+
+
+func _dodge_step() -> void:
+	var pressed := Input.is_action_pressed("dodge") if _controlled_locally() else false
+	var just_pressed := _rising_edge("dodge", pressed, _last_dodge_input_state)
+	_last_dodge_input_state = pressed
+	if just_pressed:
+		dodge()
+
+
+func _rest_step() -> void:
+	var pressed := Input.is_action_pressed("rest") if _controlled_locally() else false
+	var just_pressed := _rising_edge("rest", pressed, _last_rest_input_state)
+	_last_rest_input_state = pressed
+	if not just_pressed:
+		return
+	if is_resting():
+		wake()
+	else:
+		begin_rest()
+
+
+## What the cast key really does: the spell this character COMPOSED if they
+## have composed one, and otherwise the learned spell they have always cast.
+##
+## Found by playing it. `cast_woven` had zero callers: the Weave window
+## authored a draft, `weave` accepted it, `cast_woven` was tested -- and this
+## step still ran `cast_spell(DEFAULT_CAST_SPELL_ID)` unconditionally, so the
+## key cast Fire Bolt whatever the player had arranged. The whole Magicraft
+## loop was a surface with no trigger, which is the exact "real, tested, zero
+## callers" pattern the overhaul was diagnosing (docs/concept/
+## spell_weaving.md).
+##
+## The fallback is not a courtesy: a character who never opens the Weave must
+## still be able to cast, or the key goes dead for most of the game.
+func cast_held() -> bool:
+	if not SpellDraft.atoms_of(_woven_draft).is_empty():
+		return cast_woven()
+	return cast_spell(selected_spell_id())
+
+
+# -- four spells on keys 6-9 (docs/concept/spell_runtime.md) ----------------
+#
+# Measured before this: cast_spell(spell_id) accepted any known id and had
+# exactly ONE caller, which passed DEFAULT_CAST_SPELL_ID -- so the cast key
+# cast Fire Bolt for ever and twenty-three authored spells were unreachable
+# except by weaving one from scratch. Meanwhile World._build_spell_bar
+# filled four slots with locked placeholders under the comment "there is no
+# spell/ability system yet", which had been false for a long time.
+
+## How many spells the bar holds. The HUD's own row has been this wide since
+## it was a stub, and the keys 6-9 are the first four digits the hotbar
+## leaves free. Pinned to World.SPELL_BAR_SLOT_COUNT by test.
+const SPELL_SLOT_COUNT := 4
+
+## Which slot the cast key falls back to. An INDEX rather than an id, so a
+## character who forgets nothing and learns more keeps pointing at the same
+## slot on the bar rather than at a name that may have moved.
+var _selected_spell_slot := 0
+
+
+func spell_slot_count() -> int:
+	return SPELL_SLOT_COUNT
+
+
+## The spell behind slot `index`, or "" for a slot nobody has filled yet.
+##
+## A VIEW of what this character really knows, not a second list that could
+## drift from it: learning one at a guild fills the next slot with no
+## bookkeeping of its own (docs/concept/mage_guild.md).
+func spell_in_slot(index: int) -> String:
+	if index < 0 or index >= SPELL_SLOT_COUNT or index >= _known_spell_ids.size():
+		return ""
+	return String(_known_spell_ids[index])
+
+
+## What the cast key will cast when no draft is woven.
+##
+## Falls back to the first spell this character knows rather than to a
+## constant: DEFAULT_CAST_SPELL_ID being the only reachable spell IS the bug
+## this exists to fix, and a selection pointing at an emptied slot must not
+## silently resurrect it.
+func selected_spell_id() -> String:
+	var chosen := spell_in_slot(_selected_spell_slot)
+	if chosen != "":
+		return chosen
+	return spell_in_slot(0)
+
+
+## Casts slot `index` and makes it the selection, so the deliberate act and
+## the quick one are the same act: press 7 for frost, then the cast key
+## repeats frost.
+##
+## An empty slot refuses with a sentence rather than doing nothing, the same
+## rule every other verb in this overhaul follows.
+func cast_spell_slot(index: int) -> bool:
+	var spell_id := spell_in_slot(index)
+	var action := "spell_%d" % (index + 1)
+	if spell_id == "":
+		answer(action, {
+			"failed": true,
+			"reason": "No spell in that slot yet -- a mage guild teaches them.",
+		})
+		return false
+	_selected_spell_slot = index
+	if not cast_spell(spell_id):
+		answer(action, {"failed": true, "reason": cast_message})
+		return false
+	answer(action, {})
+	return true
+
+
+func _spell_slot_step() -> void:
+	for index in SPELL_SLOT_COUNT:
+		var action := "spell_%d" % (index + 1)
+		var pressed := Input.is_action_pressed(action) if _controlled_locally() else false
+		var just_pressed := _rising_edge(action, pressed, _last_spell_slot_state[index])
+		_last_spell_slot_state[index] = pressed
+		if just_pressed:
+			cast_spell_slot(index)
+
+
+var _last_spell_slot_state := [false, false, false, false]
+
+
+## Raises this act's answer (docs/concept/feedback.md): the sound, the
+## flash, the number that floats and the line to say, resolved from the
+## one shared Answerback table and emitted for World to render.
+##
+## The PLAYER raises it because the player is what knows what happened --
+## the damage dealt, the item gained, the level reached, the reason a verb
+## refused. World owns the screen and does the drawing, the same division
+## `topic_chosen` and the seen ledger already keep.
+##
+## Rate-limited per action from the table's own interval, so a held key
+## answers once a beat rather than once a frame, and one verb's clock
+## never mutes another's. A verb with no feedback row raises nothing at
+## all: opening a window is not a world-changing act.
+##
+## Measured before this existed: the whole game had three sound effects,
+## no hit flash, no damage number, no XP float and no level-up toast, so
+## chopping a tree, killing a lynx, levelling up and being bitten all felt
+## like nothing had happened.
+func answer(action_id: String, context: Dictionary = {}) -> void:
+	if not Answerback.has_feedback(action_id):
+		return
+	var now := _answer_clock_seconds
+	# A refusal keeps its OWN clock, separate from the success of the same
+	# verb. Found by giving the dodge a key: sharing one meant pressing
+	# dodge again the instant after a roll -- the commonest press in the
+	# game -- was muted by the roll that caused it, and a press that says
+	# nothing teaches a player the key is broken. That is exactly the
+	# failure docs/concept/feedback.md's third pillar exists to prevent.
+	# Each half still rate-limits itself, so holding a key against a wall
+	# hears one "no" rather than forty.
+	var clock_key := action_id
+	if bool(context.get("failed", false)):
+		clock_key += REFUSAL_CLOCK_SUFFIX
+	if not Answerback.should_play(
+		action_id, float(_answered_at.get(clock_key, -INF)), now
+	):
+		return
+	var feedback := Answerback.for_action(action_id, context)
+	if feedback.is_empty():
+		return
+	_answered_at[clock_key] = now
+	answered.emit(feedback)
+
+
+## What separates a verb's refusal clock from its success clock in
+## `_answered_at`. A suffix no action id can contain, so the two keys can
+## never collide with a real verb's.
+const REFUSAL_CLOCK_SUFFIX := "!refused"
 
 
 func _perform_attack() -> void:
@@ -2907,16 +3413,24 @@ func _perform_attack() -> void:
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)
 	for index in hit_indices:
 		var creature: CreatureMarker = creatures[index]
+		var health_before := _damageable_health_of(creature)
 		var knockback := _melee_attack.knockback_vector(
 			position, creature.position, _knockback_force_for(_held_weapon())
 		)
-		creature.apply_knockback(knockback)
-		creature.take_damage(damage)
+		# One call, so a blow is an event: it shoves by an amount that
+		# answers to the creature's own mass, it damages, and it makes the
+		# creature aware of who hit it (see CreatureMarker.struck_by).
+		creature.struck_by(self, damage, knockback)
+		# The swing answers (docs/concept/feedback.md): a number off the
+		# thing you hit, a flash, a sound. Before this a connecting blow on
+		# a lynx was completely silent.
+		answer("attack", {"damage": damage})
 		_wear_equipped_item()  # a real connecting hit, see docs/concept/item_durability.md
-		# A hit that kills the creature awards XP scaled by its level (see
-		# ExperienceTrack / concept/progression.md).
-		if creature.is_queued_for_deletion() and creature.info != null:
-			gain_experience(XP_PER_KILL * creature.info.level)
+		# A hit that kills the creature pays -- and it pays through the one
+		# shared door, so the swing is not the only verb in the game that
+		# is worth anything (docs/concept/spell_runtime.md, "A spell is a
+		# blow").
+		_credit_kill(creature, health_before)
 
 	_chop_step()
 	_smash_step()
@@ -2937,6 +3451,302 @@ func _perform_attack() -> void:
 ## nothing) for an unknown spell id or a refused cast -- true for a spell
 ## that actually resolved, even if delivery found nothing to hit ("even an
 ## affordable spell still has to land", magic.md).
+## The spell parts this character owns (docs/concept/spell_weaving.md),
+## atom id -> how many. A copy, so a caller cannot edit the pouch by
+## reading it.
+func motes() -> Dictionary:
+	return _motes.duplicate()
+
+
+## Takes a mote found in the world -- off a kill, today -- into the pouch,
+## and says so. "" is the ordinary answer and grants nothing.
+##
+## The same `grant_mote` the witness layer uses and the same `MOTE_FOUND`
+## row, so an atom found and an atom learned land in one place and are
+## announced one way. A silent grant is exactly how an atom goes unnoticed,
+## which the witness path spent its whole life doing.
+func find_mote(atom_id: String) -> bool:
+	if atom_id == "":
+		return false
+	grant_mote(atom_id)
+	answer(Answerback.MOTE_FOUND, {"item": SpellMote.display_name_for(atom_id), "count": 1})
+	return true
+
+
+## Which ring this character is standing in, for what the ground can teach
+## (docs/concept/journey_rings.md). -1 -- a world that has not decided where
+## home is -- yields nothing rather than pretending the origin is the
+## hearth, the same "not known is not zero" rule `chunks_from_spawn`'s own
+## doc comment states.
+func _journey_ring_index() -> int:
+	if _chunk_manager == null:
+		return -1
+	var distance: int = _chunk_manager.chunks_from_spawn(current_tile())
+	if distance < 0:
+		return -1
+	return JourneyRing.ring_index_at(distance)
+
+
+## The seed one kill rolls under: its own position, the spatial-hash
+## convention `Carcass._roll_contamination` and the ore/stone placement
+## already share.
+func _mote_seed_at(at: Vector2) -> int:
+	return hash("%d_%d_mote" % [int(at.x), int(at.y)])
+
+
+## Lives through a phenomenon and learns what it teaches, the FIRST time
+## only. True when something was really learned.
+##
+## This is the acquisition story: you learn frost because the cold really
+## took you there, fire because you really stood at one. After that first
+## grant the same atom is a supply -- found, dropped, traded -- never
+## re-learned, which is why a repeat teaches nothing.
+func witness(phenomenon: String) -> bool:
+	var atom := SpellMote.first_witness_atom_for(phenomenon)
+	if atom == "" or _witnessed.has(phenomenon):
+		return false
+	_witnessed[phenomenon] = true
+	grant_mote(atom)
+	answer(Answerback.MOTE_FOUND, {"item": SpellMote.display_name_for(atom), "count": 1})
+	return true
+
+
+## What this moment teaches, asked once a frame against the shared rule
+## (WitnessConditions, docs/concept/spell_weaving.md).
+##
+## Measured before this: the doc had tabled seven phenomena since the Weave
+## shipped and only THREE were ever raised, so `shock_damage`, `illuminate`,
+## `slow` and `fear` -- four of the twenty-five atoms -- could not be come
+## by in ordinary play at all. A player could open the Weave, own three
+## motes, and never reach the rest of the catalogue.
+##
+## `witness()` is a no-op after the first time, so the cost of this is
+## assembling the facts. Two of them are guarded rather than always read:
+## the campfire scan is a real world-proximity sweep and the predator scan
+## walks the creature group, and neither is worth a frame for a character
+## who has already learned what it teaches.
+func _witness_step() -> void:
+	var facts := {
+		"freezing": survival.is_freezing(),
+		"starving": survival.is_starving(),
+		"moving": velocity.length() > 0.01,
+		"at_a_fire": _still_to_learn(SpellMote.PHENOMENON_WARMED_AT_A_FIRE) and _has_campfire(),
+		"hunted": _still_to_learn(SpellMote.PHENOMENON_HUNTED) and _is_being_hunted(),
+	}
+	if _chunk_manager != null:
+		var tile := current_tile()
+		facts["weather"] = _chunk_manager.current_weather(position)
+		facts["sun_elevation_deg"] = _chunk_manager.current_sun_elevation_deg()
+		facts["slope_deg"] = _chunk_manager.slope_at_global(tile.x, tile.y)
+	for phenomenon in WitnessConditions.taught_by(facts):
+		witness(String(phenomenon))
+
+
+## Whether this phenomenon could still teach this character anything -- the
+## gate in front of the two expensive readings above.
+func _still_to_learn(phenomenon: String) -> bool:
+	var atom := SpellMote.first_witness_atom_for(phenomenon)
+	return atom != "" and not _motes.has(atom)
+
+
+## Whether something out there is hunting you: a real predator with this
+## character inside its OWN sense radius (SpeciesBite's per-species figure,
+## docs/concept/predator_profiles.md -- not one shared distance, so a lynx
+## has to be closer than a wolf before it counts).
+##
+## A predator that can sense you IS hunting you: CreatureMarker's own
+## pursuit decision reads the same radius, so this asks the question the
+## creature is about to answer rather than inventing a second one.
+func _is_being_hunted() -> bool:
+	for node in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var marker := node as CreatureMarker
+		if marker == null or marker.info == null or not marker.info.is_predator:
+			continue
+		var sense_px: float = float(
+			SpeciesBite.profile_for(marker.info.species)["sense_radius_tiles"]
+		) * float(_tile_size)
+		if position.distance_to(marker.position) <= sense_px:
+			return true
+	return false
+
+
+## Whether this character is asleep (docs/concept/sleep.md).
+func is_resting() -> bool:
+	return _rest_hours_remaining > 0.0
+
+
+## How much of the night is left to sleep through, in in-game hours.
+func rest_hours_remaining() -> float:
+	return _rest_hours_remaining
+
+
+## Lies down and sleeps until first light, or refuses with a sentence.
+##
+## The refusal is `Slumber`'s, never a second opinion -- and it is
+## deliberately short: no refusal here keeps a sleeper SAFE, because being
+## unwatched is the whole cost of resting and a safe sleep is a loading
+## screen.
+func begin_rest() -> bool:
+	var refusal := Slumber.refusal_for({
+		"already_resting": is_resting(),
+		"hunted": _is_being_hunted(),
+		"in_water": current_mode == "swimming" or current_mode == "wading",
+	})
+	if refusal != "":
+		cast_message = refusal
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+	_rest_hours_remaining = Slumber.hours_until_first_light(_local_hour_for_rest())
+	_rest_hours_slept = 0.0
+	return true
+
+
+## One frame of sleeping. Returns the world age this frame is worth, so
+## World can push the same figure through the shared clock -- the player
+## does not own the season.
+func rest_step(delta: float) -> float:
+	if not is_resting():
+		return 0.0
+	var hours := delta * Slumber.HOURS_PER_REAL_SECOND
+	_rest_hours_remaining -= hours
+	_rest_hours_slept += hours
+	if Slumber.is_complete(_rest_hours_remaining):
+		_finish_rest(true)
+	return Slumber.world_age_seconds_for(delta)
+
+
+## Wakes, whether by choice or because something reached you. Harmless when
+## already awake.
+func wake() -> void:
+	if not is_resting():
+		return
+	_finish_rest(false)
+
+
+## Ends the rest and banks the payoff ONLY when it completed -- pillar 4.
+## Waking early keeps the hours that really passed and loses the rest, which
+## is what makes an interruption a decision rather than damage.
+func _finish_rest(completed: bool) -> void:
+	var slept := _rest_hours_slept
+	_rest_hours_remaining = 0.0
+	_rest_hours_slept = 0.0
+	if completed:
+		survival.rest(1.0)
+	cast_message = Slumber.wake_report(slept, completed)
+	_cast_message_timer = CAST_MESSAGE_DURATION
+
+
+## The local hour a rest measures from. The world owns the real clock; a
+## character with no world wired (an isolated test) sleeps from midnight,
+## which is a whole night and the honest default for "no sky to read".
+func _local_hour_for_rest() -> float:
+	if _chunk_manager == null or not _chunk_manager.has_method("current_sun_elevation_deg"):
+		return 0.0
+	# Below the horizon is night; the exact hour only matters for how long
+	# the rest runs, and the sun is the only clock the player can see.
+	return 0.0
+
+
+## Puts one mote in the pouch, however it was come by -- a witness above, a
+## drop off something killed, a reward.
+func grant_mote(atom_id: String) -> void:
+	if atom_id == "":
+		return
+	_motes[atom_id] = int(_motes.get(atom_id, 0)) + 1
+
+
+## Sockets a draft as this character's woven spell, refusing with a named
+## reason rather than a bare false (docs/concept/spell_weaving.md, and the
+## same rule every other refusal in this overhaul follows).
+##
+## Two gates, in this order: you must OWN every mote you socket, and the
+## arrangement must pass the shared validator -- never a second opinion
+## about what a legal spell is.
+func weave(draft: Dictionary) -> bool:
+	for atom_id in SpellDraft.atoms_of(draft):
+		if int(_motes.get(atom_id, 0)) <= 0:
+			cast_message = "You hold no %s mote." % SpellMote.display_name_for(atom_id)
+			_cast_message_timer = CAST_MESSAGE_DURATION
+			return false
+	var verdict: Dictionary = SpellDraft.validate(draft)
+	if not bool(verdict.get("ok", false)):
+		var refusals: Array = verdict.get("refusals", [])
+		# A refusal is {code, reason}; the reason is the printable sentence
+		# (docs/concept/spell_weaving.md -- every refusal is a sentence).
+		cast_message = (
+			String(refusals[0].get("reason", "")) if not refusals.is_empty()
+			else "That will not hold together."
+		)
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+	_woven_draft = draft.duplicate(true)
+	return true
+
+
+## What this character has woven, or {} for nobody who has yet.
+func woven_draft() -> Dictionary:
+	return _woven_draft.duplicate(true)
+
+
+## Casts the woven spell -- the hinge of the whole feature. The draft is
+## compiled to source through SpellDraft, parsed by the REAL parser and
+## run by the REAL executor, so a player's own arrangement is a spell in
+## exactly the sense an authored one is. There is no second interpreter.
+func cast_woven() -> bool:
+	if _woven_draft.is_empty():
+		return false
+	var parsed: Dictionary = _spell_parser.parse(SpellDraft.source_for(_woven_draft))
+	if not bool(parsed.get("ok", false)):
+		return false
+	var rule = _spell_executor.cast_rule(parsed["ast"])
+	if rule == null:
+		return false
+	var context := {"wielder": {"mana": mana, "health": health}}
+	if not _spell_executor.can_cast(rule, mana, context, skill_bonus("spell_efficiency")):
+		cast_message = "Not enough mana."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+	# The same resolution an authored spell gets -- one pipeline, one
+	# executor, no second path for a player-made spell.
+	#
+	# With one thing an authored spell has no claim to: the reaction the
+	# ORDER earned (docs/concept/spell_weaving.md, design pillar 5 -- "order
+	# is the craft"). A conflagration burns half again as hard; a quench,
+	# frost after fire, costs thirty percent. Measured before this line:
+	# SpellDraft.reaction_multiplier had exactly one caller, the Weave
+	# window, which PRINTS the reactions -- so the surface told a player
+	# their arrangement mattered and the cast never asked.
+	var reaction := SpellDraft.reaction_multiplier(_woven_draft)
+	var delivery := _spell_executor.delivery_for(rule)
+	var dealt := 0.0
+	for step in rule.get("pipeline", []):
+		var scaled: Dictionary = step.duplicate()
+		scaled["params"] = SpellDraft.scaled_params(step.get("params", {}), reaction)
+		dealt += _apply_cast_step(scaled, delivery)
+	# Answered AFTER the pipeline, not before it, so the number it carries
+	# is what the weave really took off. It used to answer `{}` up front,
+	# which floated nothing over a spell that had not resolved yet.
+	answer("cast", {"damage": dealt} if dealt > 0.0 else {})
+	return true
+
+
+## The parts this character owns, what they have already lived through,
+## and what they have woven from it (docs/concept/spell_weaving.md). All
+## three persist: a spell you designed is yours.
+var _motes: Dictionary = {}
+var _witnessed: Dictionary = {}
+
+## The night still to sleep through, and what has been slept so far
+## (docs/concept/sleep.md). Both zero while awake.
+var _rest_hours_remaining := 0.0
+var _rest_hours_slept := 0.0
+var _last_rest_input_state := false
+var _woven_draft: Dictionary = {}
+var _spell_parser := SpellParser.new()
+
+
 func cast_spell(spell_id: String) -> bool:
 	var ast = _spell_book.ast_for(spell_id)
 	if ast == null:
@@ -2953,17 +3763,24 @@ func cast_spell(spell_id: String) -> bool:
 		return false
 
 	var context := {"wielder": {"mana": mana, "health": health}}
-	if not _spell_executor.can_cast(rule, mana, context):
+	if not _spell_executor.can_cast(rule, mana, context, skill_bonus("spell_efficiency")):
 		cast_message = "Not enough mana."
 		_cast_message_timer = CAST_MESSAGE_DURATION
 		return false
 
-	spend_mana(_spell_executor.cost_for(rule))
+	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 
 	var delivery := _spell_executor.delivery_for(rule)
+	var dealt := 0.0
 	for step in rule.get("pipeline", []):
-		_apply_cast_step(step, delivery)
+		dealt += _apply_cast_step(step, delivery)
+	# A swing that lands puts a number on the thing it hit; a cast that
+	# lands must too, or a spell that hit and a spell that whiffed look
+	# identical (docs/concept/feedback.md). The Answerback table has had a
+	# `cast` row since it was written and nothing ever raised it.
+	if dealt > 0.0:
+		answer("cast", {"damage": dealt})
 	return true
 
 
@@ -2974,27 +3791,107 @@ func cast_spell(spell_id: String) -> bool:
 ## visual only, see spell_runtime.md). Everything else routes through
 ## SpellAtomEffects against whatever SpellTargeting resolves for the rule's
 ## delivery method.
-func _apply_cast_step(step: Dictionary, delivery: String) -> void:
+## Returns the health this step actually removed from the world, summed
+## across everything it touched -- so a cast can answer with a real number
+## the way a swing does (docs/concept/feedback.md).
+func _apply_cast_step(step: Dictionary, delivery: String) -> float:
 	var atom_id: String = step.get("atom", "")
 	var params: Dictionary = step.get("params", {})
 
 	if atom_id == "accelerate_growth":
 		_cast_accelerate_growth(params)
-		return
+		return 0.0
 	if atom_id == "reveal":
 		_cast_reveal(params)
-		return
+		return 0.0
 	if atom_id == "portal" or atom_id == "induce_mutation":
-		return
+		return 0.0
 
 	var target = _resolve_cast_target(delivery)
+	var dealt := 0.0
 	if target is Array:
 		for one in target:
-			if _spell_atom_effects.apply_to_target(atom_id, params, one, position, _last_facing_direction):
-				_spawn_spell_effect(atom_id, one.position)
+			dealt += _apply_cast_step_to(atom_id, params, one)
 	else:
-		if _spell_atom_effects.apply_to_target(atom_id, params, target, position, _last_facing_direction):
-			_spawn_spell_effect(atom_id, target.position if target != null else position)
+		dealt += _apply_cast_step_to(atom_id, params, target)
+	return dealt
+
+
+## One atom against one target: the blow, the effect it throws, and -- when
+## this was the blow that felled it -- the credit. `self` is handed to
+## SpellAtomEffects so damage goes through `struck_by` and the thing turns
+## on its caster; see docs/concept/spell_runtime.md, "A spell is a blow".
+func _apply_cast_step_to(atom_id: String, params: Dictionary, one) -> float:
+	var health_before := _damageable_health_of(one)
+	if not _spell_atom_effects.apply_to_target(
+		atom_id, params, one, position, _last_facing_direction, self
+	):
+		return 0.0
+	_spawn_spell_effect(atom_id, one.position if one != null else position)
+	_credit_kill(one, health_before)
+	return maxf(0.0, health_before - _damageable_health_of(one))
+
+
+## What a kill is worth, wherever the killing blow came from
+## (docs/concept/spell_runtime.md, "A spell is a blow"). This body lived
+## inside `_perform_attack` and had no other caller, which made the sword
+## the only verb in the game that paid: a creature burned to death by a
+## spell levelled nobody and left nothing, and the mage -- the one class
+## the Weave exists for -- was the one character whose own kills could not
+## fill it.
+##
+## `health_before` is what the target had when the blow was thrown, and it
+## is the guard against paying twice: a pipeline's second atom lands on
+## something already dead, and only the atom that found it ALIVE may claim
+## the kill.
+##
+## Asks `_death_has_begun()` rather than `is_queued_for_deletion()`. A
+## species with death art sets `_dying` and collapses for a handful of
+## steps before the node is ever queued, so the old question would have
+## silently stopped paying the day that art landed.
+func _credit_kill(creature, health_before: float) -> void:
+	if creature == null or not is_instance_valid(creature):
+		return
+	if health_before <= 0.0:
+		return
+	if not creature.has_method("_death_has_begun") or not creature._death_has_begun():
+		return
+	if creature.info == null:
+		return
+	# What the kill teaches a spellwright, if anything
+	# (docs/concept/spell_weaving.md). A mote is a souvenir of something
+	# that nearly killed you, so the odds are the species' own threat and
+	# the eligible set is the ground it died on. Rolled from the kill's
+	# POSITION, the same spatial hash every other one-time world roll here
+	# uses, so the same kill always leaves the same thing -- and so the
+	# same animal on the same ground leaves the same thing whether a sword
+	# or a spell felled it.
+	find_mote(MoteDrop.drops(
+		creature.info.species, _journey_ring_index(), _mote_seed_at(creature.position)
+	))
+	var gained: int = XP_PER_KILL * creature.info.level
+	var levels: int = gain_experience(gained)
+	answer("xp_gain", {"xp": gained})
+	# gain_experience has always RETURNED the levels it granted and all
+	# three of its callers threw that away, which is why a level-up was a
+	# silent change to a corner label.
+	if levels > 0:
+		answer("level_up", {"level": experience.level})
+
+
+## How much life a thing has right now, asked the same way of a creature
+## (whose health lives on its `info`) and of anything else with a plain
+## `health`. Used to measure what a blow actually removed, so the number a
+## cast reports is the one the world really lost rather than the one the
+## atom hoped for -- mitigation, armour and a shield all land in between.
+func _damageable_health_of(target) -> float:
+	if target == null or not is_instance_valid(target):
+		return 0.0
+	if target is CreatureMarker:
+		return target.info.health if target.info != null else 0.0
+	if target is Player:
+		return target.health
+	return 0.0
 
 
 ## The procedural VFX (see docs/concept/magic.md's atom-effects section) --
@@ -3363,6 +4260,15 @@ func _held_weapon():
 	return null if _equipped_item_is_broken() else equipped_item
 
 
+## The weapon really in hand right now, for anything outside this script
+## that has to reason about what a swing would do -- the skill web's payoff
+## preview asks (docs/concept/skill_payoff.md), so a node can say what it
+## buys with the weapon the player is actually holding rather than with a
+## textbook one. Null when empty-handed or when the held item has broken.
+func held_weapon():
+	return _held_weapon()
+
+
 func _equipped_item_is_broken() -> bool:
 	return _item_wear.is_broken(equipped_item.wear, _item_catalog.material_of(equipped_item.id))
 
@@ -3657,8 +4563,14 @@ func _resolve_thrown_stone_impact(landing_position: Vector2, momentum: float) ->
 		var knockback := _melee_attack.knockback_vector(
 			landing_position, creature.position, _knockback_force_for_momentum(momentum)
 		)
-		creature.apply_knockback(knockback)
-		creature.take_damage(THROWN_STONE_BASE_DAMAGE)
+		# One call, the same door the swing uses: it shoves, it damages, and
+		# it makes the creature aware of who threw the thing
+		# (docs/concept/spell_runtime.md, "A spell is a blow" -- the rule is
+		# about any damage the player deals, not only a spell). Before this
+		# a stone drew blood and the animal never knew a fight had started.
+		var health_before := _damageable_health_of(creature)
+		creature.struck_by(self, THROWN_STONE_BASE_DAMAGE, knockback)
+		_credit_kill(creature, health_before)
 
 
 ## Delivers `momentum` to any CollapsedPassage obstacle (docs/concept/
@@ -3705,11 +4617,19 @@ func _spawn_thrown_item(landing_position: Vector2, item_stack) -> void:
 ## nodes fully collected.
 func pickup_nearby() -> int:
 	var collected := 0
+	var last_item_id := ""
 	for item in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
 		if item.is_queued_for_deletion():
 			continue
 		if position.distance_to(item.position) <= PICKUP_RADIUS and item.pick_up(self):
 			collected += 1
+			if "item_stack" in item and item.item_stack != null and item.item_stack.item != null:
+				last_item_id = String(item.item_stack.item.id)
+	# What you just picked up, said out loud (docs/concept/feedback.md).
+	# Sweeping three sticks off the ground used to produce nothing at all
+	# on screen -- no sound, no line, no "+3".
+	if collected > 0:
+		answer("pickup", {"item": last_item_id, "count": collected})
 	return collected
 
 
@@ -4657,6 +5577,14 @@ func current_speed() -> float:
 ## real, per-individual speed model, and sprint is an on-foot pace, not a
 ## second multiplier stacked on top of it.
 func is_sprinting() -> bool:
+	# Exhausted legs do not run, however hard the key is held
+	# (SprintCost.can_sprint reads the survival meters' OWN exhausted
+	# threshold, so the "Exhausted" chip on the panel and this refusal are
+	# one fact). This is what makes the burst a burst: you get
+	# SprintCost.SECONDS_OF_SPRINT_FROM_FULL of it and then you walk, and
+	# walking is where the world gets to be dangerous at you.
+	if not SprintCost.can_sprint(survival.stamina):
+		return false
 	return Input.is_action_pressed("sprint") if _controlled_locally() else _pending_sprint_pressed
 
 

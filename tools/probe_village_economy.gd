@@ -20,6 +20,9 @@ const REPORT_EVERY := 150.0
 
 var _manager
 var _origin: Vector2i
+## Food units that appeared on farmhouse shelves, summed over the run --
+## the village's real harvest, before the carter moves any of it.
+var _harvested := 0.0
 var _step := -1
 var _measured := false
 var _lines: Array = []
@@ -135,6 +138,12 @@ func _sample() -> void:
 		_lines.append("")
 		_lines.append("ECONOMY watch at %s  occupations %s" % [str(chunk_coord), str(_occupations(chunk_coord))])
 		_lines.append("  buildings: %s" % str(_manager._settlement_building_counts(chunk_coord)))
+		_lines.append("  producers needed for %d households: %d" % [
+			_manager.household_count_for_settlement(settlement_id),
+			load("res://src/emergence/settlement_food_demand.gd").producers_needed(
+				_manager.household_count_for_settlement(settlement_id)
+			),
+		])
 		_lines.append(
 			"  %7s %6s | %6s %6s %6s | %5s %5s %5s | %6s %6s %6s | %7s %7s %5s | %5s %-9s" % [
 				"seconds", "roster", "herbVM", "herbM", "herbSh", "satH", "satF", "satW",
@@ -143,9 +152,11 @@ func _sample() -> void:
 		)
 		var elapsed := 0.0
 		var next_report := 0.0
+		var last_farm_food := _farmhouse_food(chunk_coord, catalog)
 		while elapsed <= SIMULATED_SECONDS:
 			if elapsed >= next_report:
-				_lines.append(_row(elapsed, chunk_coord, settlement_id, NpcEconomy, catalog, HouseholdWellbeing))
+				_lines.append(_row(elapsed, chunk_coord, settlement_id, NpcEconomy, catalog, HouseholdWellbeing)
+					+ "  harvested %5.0f" % _harvested)
 				next_report += REPORT_EVERY
 			for node in _villagers(chunk_coord):
 				node._process(SLICE)
@@ -153,7 +164,13 @@ func _sample() -> void:
 			_manager.step_farm_plots(SLICE)
 			_manager.step_settlements(SLICE)
 			elapsed += SLICE
+			var farm_food := _farmhouse_food(chunk_coord, catalog)
+			if farm_food > last_farm_food:
+				_harvested += farm_food - last_farm_food
+			last_farm_food = farm_food
 		_report_where_the_herbs_are(chunk_coord, settlement_id, catalog)
+		_report_the_works(chunk_coord, settlement_id)
+		_report_the_fields(chunk_coord)
 		return
 
 
@@ -208,3 +225,52 @@ func _report_where_the_herbs_are(chunk_coord: Vector2i, settlement_id: String, c
 		_lines.append("    %-12s holds %s" % [String(record["id"]), str(held)])
 	_lines.append("  estate satisfaction: %s" % str(_manager.estate_satisfaction_for_settlement(settlement_id)))
 	_lines.append("  merchant carry: %s" % str(_manager._settlement_merchant_carry.get(settlement_id, 0.0)))
+
+
+## Why the village does or does not raise the food works it is short of:
+## what stands, what the assembly asks for, and who could work it.
+func _report_the_works(chunk_coord: Vector2i, settlement_id: String) -> void:
+	var VillageLabor = load("res://src/emergence/village_labor.gd")
+	_lines.append("")
+	_lines.append("  -- the works --")
+	_lines.append("  buildings now: %s" % str(_manager._settlement_building_counts(chunk_coord)))
+	_lines.append("  estate census: %s" % str(_manager.estate_census_for_settlement(settlement_id)))
+	_lines.append("  labour supply: %s" % str(VillageLabor.supply_for(_manager.estate_census_for_settlement(settlement_id))))
+	_lines.append("  occupations by household: %s" % str(_manager._household_occupations_for_settlement(settlement_id)))
+	var state: Dictionary = _manager._village_assembly_state(chunk_coord)
+	_lines.append("  assembly says build: '%s'" % _manager.next_building_for_settlement(chunk_coord))
+	_lines.append("  food trade here: %s" % str(state.get("food_trade", "")))
+	var projects: Array = []
+	for project in _manager._construction_project_store.active_projects_in_chunk(chunk_coord):
+		projects.append("%s:%s" % [project.blueprint_id, project.status])
+	_lines.append("  construction ledger: %s" % str(projects))
+
+
+## Food on the farmhouse shelves right now, every farmhouse in the chunk.
+func _farmhouse_food(chunk_coord: Vector2i, catalog) -> float:
+	var VillageFarm = load("res://src/gameplay/village_farm.gd")
+	var total := 0.0
+	for record in _manager.buildings_in_chunk(chunk_coord):
+		if String(record["id"]) != VillageFarm.FARM_BUILDING_ID:
+			continue
+		var tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(record["origin_local"])
+		var held: Dictionary = _manager.structure_stock_contents_at(tile.x, tile.y)
+		for item_id in held:
+			if catalog.kind_of(String(item_id)) == "food":
+				total += float(held[item_id])
+	return total
+
+
+## Who works which field: every villager with a field, their trade, how
+## many beds they have and which farmhouse they carry to.
+func _report_the_fields(chunk_coord: Vector2i) -> void:
+	_lines.append("")
+	_lines.append("  -- the fields --")
+	for node in _villagers(chunk_coord):
+		var occupation := String(node.identity.occupation) if node.identity != null else "?"
+		var beds: int = node.field_cells.size() if "field_cells" in node else -1
+		var shelf = node.stock_building_cell if "stock_building_cell" in node else null
+		var pond: int = node.pond_cells.size() if "pond_cells" in node else -1
+		if beds > 0 or pond > 0 or occupation in ["farmer", "herbalist", "fisher"]:
+			_lines.append("  %-10s beds %2d  pond %2d  shelf %s" % [occupation, beds, pond, str(shelf)])
+	_lines.append("  harvested onto farmhouse shelves over the run: %.0f" % _harvested)

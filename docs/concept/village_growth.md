@@ -293,6 +293,42 @@ strangers — and `next_building`'s new parameter defaults to 1 ("there is
 already room"), so a caller that does not know its spare capacity gets
 exactly the ladder it always got.
 
+#### …and nobody ever moved in (2026-09-20)
+
+Both halves above make the room; neither moves anybody into it. A
+household is *housed* when it **owns** a house (`VillageCensus.of` reads
+`household_owning`, the store's property registry), and the only way a
+household ever came to own one was a project completed in its name — the
+founding stamps, or the ladder's shelter rung raising a house for a
+*named* household. A house the village raised for nobody in particular
+belongs to the settlement, and a house a departed household left belongs
+to the departed. So a newcomer let in because a roof stood empty stood
+under no roof at all: the ladder then owed them a house of their own,
+which on a village with its frontage spent it could not site, and they
+waited for ever beside two empty houses.
+
+Measured with the economy probe on a village of ten with eleven houses:
+the eleventh household arrived at 750 s, a twelfth house completed for
+the village, the assembly asked for `house_small` at every sample after
+and the ledger stayed empty — no plot — while the newcomer, a fisher,
+worked no water for the rest of the run
+([village_ponds.md](village_ponds.md), "A pond dug the day the fisher's
+house stands").
+
+**On every settlement step, each household with nowhere to live takes a
+standing house nobody on the roster owns** — one the village raised for
+nobody, or one a household that left still held — oldest waiting first,
+one household to a roof (`EarthChunkManager._house_the_waiting`, run
+from the immigration step after the arrivals). Taking it is a real
+transfer of the property (`HouseholdStore.grant_property`), so the
+census, the ladder and the readout all see them housed at once, and the
+ground settles around them the same step
+(`VillageRenderer.settle_the_ground`): the house's record says who lives
+there now, a fisher's pond is dug beside it and handed to them, and their
+home is its door. The shelter rung still raises a house for a named
+household when no spare roof stands; it simply no longer has to when one
+does.
+
 #### …and it went into a function the village had stopped asking (2026-09-20)
 
 The paragraph above was true of `VillageGrowth.next_building` and **false
@@ -407,7 +443,19 @@ adding to the settlement's household count. A household that moved in while
 the player stood in the village had no villager at all until they walked far
 enough away to unload the chunk and came back.
 
-`admit_household` now re-derives the village (`_respawn_village`), which is
+`admit_household` now re-derives the village (`_respawn_village`). A
+completed building project does NOT: a newcomer arrives without a house,
+so the arrival's re-derivation can hand them nothing yet, and the house
+the ladder raises for them settles the ground around the people already
+standing instead (`VillageRenderer.settle_the_ground`, 2026-09-20) — their
+record gets their trade, a fisher their pond and hut, a farmstead its beds
+and rails, on the day it stands rather than on the next chunk load, and
+nobody else's day restarts ([village_ponds.md](village_ponds.md), "A pond
+dug the day the fisher's house stands", which measured what a
+re-derivation on every completed building cost). The arrival's
+re-derivation keeps the market the village already trades in — its purse
+and its stall live on that object, and a fresh one per re-derivation was
+measured as the purse falling to 0. It is
 a **whole re-derivation rather than one appended marker** on purpose: a
 villager is not just a marker. They need their farmhouse's field, their
 pond, their market stand, their store round, their workspot prop — all

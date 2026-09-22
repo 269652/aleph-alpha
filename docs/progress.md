@@ -23,6 +23,1411 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Towards a playable fight (2026-09-22) — see `concept/spell_runtime.md`, `concept/combat.md`
+
+Asked directly: *"Flesh out the magic; monsters; spells and fights towards a
+playable state"*.
+
+**Audited first**, across seven parallel readers over the spell runtime, the
+Weave, the monster roster, the fight loop, status effects, progression and
+the cold-start player experience — 76 gaps, then synthesised into a ranked
+plan whose top findings were re-verified rather than trusted. The verdict:
+*a great many correct, tested combat modules wired almost none of them to
+each other.* Two measurements under it, both taken by driving the real code:
+
+1. **The fight is over before it starts.** A default warrior deals 13.6 per
+   swing on a 0.5 s cooldown into a 29 HP wolf — three swings, 1.5 s — while
+   `Dodge.COOLDOWN_DURATION` is 1.5 s and a bear's rear-up is 0.90 s. The
+   telegraph, the windup freeze, the i-frames, the reach asymmetry: all
+   real, all tested, none of them ever gets a turn.
+2. **Levelling makes a creature spongier, never deadlier.**
+   `CreatureMarker.bite_damage()` reads `info.species` and never
+   `info.level`, so a level-10 wolf has **3.2× the health and the identical
+   6-damage bite**. Measured across the roster: you kill a level-1 wolf
+   11.3× faster than it kills you, and at level 10 still 3.5×. Harder
+   ground is not more dangerous, only chewier — which is precisely the
+   danger gradient the journey rings exist to build.
+
+- ✅ **A level is a bigger animal — every axis, not just health**
+  (2026-09-22) — see `concept/combat.md`, section of that name. Closes the
+  🚧 gap this overhaul's previous slice recorded rather than papered over.
+
+  `CreatureInfo` had `LEVEL_HEALTH_SCALE` and **no counterpart for anything
+  else**, and `CreatureMarker.bite_damage()` read `info.species` and never
+  `info.level`. Measured: a level-5 wolf carried **twice the health and the
+  identical 6-damage bite**. A bigger animal was a longer chore, never a
+  greater danger — the same "spongier, not deadlier" failure the reference
+  exchange exists to prevent, hiding inside the level roll.
+
+  Every magnitude axis grows now: health (0.25, unchanged), **bite damage**
+  (`LEVEL_DAMAGE_SCALE` 0.18, new), stamina and mana (0.18, coherence only).
+
+  **The telegraph is not a third number — it is a consequence, and that is
+  what makes this safe.** `SpeciesBite.required_windup_seconds` already
+  derives the tell from *what fraction of your health the blow would take*,
+  rising from one `Dodge.INVINCIBLE_DURATION` to a full
+  `Dodge.COOLDOWN_DURATION` for a bite that would kill outright. So asking
+  it about the **individual's** bite rather than the species sheet's means a
+  harder-hitting animal is automatically warned about for longer. Without
+  that half, a level-5 wolf hitting for 10 on the tell of one that hits for
+  6 would be exactly the cheap shot the fairness model was written to
+  forbid — so `_try_attack` now reads a new
+  `CreatureMarker.windup_seconds_against(target_max_health)`.
+
+  **Why 0.18 and not 0.25.** `MINIMUM_TIME_TO_KILL_SECONDS` says no animal
+  may take a full-health player from alive to dead faster than five
+  seconds, because below that there is no "you are in trouble" phase to
+  read. 0.18 is the **largest hundredth** for which every biting species at
+  every level it can roll still clears that floor; measured, the binding
+  animal is the **bear**, and at 0.19 a level-5 bear kills a reference
+  player too fast to read. Pinned from both sides, with the capping species
+  pinned too.
+
+  The honest consequence: damage grows slightly slower than health (×1.72
+  against ×2.00 at level 5), so a very large animal remains a little
+  spongier than it is deadlier. That is not a compromise between tastes —
+  it is where the fairness floor sits, and more danger would be bought from
+  the player's ability to read the fight. **Measured end to end, a level-5
+  encounter now costs about 3.4× the health a level-1 one does, where before
+  it cost 1.0×.**
+
+  **Speed deliberately does not scale.** `Player.BASE_SPEED` is 40 and
+  `CreatureMarker.HUNT_SPEED` is 36: a player out-runs a hunting animal, but
+  only just. Scaling pursuit would flip that for large individuals and
+  remove disengagement entirely — you could no longer choose not to have the
+  fight, which every other fairness rule is built on top of. Stamina and
+  mana scale for coherence but are read by **nothing** today, so that growth
+  is inert and is named as such rather than shipped as though it did
+  something. Venom is left alone because `venom_damage` is itself still a
+  dead column.
+
+  **Two test-harness faults surfaced, both pre-existing and both the same
+  fault.** `test_fight_is_loseable.gd` never disabled engine processing on
+  its marker, so its twelve-second exchange stopped being twelve seconds
+  inside a batch — it passed three runs standalone and failed in a
+  twenty-one-suite batch. And `test_bite_telegraph.gd` ran its windups for
+  `_windup_of(marker) + a frame or two`: a number computed *beside* the
+  animal, which agreed with the animal only while the windup was a property
+  of the species. Now that it is a property of the individual, the two can
+  disagree, so those call sites drive the creature's **own** clock through a
+  new `_let_the_jaws_close`. The file's own header already claimed it drove
+  the creature's remaining clock rather than a round number; now it does.
+
+  Tests: `test_level_scaling.gd` 10 (new), and a 22-suite batch run behind
+  the slow `test_bee_hive_marker` — `test_species_bite`,
+  `test_creature_info`, `test_creature_marker`, `test_creature_behavior`,
+  `test_bite_telegraph`, `test_bite_tell`, `test_combat_pacing`,
+  `test_fight_is_loseable`, `test_battle_loop`, `test_predator_initiative`,
+  `test_alp`, `test_curupira`, `test_boss_aggro`, `test_animal_fitness`,
+  `test_npc_marker_hunting`, `test_arena`, `test_duel`,
+  `test_spell_kill_credit`, `test_creature_hit_flash`, `test_mote_drop` —
+  **714 passing, zero failures**, on a clean boot.
+
+- ✅ **Magic gets range: a starting hand that is not all touch**
+  (2026-09-22) — see `concept/magic.md`.
+
+  `SpellTuition.STARTING_SPELL_IDS` was `["fire_bolt"]`, and Fire Bolt is
+  `cast(touch)`: `SpellTargeting.TOUCH_RANGE` is **24 px** against the
+  sword's `ATTACK_RANGE` of **20**. So **nothing a normal player could cast
+  reached further than a sword**, ever. The mage trades 15 `max_health` for
+  their frailty and bought, with it, the privilege of standing inside a
+  bear's windup. Three projectile spells (`spark`, `frost_lance`,
+  `cinder_lash`) were authored, parsed, priced and tested — and reachable
+  only through the `/learn` dev console.
+
+  The hand now teaches the three verbs a caster has rather than the same
+  verb three times: `fire_bolt` (touch, the jab), `spark` (projectile,
+  **120 px**, five times the sword), `minor_heal` (self, the answer to
+  having been hit). Three and not four, so the empty fourth slot is visibly
+  where the first spell a guild teaches will land.
+
+  Pinned **by rule rather than by list**, so the hand can be retuned without
+  the tests becoming a second opinion: it must reach further than a sword,
+  teach more than one delivery, and be castable from the pool a new mage is
+  really born with — the class lens plus the start node the web hands them
+  free, composed from the game's own constants.
+
+  **Widening it broke fourteen tests in two suites, and both were brittle
+  for the same reason**: `test_spell_tuition.gd` had named `minor_heal` as
+  its example of "a spell you do not know", and `test_player_spell_slots.gd`
+  assumed a newly learned spell lands in slot 1 — true only while the hand
+  held exactly one spell. Both now *derive* what they need (the first
+  catalogue entry outside the starting hand; the row's own last index)
+  rather than naming it, so the next change to the hand cannot do this
+  again.
+
+  A stale claim in `concept/magic.md` was corrected in the same pass: its
+  Status still said *"no spell-selection UI, so the cast key still casts
+  `DEFAULT_CAST_SPELL_ID`"*, which shipped away on 2026-09-21.
+
+  Tests: `test_spell_tuition.gd` 46, `test_player_spell_slots.gd` 10, and an
+  11-suite batch over the magic side — `test_world_spell_hud`,
+  `test_spell_book`, `test_spell_executor`, `test_spell_targeting`,
+  `test_battle_loop`, `test_spell_kill_credit`, `test_player_spell_weaving`,
+  `test_spell_schools`, `test_combat_pacing`, `test_player_persistence`,
+  `test_mage_guild_roster` — **202 passing, zero failures**, clean boot.
+
+- ✅ **The exchange lasts long enough to use the mechanics built for it**
+  (2026-09-22) — see `concept/combat.md`, which had no numeric half at all
+  until this slice and now has one.
+
+  **Measured, driving the real default character** (the warrior lens plus
+  `StarterKit.DEFAULT_CHOICES`, axe in hand — an axe is a *tool*, so the
+  swing is `UNARMED_DAMAGE 5 + class 12 = 17` times the axe-into-flesh
+  `0.8` = **13.6 on a 0.5 s cooldown**): a wolf fell in **three swings,
+  1.5 s**, against a `Dodge.COOLDOWN_DURATION` of exactly 1.5 s and a bear
+  rear-up of 0.90 s. The telegraph, the windup freeze, the i-frames, the
+  reach asymmetry and the braced-knockback rule — every mechanic the last
+  month built for this fight — were real, tested, and **never got a turn**.
+
+  The rule, now pinned: **an animal that stands and trades must live long
+  enough to land two bites.** One telegraph is a surprise; two is a
+  pattern. Counted the way the animal's own clock runs — two windups and
+  *one* recovery, not two whole cycles, because the recovery after the last
+  bite is time the fight does not need and charging for it demands about a
+  fifth more health than the rule asks.
+
+  `CombatPacing.EXCHANGE_HEALTH_SCALE` is **2.5**, and it is a measurement
+  rather than a preference: the test pins it from **both** sides — every
+  bound species satisfies the rule at 2.5, and at 2.4 at least one fails.
+  The binding species is the **boar** (2.02 s to land two bites on 28 base
+  health); every other bound species is satisfied between 1.3 (curupira)
+  and 1.9 (wolf), and which species binds is itself pinned so retuning
+  another animal cannot quietly become the thing that sets the scale.
+
+  **Three design decisions, each with its reason in the doc**:
+
+  - **Health rather than player damage**, because `MaterialDamage` makes
+    the swing load-bearing for chopping trees and breaking stone — tuning
+    combat through it would retune woodworking.
+  - **Uniform, and on the instance rather than the table.** Everything else
+    that reads `max_health` reads it as a *ratio* (fight-or-flight, the
+    health bar, `BossAggro`'s threshold, hit-flash severity), so a uniform
+    scale leaves all of them exactly where they were — confirmed by the
+    regression, where only `test_creature_info`'s own formula tests moved.
+    And `Taming.PREDATOR_BREAK_FREE_MULTIPLIER` is derived from the
+    **table**, so leaving the table alone leaves that constant alone; a
+    predators-only scale would have made wild animals harder to tame for a
+    reason with nothing to do with taming.
+  - **A longer fight sharpens the species gradient rather than flattening
+    it.** The creature's dps is unchanged, so a fight twice as long lands
+    twice as many bites: the wolf stays a warm-up (22 damage taken, 15% of
+    the reference character) while the bear becomes a real fight (103, 71%).
+
+  Two species are exempt, each by a property the code already owns rather
+  than a name on a list: the **Alp** (`presses_instead_of_striking`) never
+  strikes, so "land two bites" is a requirement about something that never
+  happens; a **venomous** animal is a glass cannon whose threat is what it
+  leaves behind, and binding the snake would demand 41 health of it —
+  tougher than a jackal.
+
+  Tests: `test_combat_pacing.gd` 11 (new), `test_creature_info.gd` 60, and
+  a 17-suite batch over the ecology and hunting side —
+  `test_creature_marker`, `test_creature_behavior`, `test_species_bite`,
+  `test_battle_loop`, `test_fight_is_loseable`, `test_bite_telegraph`,
+  `test_butchering`, `test_loot_table`, `test_huntable_quarry`,
+  `test_npc_marker_hunting`, `test_carcass`, `test_creature_mass`,
+  `test_animal_fitness`, `test_animal_reproduction`, `test_boss_aggro`,
+  `test_arena`, `test_predator_initiative` — **342 passing, zero failures**,
+  on a clean boot.
+
+  Two honest gaps recorded in `combat.md`'s new Status rather than papered
+  over: **levelling still grows only one axis** (`LEVEL_HEALTH_SCALE` has no
+  damage counterpart, so a level-5 wolf has twice the health and the
+  identical 6-damage bite — "that one is bigger" is a longer chore rather
+  than a warning), and **block is free and invisible**, so a player holding
+  the block key experiences a materially longer fight than the one this rule
+  pins. The reference exchange is therefore stated **unblocked**.
+
+- ✅ **A spell is a blow** (2026-09-22) — see `concept/spell_runtime.md`'s
+  rule of that name and `concept/spell_weaving.md`.
+
+  `CreatureMarker.struck_by` is the door a blow comes through: it takes the
+  damage, records the attacker, and sets `is_aggroed`. `take_damage` does
+  only the first. **`struck_by` had exactly one caller in the whole game**
+  — the melee swing — so every other way the player dealt damage went
+  through the door the world does not notice.
+
+  **Measured:** a caster could stand inside `SpellTargeting.TOUCH_RANGE` of
+  anything on the roster and tap the cast key until it died, and it never
+  turned on them, paid **no XP**, and left **no mote**. Not a weaker attack
+  — a different kind of act, with no risk and no reward. And because the
+  award sat inside `_perform_attack`, the **mage was the one character whose
+  own kills could not fill the Weave their class is built around**, while
+  `spell_weaving.md`'s own "how many kills fill a Weave" arithmetic assumed
+  they did. A thrown stone had the same hole: it drew blood and shoved, and
+  the animal never learned a fight had started.
+
+  `SpellAtomEffects.apply_to_target` now takes the caster and prefers
+  `struck_by`; the credit is a shared `_credit_kill(creature, health_before)`
+  that the swing, the cast and the stone all call. Three details that are
+  not incidental:
+
+  - **Force is `Vector2.ZERO`.** Knockback stays the business of the
+    `push`/`pull`/`gravity_shift` atoms, which ask for it by name. Any force
+    here would shove a braced animal mid-windup and re-open the unloseable
+    fight `apply_knockback`'s guard exists to close.
+  - **`health_before` is the guard against paying twice.** A pipeline's
+    second atom lands on something already dead; only the atom that found it
+    alive may claim the kill.
+  - **The credit asks `_death_has_begun()`, not `is_queued_for_deletion()`.**
+    A species with death art sets `_dying` and collapses for several steps
+    before the node is queued, so the old question would have silently
+    stopped paying melee the day that art landed — a latent bug fixed by
+    being hoisted.
+
+  A landed cast also **answers with what it really took off** — measured as
+  health actually removed, so armour, block and a shield are all inside the
+  number. The `cast` row has been in the Answerback table since it was
+  written and nothing ever raised it; `cast_woven` raised `{}` *before* its
+  pipeline ran, floating nothing over a spell that had not resolved.
+
+  A drift test was re-pointed rather than deleted: `test_mote_drop.gd`
+  asserted the roll lived inside `_perform_attack`, which is exactly why the
+  swing was the only verb that paid. It now follows the chain, and a new
+  test pins that **every** verb dealing damage walks it.
+
+  **A green test that checked nothing, caught on the merge to `main`.**
+  GUT reported `test_the_sword_and_the_spell_leave_exactly_the_same_mote`
+  as **"did not assert"**: it killed two wolves wherever they stood and
+  compared the pouches, but a wolf's drop chance is its threat scaled
+  against the roster's peak — about one ground in twelve — so both kills
+  rolled nothing and the comparison loop never executed. Choosing yielding
+  ground in advance does not fix it either: the mote is seeded from where
+  the creature **dies**, and a sword *shoves* it, so a melee kill credits
+  at the post-knockback position while a spell (zero force by design)
+  leaves it where it stands. The test now kills with the sword first, reads
+  where the wolf actually fell, and stages the spell kill on that same
+  ground — the only arrangement in which the two rolls are the same roll.
+
+  Tests: `test_spell_kill_credit.gd` 8 (new), `test_mote_drop.gd` 17,
+  `test_battle_loop.gd` 8, `test_spell_atom_effects.gd` 13,
+  `test_player_spell_weaving.gd` 20, `test_player_spell_slots.gd` 10,
+  `test_creature_marker.gd` 293, `test_player_collapsed_passage.gd` 3,
+  `test_reaction_multiplier_lands.gd` 9, and `test_player.gd` filters
+  `damage` 10 / `hurt` 2 / `health` 3 / `venom` 5 / `mana` 13 / `spell` 14 /
+  `xp` 13 — green, on a clean boot.
+
+### The gameplay overhaul (2026-09-20) — see `concept/errands.md`, `concept/survival.md`
+
+Asked directly, after the game was shown to someone who was not impressed:
+*"can you rehaul the whole gameplay and experience depth?"*, with eight named
+requirements — a direct entry into play, a concrete thread of action, not
+being able to stroll to the final boss, exploration, crafting, character
+development, a Path-of-Exile-style skill path, and Magicraft-style
+composable spellcrafting.
+
+**Diagnosed first**, across ten lenses over the concept docs, both playtest
+write-ups, the ledger, the roadmap and the player-facing code, then
+synthesised and adversarially checked. The verdict: a very deep simulation
+with a very thin game on top. Three facts a first-timer meets — nothing
+after spawn says what to do; nothing answers back when they act (no chop
+sound, no hit flash, no XP or level-up message, `gain_experience`'s return
+value discarded by all three callers); nothing is at stake (every species
+bites for the same 6 damage on a 0.8 s cooldown and gives up quickly,
+hunger takes two real hours to matter, sprint is free, death is a
+three-second reset). Under those, the few directed loops break in the
+player's hands: the villager asks for three rock and there is no give verb,
+gated crafts fail silently, the sell key sells the starter fishing rod,
+and most species have no loot row so they vanish on death.
+
+- ✅ **The give verb — the loop that never closed** (2026-09-20) — see
+  `concept/errands.md`. The production-shortfall projection was read-only
+  end to end: `QuestLog` paid `Karma.QUEST_FULFILLED_REWARD` when a
+  shortage *happened to* end, which meant the village fixed it itself and
+  the player was paid for standing nearby. Now `ErrandDelivery` is the
+  whole transaction decided before anything moves (what can be given, what
+  it is worth at the settlement's own scarcity price with a pinned floor,
+  what a finite household purse can pay, what it still owes as a debt,
+  whether the shortage really ends), the conversation window carries the
+  offer built from the **same frame** the villager's own "I could use three
+  more rock" line is built from, and `EarthChunkManager.deliver_errand`
+  performs it atomically against live state — goods into the same `Market`
+  object the projection reads, coins out of the household's own `Wallet`,
+  a real witnessed `errand_delivered` event. The projection then reports no
+  shortage **because there is none**. An offer the player cannot meet is a
+  sentence naming what is needed, not a dead button. Tests:
+  `test_errand_delivery.gd` 28/28 (new), `test_conversation_window.gd`
+  18/18, `test_earth_chunk_manager_errand.gd` 9/9 (new). 🚧 The debt rides
+  on the event but no dialogue topic speaks to it yet, and
+  `NpcRecognition` does not read `errand_delivered` as its own memory kind.
+- ✅ **Wired into the live game, requirement by requirement**
+  (2026-09-20). The rules above are only worth what a player meets, so
+  each was carried into the real paths and pinned there.
+  - **Requirement 3, the world has an order** — `SprintCost` wired to the
+    player (running drains, exhaustion refuses, walking stays free);
+    `SpeciesBite` wired to `CreatureMarker.bite_damage` /
+    `bite_cooldown_seconds` / `hunt_speed`. The sharpest finding of the
+    whole pass came from that last one: `HUNT_SPEED` was **36 px/s against
+    a walking speed of 40**, so every pursuer in the game was outWALKED by
+    a player who never touched sprint — a difficulty ring gating which
+    species may spawn while gating nothing at all. A bear now bites for 23
+    where everything bit for 6, and a test names which animal can close on
+    a walking player.
+  - **Requirement 7, the path reads as a build** —
+    `SkillWebView.node_tooltip` calls the real consumer twice and prints
+    the before → after against the character's own facts. **A key mismatch
+    caught in adversarial review** (`amount` passed where the module reads
+    `bonus_amount`) had every preview rendering `16 → 16`; the test now
+    asserts the two sides differ, which a mismatch cannot pass.
+  - **Requirement 1, a direct entry** — `DawnClause` wired to the sky: a
+    new character opens their eyes at first light whatever the wall clock
+    says, and the real-Earth clock returns on its own. A loaded save is
+    never shifted, a console-pinned clock wins outright, and once
+    converged the call stops being made.
+  - **Feedback** — `Player.answer` / `World._on_player_answered`: a
+    connecting swing floats its damage, a sweep says what it collected,
+    experience shows its number, a level announces itself.
+    `gain_experience` has always returned the levels it granted and all
+    three callers discarded it, which is exactly why levelling was a
+    silent change to a corner label.
+  - **Requirement 8, Magicraft** — motes owned and learned by living
+    through the phenomenon they name (venom from the far country's snake,
+    frost from the cold that took you, fire from one you lit), woven on a
+    real surface (**M**) whose header rewrites itself live, and cast
+    through the game's own parser, cost model and executor with no second
+    interpreter.
+  - **Requirement 5, crafting** — `Player.craft_refusal` asks the same
+    three gates `craft` checks, so a card that cannot proceed says
+    *"Needs heat source; you are not standing at one."* instead of doing
+    nothing.
+  - **Requirement 4, exploration** — see `concept/discovery.md`. Walking
+    now records ground, pays for it once at the journey ring's own price,
+    and says where you are. Before it, `mark_chunk_explored` had exactly
+    ONE caller in the whole game — the `reveal` spell atom — so a player
+    who crossed a continent still had an empty map; and distance from
+    spawn appeared in no XP formula anywhere, so the far country was
+    strictly more dangerous and strictly no more rewarding. And the three
+    facts a new character wakes up to are on screen at last
+    (`concept/arrival.md`): `ArrivalBriefing` had been built, tested and
+    uncalled since the overhaul's second slice.
+  - **Requirement 2 was closed earlier** by the give verb; **requirement 6**
+    is served by the feedback pass. All eight are now playable.
+
+- ✅ **Six pure modules for the overhaul's other requirements**
+  (2026-09-20) — each spec-first and red-first, built in parallel and
+  adversarially reviewed. Wiring into the live game is tracked separately
+  below; these are the rules, tested, not yet all called.
+  - **`SpeciesBite`** (`concept/predator_profiles.md`,
+    `test_species_bite.gd` 48/48) — per-species damage, windup, pursuit,
+    release distance and tenacity, replacing the single ATTACK_DAMAGE
+    (6.0), cooldown (0.8 s), sense radius and flee-at-half-health rule
+    every animal in the game shared. Fairness is structural: a bite that
+    can take a large share of the player's health must carry a
+    proportionally longer telegraph, asserted for every profile. The
+    difficulty gradient is pinned monotone against the real spawn
+    rosters, so a new species cannot be added that breaks the world's
+    order. A bear now holds to a tenth of its health rather than half,
+    which is what makes it the animal the ring gates you away from.
+  - **`JourneyRing`** (`concept/journey_rings.md`,
+    `test_journey_ring.gd` 30/30) — the named, player-facing rings, every
+    boundary derived from `RegionDifficulty`'s own constants and swept
+    across all distances so the two can never disagree. Demands are
+    cumulative. It deliberately exposes **no** function that can refuse a
+    step, pinned by a reflection test over its own method list: the
+    world's order is enforced by cold and teeth, never by an invisible
+    fence.
+  - **`SpellMote`** (`concept/spell_weaving.md`, `test_spell_mote.gd`
+    21/21) — an atom as a thing you own. The first mote of any atom is
+    granted by experiencing the phenomenon it names; after that it drops,
+    with tier caps per ring so power is paced by distance rather than by
+    a level gate.
+  - **`SpellDraft`** (same doc, `test_spell_draft.gd` 32/32) — the
+    Magicraft loop's hinge: an ordered socket list whose source text
+    **round-trips through the real `SpellParser`**, so a player's
+    arrangement becomes a castable spell through the pipeline that
+    already exists rather than a second interpreter, costed by the
+    existing `SpellCost`. Order is load-bearing — adjacent atoms react,
+    so swapping two motes changes the result — and the reaction bound
+    holds by construction rather than by searching the space.
+  - **`NodePayoff`** (`concept/skill_payoff.md`, `test_node_payoff.gd`
+    28/28) — the 84-node web's real weakness answered: a node is rendered
+    by calling the real consumer function **twice**, at the current stat
+    and at the granted one, so the web says "Fire Bolt 8 → 11 damage"
+    instead of a stat name. Stats with no live consumer are reported
+    honestly rather than given invented effects, which also measures how
+    much of the web is still inert.
+  - **`Answerback`** (`concept/feedback.md`, `test_answerback.gd` 43/43)
+    — the single statement of what every world-changing verb answers
+    with, held by a **two-way drift test** against the real bound
+    actions: a new verb without feedback fails, and a feedback row for a
+    verb that no longer exists fails. Measured before it: the entire game
+    had three sound effects and no hit flash, damage number, XP float or
+    level-up toast anywhere.
+  - **`DawnClause` / `ArrivalBriefing`** (`concept/arrival.md`,
+    `test_dawn_clause.gd` 15/15, `test_arrival_briefing.gd` 26/26) — a
+    brand-new character opens their eyes at first light whatever the wall
+    clock says, with the offset decaying so the real-Earth clock returns
+    on its own within a few in-game days (swept across all 24 real
+    hours); and the three facts a player needs in their first ten seconds
+    — where they are, what is around them, and one real thing to do from
+    the live shortfall projection — every line empty-safe.
+
+- ✅ **Running costs the legs** (2026-09-20) — see `concept/survival.md`.
+  `spend_stamina` had exactly one caller in the entire game (the sickness
+  step), so sprint was free, unlimited and exactly twice walking speed —
+  which is why the world's danger gradient gated nothing: `RegionDifficulty`
+  decides which species may *spawn*, but a player who can outrun all of
+  them forever need not care. `SprintCost` is the rule: one tuned constant
+  (`SECONDS_OF_SPRINT_FROM_FULL` 14 s) with the drain rate derived from it,
+  walking free for ever so nobody is stranded, and the gate being
+  `SurvivalMeters.EXHAUSTED_THRESHOLD` itself so the Exhausted chip and the
+  legs refusing to run are one fact. Measured at play scale and pinned: one
+  burst carries **80 m**, the safe ring's radius is **684 m**, reaching the
+  HARD tier is over thirty full bars and more than ten minutes of walking.
+  Tests: `test_sprint_cost.gd` 18/18 (new), including two that pin the
+  wiring so this cannot become another tested module with no callers.
+
+- ✅ **Going somewhere is recorded, pays, and says where you are**
+  (2026-09-20) — see `concept/discovery.md`, the overhaul's requirement 4.
+  Three measurements before it. `EarthChunkManager.mark_chunk_explored` had
+  exactly **one** caller in the whole game — `Player._cast_reveal`, the
+  `reveal` spell atom — so `/map` reported an empty world to anyone who
+  never wove that spell, and `wayfinding.md` had carried "nothing calls
+  `mark_chunk_explored` from the player's movement path" as an open gap
+  since the Map item shipped. Distance from spawn appeared in **no XP
+  formula anywhere** (all three `gain_experience` callers are a kill, a
+  fruit harvest and a village sale), so the far country was strictly more
+  dangerous and strictly no more rewarding — the ring gradient was a pure
+  tax. And `JourneyRing.crossing_between` had been written for a card that
+  did not exist.
+
+  `Discovery` is the rule and is pure: what a newly-walked chunk is worth is
+  the ring's **own declared packing list** (`JourneyRing.demands_at`) and
+  nothing else, so there is no second difficulty model — the hearth pays 2,
+  what an off-peak harvest pays, and the far country pays 12, exactly two
+  level-1 kills. The per-demand step is derived from that anchor rather
+  than picked, and the division is asserted **exact** for the real table, so
+  retuning the demands fails loudly instead of rounding the payoff away.
+  `EarthChunkManager.record_footfall` performs it — one chunk per footfall,
+  the one underfoot, never the 5×5 the streamer loads — and pays once per
+  chunk by construction, because `ExploredTiles.mark_visited` is idempotent
+  and its return value *is* the gate. `World._discovery_step` performs what
+  the report decided: the XP, the same rising receipt every other act uses
+  (*"New ground  +2 XP"*, naming what it paid for), and the crossing card on
+  the shared message stack.
+
+  The card's dwell is derived too: `Answerback.seconds_to_read`, the
+  passage's own word count at the reading rate the feedback layer already
+  grounds itself on — the hearth's card is seventeen words and the far
+  country's is thirty-four, and showing both for the same six seconds means
+  one of them is wrong. Like `JourneyRing`, `Discovery` exposes no function
+  that can refuse a step, pinned by a reflection test over its own method
+  list.
+
+  Tests: `test_discovery.gd` 29/29 (new), `test_earth_chunk_manager_
+  discovery.gd` 11/11 (new), `test_world_discovery.gd` 11/11 (new).
+  Known gaps, named rather than left to be found: `ExploredTiles` is still
+  session-only, so a reloaded character's map is empty and their ground
+  pays again; there is still no fogged in-world map render; and
+  `exploration.md`'s ruins, lairs and groves are still unbuilt, so the act
+  of going is real but the destination is still the world itself.
+
+- ✅ **The first ten seconds say something** (2026-09-20) — see
+  `concept/arrival.md`. `ArrivalBriefing` had been built, tested and
+  **uncalled** since the overhaul's second slice; its own status list said
+  so. `World._show_arrival_briefing` now assembles its facts from live
+  state and raises the card: the river `SpawnRiverPicker` really drew (kept
+  in `_spawn_river_name` now — it was printed to stdout at spawn and thrown
+  away), the season the world's own clock is in, the bearing to the nearest
+  settlement the event store really recorded, and the live
+  production-shortfall projection for that settlement, so the one thing to
+  do is a real shortage rather than an authored first quest. NEW game only,
+  the same rule the dawn clause keeps: a character old enough to have been
+  saved has already had a first morning. Nothing known raises no card.
+  Tests: `test_world_arrival_card.gd` 11/11 (new),
+  `test_arrival_briefing.gd` 26/26 (4 new, for the card join).
+
+- ✅ **Two "zero callers" bugs, found by playing it** (2026-09-20) — the
+  same shape as everything the diagnosis pass named, caught this time by
+  the person holding the controller rather than by a grep.
+
+  **`cast_woven` had no caller at all.** The Weave window authored a draft,
+  `Player.weave` accepted it, `cast_woven` was covered by tests — and
+  `_cast_step` still ran `cast_spell(DEFAULT_CAST_SPELL_ID)`
+  unconditionally, so the cast key threw Fire Bolt whatever the player had
+  arranged. The whole Magicraft loop was a surface with no trigger.
+  `Player.cast_held` is the single entry point now: the woven spell when
+  there is one, the learned spell otherwise, because a character who never
+  opens the Weave must still be able to cast.
+
+  **`set_spawn_tile` had one call site, on the NEW-game path only**, so a
+  loaded character left `_spawn_configured` false and two things went quiet
+  together: `record_footfall` returned `{}` every frame, leaving the whole
+  discovery layer dark on any resumed game, and `_difficulty_tier_at`
+  answered **HARD** for every chunk on the planet, so bear, lion and
+  venomous snake could spawn on a resumed game's doorstep. The load path
+  sets it from the character's own `respawn_position` — not from where they
+  logged out, which would re-centre the rings every load — before the first
+  chunk streams, because chunk loading reads the tier as it goes.
+
+  Tests: `test_player_spell_weaving.gd` 20/20 (5 new),
+  `test_world_discovery.gd` 14/14 (3 new). Both new wiring pins search for
+  the real CALL rather than the name: the first draft of the spawn test
+  matched the explanatory comment above the call and would have passed
+  against a file that only talked about setting a spawn.
+
+- ✅ **Nothing in the journey layer persisted, so none of it could be
+  spotted** (2026-09-20) — reported plainly: *"no card or XP visible"*.
+  Instrumented a `--solo` launch rather than guessing again, the way this
+  project's own note says to find a bug no unit test can see. The wiring
+  was fine: frame one paid its 2 XP and produced the float, the banner and
+  the UI layer both existed, and the arrival card really was raised and
+  really did read *"You are on the Isar, in spring."*
+
+  The defect was that **everything built was transient**. The receipt lasts
+  `Answerback.DELIBERATE_INTERVAL_SECONDS` (~1 s) and only re-fires after a
+  whole chunk of walking — 512 px, ~13 s in a straight line at
+  `Player.BASE_SPEED`; the crossing card needs six chunks, over a minute one
+  way; and the arrival card was up for 1.51 s, while the loading overlay was
+  still fading. A player who wanders inside their spawn chunk met the whole
+  layer once, for one second. That is a tuning failure, not a wiring one,
+  and it is the same complaint the whole overhaul started from.
+
+  Two fixes. **`Discovery.place_chip`** is a permanent HUD card beside the
+  condition chips — *"The Hearth  -  home  -  1 known"* — reading the ring,
+  the distance at **walking** scale (so it compares with `SprintCost`'s "one
+  burst carries 80 m" rather than with the map's kilometres), and the live
+  `ExploredTiles` size, whose ticking up is the visible proof that walking
+  records ground. Hidden while `chunks_from_spawn` answers −1, rather than
+  claiming the origin is home. This is the "HUD place chip naming the ring"
+  `concept/journey_rings.md` had listed as unbuilt since the rings shipped.
+  And **the arrival card no longer counts down until the character takes a
+  step** — standing still reads it for as long as they like.
+
+  Tests: `test_discovery.gd` 35/35 (6 new), `test_world_discovery.gd` 19/19
+  (5 new), `test_world_arrival_card.gd` 14/14 (3 new). Confirmed in a real
+  `--solo` run, not only in tests: the chip renders *"The Hearth  -  home
+  -  1 known"*, visible.
+
+- ✅ **A way to battletest the spell and skill layers** (2026-09-21) — see
+  `concept/arena.md`. Asked for directly. Measured before building anything:
+  `test_battle_loop.gd` (8, new) asks end to end, with no mocks, the only
+  question a player has — weave a spell, press the key with something in
+  front of you, does it die? It does. A woven spell damages a real boar, a
+  two-atom weave lands, the learned spell lands, repeated casting really
+  kills (the loop terminates), and a real predator really damages the player
+  through its own attack path for its own profile's figure. **The machinery
+  was never the problem.**
+
+  Three deliberate decisions stand between a player and an encounter, and
+  each is right for the game and wrong for a test loop: a new character owns
+  **no motes** (only three of seven phenomena have call sites, one needing a
+  venomous snake 61 chunks out); **mana is entirely the class lens**, so a
+  warrior or artisan has `max_mana` 0.0 and can never cast anything; and the
+  **hearth is safe on purpose**, so the nearest ground where predators hunt
+  is 16 chunks out.
+
+  `/arena [species] [count]` stands beside all three without changing any of
+  them. Real creatures from the real renderer, on a ring derived from the
+  species' **own** `SpeciesBite.sense_radius_tiles` — inside it so they
+  notice you, outside `CreatureMarker.ATTACK_RANGE` so they are not already
+  biting, both ends swept across the whole roster by test. One of every atom
+  in the pouch, read from `SpellAtomCatalog.known_ids` so a new atom joins
+  the loadout the day it is added. And a lent mana pool for a class with
+  none, derived as six casts of the catalogue's dearest atom and
+  **announced** in the console line, because a tester who does not know
+  their mana was topped up will misread every result after it.
+
+  Tests: `test_arena.gd` 17/17 (new), `test_world_arena_command.gd` 10/10
+  (new), `test_battle_loop.gd` 8/8 (new). Verified in a running game as
+  well: a `--solo` launch invoking the command live reported 3 staged
+  wolves, **48** mana lent and **25** motes granted, with no errors.
+
+  Known gap, named: this makes no more encounters happen in ordinary play.
+  `concept/monsters.md`'s roster is designed and unbuilt, and the motes a
+  character can come by naturally are still the three phenomena with call
+  sites.
+
+- ✅ **The four unreachable spell atoms** (2026-09-21) — see
+  `concept/spell_weaving.md`. The doc had tabled seven witness phenomena
+  since the Weave shipped and only three were ever raised, so
+  `shock_damage`, `illuminate`, `slow` and `fear` could not be come by in
+  ordinary play at all. `WitnessConditions` is one pure decision from facts
+  the player's step already has, with every threshold read from the module
+  that owns it: the storm from `WeatherModel.STATES`, dark from the HUD's
+  own civil twilight (the same −6° `arrival.md` derived first light from),
+  hard ground from `TerrainPassability`'s own slope threshold, and hunted
+  from a real predator with the character inside its **own** per-species
+  sense radius. Venom stays an event. Verified live: the facts come back as
+  real readings, not defaults.
+
+- ✅ **The Curupira** (2026-09-21) — see `concept/monsters.md` entry 5 and
+  `concept/arena.md`. The roster's first real creature, chosen because its
+  "one behaviour" needed no new state: **the ecosystem simulation is its
+  aggro table.** It ignores a sustainable hunter and hunts whoever drove
+  the local herd down, reading `herbivore_population_at_chunk` against
+  `herbivore_capacity_at_chunk`.
+
+  The threshold is derived rather than picked: `PopulationModel` is
+  logistic, `rate · P · (1 − P/K)` peaks at exactly `K/2`, and that is
+  maximum sustainable yield — the point below which a harvest has become
+  extraction. A test finds that peak in the real model and asserts the
+  threshold sits on it.
+
+  Quiet-until-provoked took one gate: `_perceives_threats` treats a
+  grudge-bearer the way it already treats a world boss, except that a
+  *footprint* flips it rather than a hit. Ordinary animals are unaffected.
+  The grudge re-reads rather than latches, so a recovered forest forgives.
+  It senses at the engine's caution radius — the furthest anything may,
+  which a pre-existing invariant caught when the first draft reached past
+  it — and its tenacity is 0.08, because a grievance is not hunger.
+
+  Tests: `test_ecological_grudge.gd` 15, `test_curupira.gd` 16, with 492
+  green across every touched suite including the 279-test creature-marker
+  one. Verified live.
+
+  Named gaps: it lives in **rainforest**, a long way from a 48°N spawn, so
+  in ordinary play it is something to travel to (`/arena curupira` stages
+  one). It draws on the procedural fallback, not the reversed-feet
+  silhouette the art brief asks for. (Entry 3, the Alp, was **blocked**
+  here for want of a sleep state; unblocked the same day — next entry.)
+
+- ✅ **Sleep, and the Alp it existed to unblock** (2026-09-21) — see
+  `concept/sleep.md` and `concept/monsters.md` entry 3. `survival.md`'s
+  first paragraph had always said a character must *"eat, drink and
+  sleep"*; `SurvivalMeters.rest(amount)` was an arithmetic helper, so the
+  third of those had never existed.
+
+  `Slumber` is the whole rule, pure: a refusal sentence or the empty
+  string, the wait to first light across the clock face, the world age one
+  frame of rest advances, and the wake report. Two derivations rather than
+  two chosen numbers — the wake hour is `DawnClause.FIRST_LIGHT_HOUR`
+  (civil dawn, already derived from this repo's own astronomy for the
+  arrival clause), and the rate is `DawnClause.MAX_OFFSET_HOURS /
+  Answerback.MAX_CARD_SECONDS`, so **the longest possible night passes in
+  no more real time than the longest card this HUD will ask anyone to
+  read**, which falls out at one in-game hour per real second. Both bounds
+  pinned by test. The payoff banks only on completion: waking early keeps
+  the hours that really passed and loses the rest, which is what makes the
+  Alp a decision rather than damage.
+
+  The Alp (`NightMare`) is the exact inverse of every other creature here:
+  dangerous while you are *not*. `preys_on` wants a sleeper **and** the
+  dark, it empties the stamina bar in 20 s rather than touching health,
+  and a reflection test over its own method list forbids every
+  health-shaped name so it cannot quietly grow a bite.
+
+  Tests: `test_slumber.gd` 20, `test_player_rest.gd` 14, `test_alp.gd` 17.
+  Verified live: a rest begun at midnight ran 5.60 in-game hours in 5.62
+  real seconds and advanced the world clock by exactly that; a bite
+  mid-sleep woke the character with the stamina still at zero. Two
+  pre-existing invariants earned their keep — `test_keybindings.gd` caught
+  `rest` reaching for R (held by `primary_action`; every letter A–Z is
+  bound, so it took `KEY_PERIOD`), and
+  `test_every_spawnable_species_has_a_profile` caught that a species with
+  no `SpeciesBite` row silently inherits the shared `ATTACK_DAMAGE`.
+
+  **A bug the combat audit found on this creature's first day, fixed the
+  same day (✅):** `_alp_step` raises `is_aggroed` so the ordinary AI walks
+  it to the sleeper — that *is* how it approaches — and then that same
+  ordinary AI reached the attack path every animal shares.
+  `Player.take_damage` wakes a sleeper, so the Alp cancelled its own
+  signature mechanic on the first frame it arrived.
+  `NightMare.presses_instead_of_striking` is now consulted at the top of
+  `CreatureMarker._try_attack`, and `CreatureMarker.ALP_SPECIES` reads from
+  `NightMare.SPECIES` so the two cannot mean different creatures. Every
+  test the Alp shipped with drove `_alp_step` directly, which is exactly
+  why none of them saw it; the new one drives the marker's real `_process`
+  with the thing sitting on the sleeper's chest.
+
+- ✅ **Damage over time was forty times its own spec** (2026-09-21).
+  Measured, not inferred: venom ticked at **60.0 damage/second** against a
+  specified 1.5, and a full dose dealt **481** where the spec says 36.
+  Every per-frame tick was routing through `Player.take_damage`, whose
+  armour floor (`Health.MIN_DAMAGE`, a real rule for a real blow) turned
+  each sub-unit tick into a whole point — sixty of them a second. The same
+  path also ran `_wear_equipped_item` sixty times a second while blocking,
+  so a poisoned player destroyed their own weapon.
+
+  `take_tick_damage` now carries continuous harm and `take_damage` the
+  discrete blow; both share `_suffer`, so death, the dimming and the save
+  path stay one implementation. Three callers moved across (`_venom_step`,
+  `_mushroom_toxin_step`, `_spell_status_step`). 7 new tests, 72 green
+  across venom/mushroom/spell-status/debuff/item-wear/block.
+
+- ✅ **The fight was unloseable, and a blow was not an event** (2026-09-21)
+  — the finding a nine-lens audit's nine readers all missed and its critic
+  caught. Every player swing shoved a creature clear of its own 16 px
+  reach (player reach 20 px, cooldown 0.5 s) *and* `apply_knockback` froze
+  its AI while it slid, so a bear could be walked backwards to death
+  without ever biting. `CreatureMarker.take_damage` set no target, no
+  aggro and no herd alarm, so being hit was not information.
+
+  `struck_by(attacker, amount, force)` is now the one door a blow comes
+  through: knockback first, then damage, then — only if it survived —
+  the attacker becomes its aggressor and it aggroes.
+  `knockback_distance_for` divides the shove by the animal's own
+  `CreatureMass` against the reference species, so a 300 kg bear barely
+  rocks where a 10 kg jackal is thrown; a lethal blow clears the
+  aggressor rather than leaving a corpse angry.
+
+  Measured after: a bear kills the player in **6 s** and survives at
+  57/100. 401 green across the touched suites, including the 279-test
+  creature-marker one.
+
+- ✅ **Motes drop — the Magicraft loop finally has a supply**
+  (2026-09-21) — see `concept/spell_weaving.md`.
+
+  `SpellMote.drop_tier_cap_for_ring` and `droppable_atoms_at_ring` said
+  exactly what is eligible where and had **zero callers**. The only two
+  ways an atom ever reached a pouch were the seven one-time `witness`
+  phenomena and the `/arena` dev command — so a character had **at most
+  seven atoms for the whole game**, and the four-socket Weave could never
+  be full of anything they had chosen. Which makes the Magicraft
+  requirement a surface with nothing to compose.
+
+  `MoteDrop` says what a mote *is*: **a souvenir of something that nearly
+  killed you.** The odds are `SpeciesBite.threat_score` scaled against the
+  roster's own peak — the same score the difficulty rings are ordered by,
+  so the animals a ring gates you away from are exactly the ones worth
+  hunting for parts, and a grazer leaves nothing because it never bit
+  anybody. The eligible set is the ring's own, so a far-country atom cannot
+  be farmed at the hearth. Seeded from the kill's position, so the same
+  kill always leaves the same thing.
+
+  **The one tuned value is pinned by what it means**, not by taste:
+  `SpellDraft.MAX_SOCKETS / MAX_DROP_CHANCE` is how many kills of the
+  world's worst animal fill a Weave, and a test holds it to a hunting trip
+  — over eight kills, so the Weave is not a vending machine; under forty,
+  so it is not a grind — and under a coin flip, past which motes stop being
+  a souvenir of hunting and become the reason for it.
+
+  Found and learned land in one place: `Player.find_mote` uses the same
+  `grant_mote` and the same `MOTE_FOUND` row the witness path does, so an
+  atom arriving either way is announced one way.
+
+  Tests: `test_mote_drop.gd` 16 (new), `test_spell_mote.gd` 21,
+  `test_player_spell_weaving.gd` 20, `test_player_answerback.gd` 19,
+  `test_journey_ring.gd` 35 — green.
+
+- ✅ **Order is the craft, and it changed nothing** (2026-09-21) — see
+  `concept/spell_weaving.md`. That doc's fifth design pillar is *"order is
+  the craft: adjacent motes react, and the reactions scale magnitude at
+  resolution"*, and its table prices five of them — a conflagration at
+  1.50, a conduction at 1.40, a flash freeze at 1.35, steam at 1.25, a
+  quench at 0.70.
+
+  `SpellDraft.reaction_multiplier` had exactly **one** caller:
+  `scenes/spell_weave_window.gd`, which *prints* the reactions.
+  `cast_woven` parsed the draft, ran the pipeline and never asked. So the
+  Weave told a player their arrangement mattered and the cast ignored it —
+  and the quench was free, which is the sharper half: putting frost after
+  fire is supposed to cost thirty percent of your spell.
+
+  `SpellDraft.scaled_params` is the rule — magnitude where there is one,
+  duration where there is not, never both for one atom — and `cast_woven`
+  applies it per pipeline step. `cast_spell` deliberately does not: a spell
+  nobody arranged has no order to be paid for, and a test holds that line
+  so the two paths cannot quietly converge.
+
+  Tests: `test_reaction_multiplier_lands.gd` 9 (new),
+  `test_spell_draft.gd` 32, `test_player_spell_weaving.gd` 20,
+  `test_spell_weave_window.gd` 9, `test_player_spell_slots.gd` 10 — green.
+
+- ✅ **Every timed thing riding on you, finally on screen** (2026-09-21) —
+  see `concept/hud.md`. `HudReadouts.condition_chips` took the survival
+  meters and nothing else, so the row named *Hungry*, *Parched*,
+  *Freezing*, *Exhausted*, *Malnourished* and where you were standing — and
+  said nothing whatever about anything with a **clock** on it. A character
+  could be venomed, burning, blighted, frozen, rooted, slowed, shielded and
+  fed a damage-boosting meal at the same moment and see none of it.
+
+  Every one of those was already tracked, already ticked and already
+  carried its own `time_remaining`. Only the *reading* was missing, which
+  is why this reuses the chip row rather than building new furniture for
+  it. `Player.active_effects()` gathers them in the single
+  `{"debuff_id", "stacks", "time_remaining"}` shape two systems already
+  emit, so a buff added later reaches the screen by being listed once.
+
+  A chip says how long is left, because a chip that only says *Burning*
+  answers nothing a player can act on — rounded **up**, since half a second
+  is still a second to act in. Stacks show only above one (`VenomModel`
+  caps at three, and one versus three is an irritation versus a death
+  sentence). Harm reads negative, help reads accent, and an unnamed effect
+  reads as **its own id** rather than vanishing — a silent chip is exactly
+  how an effect goes unnoticed, which is the bug this closes.
+
+  Tests: `test_effect_chips.gd` 14 (new), `test_hud_readouts.gd` 40,
+  `test_world_hud.gd` 24, `test_hud_panel_flow.gd` 6 — green.
+
+- ✅ **`slow` did not slow anything you cast it at** (2026-09-21) — see
+  `concept/spell_runtime.md`. `grep -c SLOW src/rendering/creature_marker.gd`
+  returned **0**: the marker carried the stacks faithfully in
+  `active_spell_debuffs` and its movement never looked at them, so Frost
+  Lance — whose own source is `frost_damage(magnitude: 6) |> slow(duration:
+  3)` — slowed nothing in the world and half of a two-atom spell was
+  decoration. `freeze` and `root` worked only because `is_rooted()` stops
+  the creature outright; `slow` is the one that needed a *speed*, and a
+  speed was the one thing nothing multiplied.
+
+  Applied at `_advance`, the choke point whose own doc comment already says
+  *"every intent's movement funnels through this, so one multiplier here
+  covers all of them"* — the herd-disease slowdown had been using it alone.
+  The shared figure, so a creature and the player are slowed by one number,
+  and multiplied rather than replacing, so a sick *and* slowed wolf is
+  slower than either. `test_slow_lands_on_creatures.gd` 4,
+  `test_creature_marker.gd` 293, `test_spell_status_effects.gd` 9 — green.
+
+  **And the other half of that slice is a verified no-op, named rather than
+  papered over.** `fear` and `calm` both override the temperament fed into
+  `CreatureBehavior.decide`, and `_will_fight` is the only reader of
+  temperament — it asks `== "aggressive"`. So every other string behaves
+  identically: both atoms take the fight out of something aggressive and
+  change nothing whatever about a deer. `calm` is complete by that
+  standard; `fear` promises flight it cannot cause, and causing it means a
+  real `flees_regardless` fact threaded into the pure decider, not a
+  temperament rename.
+
+- ✅ **Nine nodes of the Mage wedge that bought nothing** (2026-09-21) —
+  see `concept/skill_payoff.md`.
+
+  That doc's own audit: the skill web grants **26 distinct stat keys** and
+  the running game read **five** of them. `Player._apply_skill_stat` has
+  exactly two branches, and the other twenty-one keys are summed faithfully
+  into `Player.skill_bonus` and read by nothing.
+
+  The two cheapest are now read, and the doc had already named the first as
+  *"the cheapest of them by a distance"*:
+
+  - **`spell_efficiency`** (3 nodes). `SpellExecutor.cost_for(rule,
+    governing_stat)` really took the stat and really discounted the cost
+    through `SpellCost.efficiency` — and both of `Player`'s cast sites
+    called `cost_for(rule)` and let the argument default to 0.0. The
+    consumer existed; the argument did not. `can_cast` is asked against the
+    same discounted price now, so a mage is never refused a spell they can
+    actually afford.
+  - **`max_mana`** (6 nodes — more than any other key in the whole web).
+    Nothing added it to anything, so every point a mage spent on their own
+    resource pool did nothing at all. It fills what it adds, exactly the
+    courtesy `max_health` already pays, but it is the new headroom and not
+    a free refill: a mage who was already spent comes out still spent, with
+    more room.
+
+  **The drift test earned its keep in both directions**, which is the part
+  worth recording. `test_node_payoff.gd` asserted
+  `assert_false(source.contains("spell_efficiency"))` so that wiring the
+  stat could not pass unnoticed, and asserted the tooltip row said
+  `wired: false`. Both had to be inverted *deliberately*, and the inert
+  count is recomputed from the live web rather than edited by hand — so
+  claiming a stat is wired without the wiring still fails.
+
+  And the tooltip stops being a noun: `+10 max_mana` is an accumulator
+  slot, *"Frost Lance casts: 3 → 5"* is the thing a mage watched happen —
+  rendered by calling the real cost function twice, over the spell the
+  spell bar has loaded.
+
+  **A consequence this slice shipped without noticing, caught on the merge
+  to `main` and fixed there** (2026-09-21). `apply_class` ends by granting
+  your class's own start node, and the Mage wedge's start node *is* a
+  `max_mana` node (`mage_start`, +5). The instant the stat went live, a
+  mage's starting pool stopped being the class lens alone — 50 became 55 —
+  and **ten assertions across nine tests in `test_player.gd` that had
+  pinned the bare lens went red**, two of them meaningfully: a pool set to
+  `max_mana: 0.1` to stage "not enough mana" is floored at the start node's
+  grant, which affords Fire Bolt, so those two tests had stopped testing
+  their own names.
+
+  The stacking itself is the established design, not a side effect —
+  `_grant_class_start_node` documents that it runs after `apply_class` "has
+  just RESET max_health to its class base", and `warrior_start`'s
+  `max_health` bonus has always landed on top of that reset. So the
+  implementation stands and the assertions were re-pinned: against
+  `player.max_mana` and `skill_bonus("max_mana")` rather than the literal
+  50, so re-tuning `mage_start` cannot break them again, and the two
+  "without enough mana" tests now *drain* the pool, which is what their
+  names said all along.
+
+  **Why it escaped the slice.** Every test in
+  `test_player_skill_payoff_wiring.gd` set `max_mana` directly and never
+  went through `apply_class` — the back door, where the start node never
+  fires. Three tests were added that use the real one (a mage's pool is the
+  lens *plus* the web's own grant; a warrior's is still exactly nothing;
+  and all three classes whose start node grants `max_mana` start deeper),
+  and confirmed red at `e181d0c`, the commit before the wiring: **50 where
+  the web granted 5**. Measured, the change raised three starting pools,
+  not one: **mage 50→55, herbalist 30→35, overseer 15→20**. The other half of the escape is recorded honestly
+  below — `test_player.gd` OOMs as a whole suite and was verified in
+  name-filtered subsets, and the four filters chosen (`damage`, `hurt`,
+  `health`, `venom`) did not include `mana` or `spell`.
+
+  Tests: `test_player_skill_payoff_wiring.gd` 9 (new),
+  `test_node_payoff.gd` 28, `test_skill_web.gd` 65,
+  `test_spell_executor.gd` 13, `test_spell_cost.gd` 28,
+  `test_player_spell_slots.gd` 10, `test_player_spell_weaving.gd` 20,
+  `test_player.gd` filters `mana` 13 and `spell` 14, plus every other suite
+  that calls `apply_class` (`test_interior_avatar.gd` 14,
+  `test_player_persistence.gd` 16, `test_player_skill_web.gd` 26,
+  `test_skill_progression_loop.gd` 3, `test_spell_atom_effects.gd` 13) —
+  green.
+
+  Named next: **19 stats remain inert**, and `max_stamina` is the one to
+  watch because it is *not* a `+=` — stamina is a 0–1 meter with no
+  maximum, so the stat has to mean "your bar drains slower" and wants a
+  derivation before it wants a branch.
+
+- ✅ **A predator could never start a fight** (2026-09-21) — see
+  `concept/predator_profiles.md`.
+
+  `CreatureMarker.fears_players()` is literally `not is_tame()`, true for
+  every untamed creature, and it was the sole gate on the wander-avoidance
+  list. That bias ramps `clampf((CAUTION_RADIUS − d) / (CAUTION_RADIUS −
+  SENSE_RADIUS), 0, 1)`, which saturates at **exactly `SENSE_RADIUS`** —
+  the distance at which a predator would first perceive the player at all.
+
+  **Measured:** a wandering wolf's closing speed toward a player was
+  24 px/s at 160, 18 at 140, 12 at 120, 6 at 100, 3 at 90 and **0.00 at
+  80**. It asymptoted to its own perception boundary and could never cross
+  it, against a hunting speed of 64 px/s once engaged. A predator could
+  only ever fight a player who walked into its eighty-pixel bubble; it
+  could never initiate.
+
+  The obvious fix is the opposite of a fix: `fears_players` is also the on
+  switch for the whole PLAYER receptor channel, so making a predator "not
+  fear players" would zero its PLAYER sensitivity and stop it attacking at
+  all — already pinned green by
+  `test_an_animal_that_no_longer_fears_players_does_not_perceive_them`.
+  `steers_clear_of_players()` splits the two questions and cuts only the
+  second, for anything that will *fight* you rather than only for
+  predators, because a boar is aggressive without hunting anything for
+  food. A calm grazer still keeps its distance — the behaviour the five
+  existing caution tests protect, not one of which uses a predator, which
+  is exactly why none of them caught this.
+
+  **What the fix does, stated exactly.** Removing the repulsion removes a
+  *wall*; it does not add a *pull*. Beyond `SENSE_RADIUS` the player is not
+  published as a stimulus at all, so a predator's approach is still an
+  undirected wander — it is now merely *allowed* to cross its own
+  perception boundary, where the bias used to erase the inward component
+  precisely there. A hunter that really *seeks* a player it has not yet
+  seen needs the player published as a stimulus beyond `SENSE_RADIUS`
+  (a scent channel at the species' authored `sense_radius_tiles`, which is
+  itself still dead). That is not built, and is recorded as such in
+  `concept/predator_profiles.md`.
+
+  Tests: `test_predator_initiative.gd` 8 (new), `test_creature_marker.gd`
+  293, `test_creature_behavior.gd` 53, `test_creature_info.gd` 60 — green.
+  The three closing assertions are deterministic single steps — a hunter's
+  inward step survives intact, a grazer's is still deflected, and the ramp
+  measures **0.00 inward at exactly `SENSE_RADIUS`** — because the first
+  draft was not. That draft drove a wolf from 120 px for ten seconds and
+  asserted it ended inside `SENSE_RADIUS`; it passed on the run after the
+  fix and then failed three runs at **148, 230 and 330 px**. An earlier
+  version of this entry quoted its red measurement ("ending at 299 px")
+  alongside that green claim; the claim is withdrawn, and with it any
+  implication that a predator now closes on a player it cannot perceive.
+
+- ✅ **A lit campfire was a twenty-tile no-predator zone** (2026-09-21) —
+  see `concept/olfaction.md` and `concept/ethogram.md`.
+
+  `BehaviorKernel` ranks every stimulus by
+  `Affinity.proximity(distance_in_PIXELS)` = 1/(1+px) — except one that
+  carries its own `strength`, which is used raw. Exactly one producer in
+  the game supplied a strength on a different curve:
+  `_scan_smoke_stimuli` reported `Olfaction.dilution(distance_in_TILES)`, a
+  0..1 falloff over twenty tiles. Nothing normalised between them, and no
+  test compared a strength-bearing stimulus with a distance-ranked one, so
+  every existing test was consistent with the bug.
+
+  **Measured:** a player standing two tiles away scores **0.0303**; a
+  campfire ten tiles away scores **0.330**. The fire wins by **10.9×**, and
+  the crossover is at 17.75 tiles. The fear wiring is the first rung of the
+  mammal ladder and smoke's valence is negative, so an aggressive predator
+  two tiles from the player resolved that wiring on SMOKE and returned
+  *flee*. A player who lit a campfire at camp cleared a **320 px radius**
+  of all mammal AI — four times `SENSE_RADIUS`, twice `CAUTION_RADIUS` —
+  and was untouchable inside it. The whole danger gradient this overhaul
+  exists to build, switched off by the first fire.
+
+  It compounded through the boldness gene, too:
+  `Ethogram.BOLDEST_FEAR_FLOOR` is `proximity(one tile)`, stated in pixel
+  units, so the boldest individual in the game — for whom a person had to
+  be inside one tile to register at all — still fled a fire sixteen tiles
+  off. The one knob meant to make an animal bold walked straight past
+  smoke.
+
+  The fix is one product: `proximity(px) × dilution(tiles)`. The smell's
+  own law attenuates the shared ranking instead of replacing it, and
+  `BehaviorKernel`'s header now states the unit requirement it could not
+  check. `test_stimulus_scale.gd` pins it in both directions — a person two
+  tiles away outranks a fire ten tiles away, a person outranks a smell at
+  equal range, and a fire is *still* what a creature avoids when nothing
+  else is near — driven through the **real producer** on a real marker
+  rather than a restatement of the formula, which is what made the first
+  draft of that suite pass over the bug.
+
+  **Confirmed red against the pre-fix code**, not merely reasoned about: the
+  suite was run in a detached worktree at the old HEAD, where the
+  end-to-end test — a healthy wolf, a player two tiles away, a campfire ten
+  tiles away — returned **`"flee"`** where it now returns `"attack"`, and
+  the real producer reported 0.3299 where the shared scale wants 0.0020.
+
+  Tests: `test_stimulus_scale.gd` 8, `test_behavior_kernel.gd` 26,
+  `test_creature_behavior.gd` 53, `test_ethogram.gd` 52,
+  `test_olfaction.gd` 14, `test_creature_marker.gd` 293,
+  `test_fight_is_loseable.gd` 6, `test_bite_telegraph.gd` 19 — green.
+
+- ✅ **A spell you chose, and mana on screen** (2026-09-21) — see
+  `concept/spell_runtime.md`.
+
+  `Player.cast_spell(spell_id)` accepted any known id and had exactly **one
+  caller**, which passed `DEFAULT_CAST_SPELL_ID`. So the cast key cast Fire
+  Bolt for ever and twenty-three authored spells were unreachable except by
+  weaving one from scratch. Meanwhile `World._build_spell_bar` filled four
+  slots with locked placeholders under the comment *"there is no
+  spell/ability system yet ... an honest stub, not fake functionality"* —
+  which had been false for a long time: a parser, an executor, a book of
+  twenty-four spells and a guild that teaches them were all already there,
+  and the bar said none of it.
+
+  **Four slots on keys 6–9**, symmetric with the hotbar's 1–5 for items.
+  The row is a **view** of `known_spell_ids()`, not a second list, so
+  learning one at a guild fills the next slot with no bookkeeping. Pressing
+  a key casts that spell *and* selects it, so the cast key then repeats the
+  choice — the deliberate act and the quick one are the same act. An empty
+  slot refuses with a sentence. The woven draft still wins when there is
+  one; the selection is what the key falls back to, which is exactly what
+  `DEFAULT_CAST_SPELL_ID` used to hardcode. A cycle key was rejected: with
+  four slots a direct key is one press instead of up to four, and cycling
+  answers *"which one is loaded"* no better without a readout anyway.
+
+  **The bar shows what is in each slot and which is loaded**, through a new
+  `SpellBook.name_for` that reads the spell's own declared name — every
+  entry already says `spell "Frost Lance" { … }` and the parser already
+  carried it, but nothing could ask, so the bar would have had to print
+  `frost_lance` or keep a second list of prettier strings.
+
+  **And mana is on screen at all.** `grep -n mana scenes/world.gd` matched
+  only the word *"manager"*: the one resource every cast spends was
+  invisible, and *"Not enough mana"* was the first a player ever heard of
+  it. It is a fifth meter in the same card and the same row widget as
+  hunger, thirst, stamina and warmth — a test counts five calls to that one
+  widget, so it cannot drift from them.
+
+  Tests: `test_player_spell_slots.gd` 10, `test_world_spell_hud.gd` 9,
+  `test_spell_book.gd` 9, `test_spell_tuition.gd` 43,
+  `test_player_spell_weaving.gd` 20, `test_answerback.gd` 56,
+  `test_keybindings.gd` 24, `test_world_hud.gd` 24,
+  `test_hud_readouts.gd` 40, `test_survival_meters.gd` 37 — green.
+
+  A lesson this suite has now taught twice, recorded so it is not learnt a
+  third time: a source-inspection test that reads a fixed window of
+  characters from a function declaration trips over the doc comment of the
+  function below it. Both now match the **call** rather than the
+  identifier, and extract the function's real body.
+
+- ✅ **The bite is telegraphed** (2026-09-21) — see
+  `concept/predator_profiles.md`'s new "The telegraph, in the engine".
+
+  `SpeciesBite.windup_seconds` had been authored per species,
+  fairness-tested against the player's own dodge, and **completely dead**:
+  `grep -rn windup` outside that file returned two comments. A bite landed
+  on the frame a creature crossed `ATTACK_RANGE`, so the whole fairness
+  model was arithmetic about a thing that never happened — the same
+  "real, tested, zero callers" pattern as the dodge itself, on the other
+  side of the same exchange.
+
+  Four decisions, each forced by arithmetic rather than chosen, and the
+  arithmetic was worked out twice independently before any code was
+  written:
+
+  - **The creature freezes while it winds up.** If it keeps closing at its
+    own pursuit speed the dodge fails for ten of the twelve biting
+    profiles — a lion closes 52.8 px in its 0.60 s, a bear 62.2 px in its
+    0.90 s, against a dodge worth 20 px. The tolerance for *any* residual
+    closing is under `4 / W` px/s, which is frozen in all but name. The
+    guard sits at the single movement choke point, not in the attack arm:
+    `_will_fight` needs half health, so a bear damaged past it mid-windup
+    flips to *flee* and was free to walk out of its own bite.
+  - **The jaws re-check reach.** Without it the windup is a delayed
+    guaranteed hit whose only counter is the 0.25 s invincibility boolean —
+    a window that always *ends* at the bite, so reacting on the first frame
+    of the tell would be punished on eleven of twelve species.
+  - **The windup lengthens the cycle.** `SpeciesBite.damage_per_second`
+    already models `cycle = windup + cooldown`, and nesting the windup
+    inside the recovery would have broken the table's own
+    minimum-time-to-kill floor for the bear (8.78 s → 4.87 s) and the viper.
+  - **A commitment is not interrupted, only missed.** The player's swing is
+    on a 0.5 s cooldown, shorter than eleven of the twelve windups, so an
+    interrupt would make every heavy predator unbiteable again.
+
+  **And a fifth, found by running the exchange rather than reasoning about
+  it.** The moment the windup landed,
+  `test_a_player_who_only_swings_does_not_beat_a_bear_for_free` went green
+  to red: a frozen creature cannot close again either, so *any* shove
+  during a windup made the bite whiff. A bear is shoved 8 px per swing and
+  winds up for 0.90 s, during which a 0.5 s swing lands twice — sixteen
+  pixels, and the jaws close on nothing for ever. So **a planted animal is
+  braced**. The asymmetry is the design: moving yourself out of reach
+  answers a bite; shoving the animal does not.
+
+  **The tell is a rear-up, not a colour, and both halves of that are
+  forced.** There is no windup animation and none can be borrowed — the
+  whole creature action vocabulary is walk / idle / attack / eat / drink /
+  swim, and for illustrated species `"attack"` already falls back to the
+  **walk** row, so an attacking boar is pixel-identical to a walking one.
+  And a `CreatureMarker` *is* its `Sprite2D`: that one 24-pixel body already
+  says three things through `modulate` (warm-brighter is a good coat, pale
+  green is sick, red is just-hit), so the obvious hue for "about to hurt
+  you" is the one already spoken for by "you just hurt it". `BiteTell`
+  grows the body as the strike nears, taller than it is wider, folded into
+  `_apply_action_scale`'s own formula rather than written onto `scale` from
+  outside — which is reverted within one stepped frame and would desync the
+  animal from its own shadow.
+
+  Tests: `test_bite_telegraph.gd` 19, `test_bite_tell.gd` 7,
+  `test_species_bite.gd` 50, `test_creature_marker.gd` 293,
+  `test_fight_is_loseable.gd` 6, `test_battle_loop.gd` 8,
+  `test_player_dodge.gd` 21, `test_creature_behavior.gd` 53,
+  `test_ethogram.gd` 52, `test_alp.gd` 21, `test_curupira.gd` 16,
+  `test_npc_marker_hunting.gd` 33, `test_world_arena_command.gd` 10 —
+  green. Nine existing tests asserted the instantaneous model and were
+  **rewritten to drive the windup**, not deleted; each drives the
+  creature's own remaining clock rather than a round number, so they cannot
+  go stale when a species' telegraph changes.
+
+  **A frame no test asked for** (found 2026-09-21 by running all 954 unit
+  suites, not the ones judged affected). `CreatureMarker` has a `_process`,
+  and a marker parented into the live test tree gets it called by the
+  *engine* with the real frame delta — on top of every `_process(FRAME)` a
+  test makes by hand. Alone that is invisible. In a batch behind a slow
+  suite one real frame can be **seconds** long, longer than a wolf's entire
+  bite cooldown.
+
+  Measured: `test_a_bite_that_missed_still_costs_the_recovery` passed
+  standalone and failed inside a 60-suite batch, bisected to a single
+  neighbour — `test_bee_hive_marker.gd`, which is merely *slow*, and shares
+  no state with it. The wolf's recovery was being ticked away by frames no
+  test drove, so it committed to a second bite and the assertion that it
+  "cannot simply try again" was right to fail. `marker.set_process(false)`
+  in the three harnesses that drive frames by hand
+  (`test_bite_telegraph.gd`, `test_predator_initiative.gd`,
+  `test_creature_hit_flash.gd`) makes the frames a test drives the only
+  frames it gets.
+
+  Worth generalising: **any** suite that parents a `_process`-bearing node
+  into the tree and then steps it manually is running on two clocks, and
+  will pass alone and fail under load.
+
+  Named gaps: a creature **rooted** mid-strike still bites (what a root
+  takes is its footing) but its rear-up stops building, because that early
+  return skips the animation step. Beyond 200 px one step can advance
+  ~0.49 s, so a distant windup can start and resolve untelegraphed — and
+  `_nearest_player_position` returns the *first* player rather than the
+  nearest, so in multiplayer a creature biting the far player is throttled
+  and its tell is invisible to them.
+
+- ✅ **Dodge gets a key — the verb the whole predator table was balanced
+  against** (2026-09-21) — see the new `concept/dodge.md`.
+
+  `src/gameplay/dodge.gd` was a complete, tested pure module with **zero
+  consumers** outside `SpeciesBite` reading two of its constants.
+  `grep -rn "dodge\|Dodge" scenes/player.gd` returned nothing; no `dodge`
+  action existed; `grep -rn "invulner\|invincib\|iframe" scenes/player.gd`
+  returned one comment. Meanwhile `concept/predator_profiles.md` derives
+  **both** of its windup anchors from that module by name — the smallest
+  telegraph in the world is `Dodge.INVINCIBLE_DURATION`, and a bite that
+  would kill a full-health player outright must telegraph for a whole
+  `Dodge.COOLDOWN_DURATION`. The entire predator roster had been balanced
+  against a verb the player could not perform.
+
+  Nothing new was chosen. `Dodge.distance_px()` is sprint speed × the
+  invincibility window = **20 px**, and the two facts that fall out of it
+  are tests rather than remarks: it is **1.78 m** at this world's play
+  scale, which is what a real evasive dive covers, and it is **longer than
+  `ATTACK_RANGE`** (16 px), so a dodge begun inside a bite's reach ends
+  outside it. The cost is `SprintCost.stamina_for_seconds` of the same
+  window — exactly the sprint it is, never a cheaper way to cross ground —
+  and the exhausted gate is `SprintCost.can_sprint`, so *"Exhausted"* on
+  the survival panel and *"cannot dodge"* are one fact.
+
+  A blow inside the window is **refused**, not softened, and raises no
+  receipt because nothing happened to answer for. A venom tick is
+  untouched: you cannot roll away from what is already in your blood.
+  `apply_knockback` gained a duration so the shove and the roll share one
+  displacement — an ease-out converted to a velocity, not a position jump
+  that would put a rolling character inside a wall.
+
+  **The keyboard being full is now a documented constraint, not a
+  surprise.** Every letter A–Z is bound, the three keys under the left hand
+  are taken (Space, Ctrl, Shift), and a number would read as a sixth hotbar
+  slot — so `dodge` takes **Tab**.
+
+  **And it found a bug in the feedback layer.** `Player._answered_at` was
+  keyed by action id alone, so a refusal and a success of the same verb
+  shared one cooldown: pressing dodge again the instant after a roll — the
+  commonest press this mechanic will ever see — was muted by the roll that
+  caused it. A press that says nothing teaches a player the key is broken,
+  which is precisely what `feedback.md`'s third pillar exists to prevent.
+
+  Tests: `test_player_dodge.gd` 21, `test_player_answerback.gd` 17,
+  `test_answerback.gd` 56, `test_keybindings.gd` 24, `test_dodge.gd` 10,
+  `test_species_bite.gd` 48, `test_sprint_cost.gd` 18,
+  `test_player_rest.gd` 14, `test_player_input_latch.gd` 16 — green.
+
+  **How `test_player.gd` was verified, stated rather than glossed.** That
+  suite is 343 tests over 5199 lines and instantiates the player scene per
+  test; three attempts to run it whole in this session's container reached
+  7.6 GB resident and were killed without finishing. CI runs the full
+  ~12k-test suite in one process and will catch anything missed. Here it
+  was covered by name-filtered subsets over exactly the paths these changes
+  touch — `damage` 10, `venom` 5, `block` 4, `knockback` 3, `health` 3,
+  `hurt` 2 — all green.
+
+  **Named gap, and the reason this slice came first:** there is still
+  nothing to dodge. `SpeciesBite.windup_seconds_for` has no consumer, so a
+  bite lands on the frame a creature is in range with no telegraph at all —
+  the player now has the answer and no question. A telegraph built before
+  the dodge would only have been a delay.
+
+- ✅ **A blow lands, and the exchange reads** (2026-09-21) — see
+  `concept/feedback.md`. Three silences closed at once, all of them named
+  in that doc's own opening diagnosis and still true months later.
+
+  **Being hurt answered with nothing.** A bear could close, bite and take a
+  fifth of the health bar with no sound, no flash, no number and no line.
+  `Player.take_damage` raises the `hurt` row now, and what floats is what
+  the blow really *cost* — after block, shield and armour — because a
+  receipt that disagrees with the health bar teaches a player to distrust
+  both. Raised from `take_damage` and deliberately not from `_suffer`,
+  which the damage-over-time ticks share; a test pins that `_suffer` stays
+  silent.
+
+  Its interval is the reflex floor, and that is **provable** rather than
+  taste: the gate on being hurt is how fast something can bite you, and the
+  fastest real bite among every species a biome pool can promote is the
+  arctic fox at **0.533 s**, against a floor of 0.210 s. A test sweeps the
+  live pools, so a future species that could bite faster than the player
+  can be told about it goes red instead of shipping.
+
+  **The flash did not exist anywhere.** `grep -rni "hit_flash|damage_flash|
+  flash_timer"` over `src/`, `scenes/` and `tests/` returned zero hits, and
+  `World._on_player_answered` had been reading a row's `message` and
+  `float_text` and throwing the third field away. Now the **screen** tints
+  toward `UiTheme.NEGATIVE` scaled by a new `severity` field (how much of
+  the whole bar that blow took, which only the character can know) and
+  fades over the same interval the answer is gated at — and the **creature**
+  leans toward the same red.
+
+  The creature half was the hard one, and an adversarial read of the
+  rendering layer is what made it safe. A `CreatureMarker` *is* the
+  `Sprite2D`, and its `modulate` already had two owners: a one-shot coat
+  tint in `_ready`, and a disease tint rewritten every stepped frame for
+  anything not `SUSCEPTIBLE`. So the flash **composes** instead of
+  replacing — `HitFlash.tint` returns the base exactly once the clock runs
+  out, so there is no restore branch to get wrong — and it steps *after*
+  `_disease_step`, because a flash written before it is silently swallowed
+  on every sick creature in the game.
+
+  **And a real bug had to be fixed before it could exist at all.**
+  `HEALTHY_MODULATE_COLOR` was `Color.WHITE`, so the first time an animal
+  recovered from a disease its coat tell was erased for the rest of its
+  life; a flash restoring the same white would have done it on every blow.
+  `CreatureMarker.base_modulate()` names the baseline nothing in this
+  codebase could name before, and both the disease tint and the flash read
+  it.
+
+  **The fourth damage-over-time caller.** The pass that split blows from
+  ticks found three and there were four: `_step_bramble_thorns` still went
+  through `take_damage`, so a thicket crossing cost **60 health a second**
+  at 60 fps whatever its own derived rate said — and once `hurt` existed it
+  would have floated a receipt every fifth of a second for the whole
+  crossing. A test now walks all four steps by name.
+
+  **Three more, found by reading this change adversarially rather than by
+  reading the old code.** `CreatureMarker._spell_status_step` calls
+  `take_damage` with a per-frame fraction, so the moment the flash existed
+  an ignited animal would have relit it sixty times a second and sat pinned
+  at peak red for the whole burn — the player-side split, reintroduced on
+  the creature side by the feature itself; `CreatureMarker.take_tick_damage`
+  now mirrors it. The creature flash had no size channel, so a scratch and
+  a near-killing blow lit an animal identically; it scales with the
+  fraction of its own bar now, and the killing blow is lit *before* the
+  death branch so it is not the one blow in a fight that never reads. And
+  the `fish` row floated *"+1 Trout"* in **invisible ink** — `flash_color`
+  doubles as the floating text's colour and `flash_color_for(FLASH_NONE)`
+  is fully transparent — which is now a two-way invariant rather than one
+  fixed row.
+
+  A measurement worth keeping: a coat tint can boost a channel above 1.0,
+  so leaning such a coat toward `UiTheme.NEGATIVE` (red 0.85) *lowers* the
+  red channel while plainly reddening the animal. The first draft of that
+  test asserted `.r` and was wrong for exactly that reason.
+
+  Tests: `test_answerback.gd` 56, `test_player_answerback.gd` 15,
+  `test_hurt_flash.gd` 9, `test_creature_hit_flash.gd` 18,
+  `test_world_hurt_flash_wiring.gd` 5, `test_player_damage_over_time.gd` 9,
+  `test_creature_marker.gd` 293, `test_world_boss.gd` 3,
+  `test_spell_status_effects.gd` 9, `test_blackberry_bramble.gd` 24 —
+  green.
+
+  **Deliberately not in this pass, with reasons rather than silence:** a
+  creature's call at the moment it commits to a bite looked like a
+  three-line change and is not.
+  `concept/creature_and_footstep_audio.md`'s pillar 4 forbids
+  world-simulation code calling into audio at all; the twelve real clips
+  are full-length field recordings, so a wolf howl fired at a bite is still
+  sounding many seconds later; and the call pool is four round-robin voices
+  with no still-playing check, so bite calls would cut ambient ones off.
+  That doc has to be extended first. Player knockback on a bite is **not**
+  the safety risk it was flagged as — the arithmetic was worked out and
+  reproduced: a wolf re-closes 51.5 px inside one bite cooldown and a lion
+  90.5 px, against a player's own sword shove of 60 px — so it is a real
+  follow-up rather than a rejected one, and it would revive the dead
+  `knockback_resist` skill stat.
+
+- ✅ **Kills pay: a body for every species, worth what the animal is**
+  (2026-09-21) — see `concept/carrion.md`. `LootTable._DROPS` was a
+  four-row authored table (`herbivore`/`boar`/`predator`/`lynx`) and two of
+  those keys are retired anonymous placeholders no biome pool has promoted
+  since the roster got real names. So killing a deer, wolf, bear, lion,
+  jaguar or horse dropped nothing — and since
+  `_spawn_carcass_if_eligible` early-returns on an empty drop list, it did
+  not even leave a body. Fighting was a pure cost, which is why predators
+  read as obstacles to route around rather than as things to hunt.
+
+  Drops are now **derived from each animal's real mass** rather than
+  authored per species, so a creature added to a biome pool tomorrow
+  cannot ship worthless: `CreatureMass.knows` is the membership test (a new
+  guard — `mass_kg_for` estimates a mass for *any* string from the
+  fallback anatomy profile, so a typo would otherwise have been handed a
+  silent handful of meat), a hide comes off anything above rabbit size, a
+  fang off anything in `CreatureInfo.PREDATOR_SPECIES`.
+
+  The same pass closed this doc's own ⬜ **species-specific yields**:
+  `Butchering.base_meat_for` runs the animal's real body mass through a
+  real edible fraction (wild-game dressing is about a third of live
+  weight), in units fixed by the one row the game had already costed —
+  boar, 90 kg, two steaks — so that species keeps exactly its old count
+  and nothing already balanced is quietly rebalanced. A bear's carcass now
+  cuts into more meat than a squirrel's, and the village hunter carries
+  home the same figure a player's knife would take off the same animal.
+  `LootTable` delegates to it rather than keeping a second opinion.
+
+  Tests: `test_butchering.gd` 21 (the calibration row, the reference mass
+  asserted against `CreatureMass`'s own figure, monotonicity swept across a
+  thirteen-species weight ladder, a one-meal floor, a fail-open flat count
+  for anything the world has no mass for), plus `test_loot_table.gd` 12,
+  `test_carcass.gd` 33, `test_huntable_quarry.gd` 37, `test_npc_economy.gd`
+  84 and `test_creature_marker.gd` 293 — all green.
+
+  **A pre-existing red found while running the blast radius, and fixed
+  (✅).** `test_npc_marker_hunting.gd`'s
+  `test_a_kill_pays_the_hunter_real_gold` was failing — confirmed red at
+  `HEAD` in a detached worktree first, so it was not this change's. It
+  asserted a levy into the village purse, which was true when it was
+  written and stopped being true the day *gold got exactly one faucet*
+  (`0514f08`): `NpcEconomy._earn` minted a coin per food unit whether or
+  not anyone ever bought it, and it went, along with
+  `record_harvest_wage`. That commit rewrote eight tests in
+  `test_npc_economy.gd`; this ninth lives in another file and was missed,
+  so it has been red ever since. Rewritten to the rule that actually
+  holds, not deleted — a kill pays the village in **goods** and mints no
+  gold, and a second test takes the same kill through a real cartload sale
+  to show where the gold does come from. Both would catch the faucet
+  reopening. `test_npc_marker_hunting.gd` 33, green.
+
+
 ### Loose stone (see `docs/concept/stone.md`)
 
 ✅ **Stone comes in sizes now**, on the Wentworth grain-size scale (the real geological one): pebble, cobble, boulder. The lift/smash line falls at the cobble-boulder boundary (256mm) because that is roughly where a rock stops being liftable -- the game rule and the classification agree because they answer the same question.
@@ -616,6 +2021,97 @@ geometry helpers `leg_thigh_offset_y`/`leg_knee_pivot_local_y`/
 
 
 ### Character creator live preview scene (see `concept/character_creator_preview_scene.md`)
+
+✅ **Redone as a staged composition, with the hero twice the size.**
+Reported: *"redo and professionalize the Diorama. Make the character way
+bigger and a nicer scenery."* Measured before anything was changed —
+`tools/probe_diorama_render.gd` frames the diorama exactly as `main_menu.gd`
+does and saves a PNG per seed; `tools/probe_diorama_subject_sizes.gd`
+renders each subject alone at a known zoom and reads its opaque bounding
+box back in world units. Three seeds, three different failures, and the
+numbers named the cause of each.
+
+- **The hero filled 20.5% of its own portrait, and the ambient boar was the
+  biggest thing in it** (hero 10.0 × 19.8 world units, boar 30.0 × 46.5).
+  How much of the frame the hero fills has a closed form —
+  `hero_drawn_height / FOOTPRINT.y`, with the camera cancelling out
+  entirely, since the view's zoom is `view_width / FOOTPRINT.x` and its
+  height is `view_width * FOOTPRINT.y / FOOTPRINT.x`. That is exactly why
+  three earlier passes at "the character is too small" changed nothing:
+  each widened the panel AND the footprint at a fixed ratio, the one
+  operation the formula is blind to. `FOOTPRINT` 192×96 → 96×48 takes the
+  hero to **40.9%** at the same 496×248 panel (`DIORAMA_VIEW_SIZE` is
+  derived from the aspect ratio, which halving both axes leaves alone) —
+  the same scene at twice the magnification, not a differently shaped one.
+- **The scatter could not compose anything.** Every object was sampled
+  from one rectangle and obstacle-checked against whatever was already
+  there, which is a fine way to fill a meadow and a hopeless way to frame
+  a portrait: the two trees piled into the middle of the panel and stood
+  between the camera and the hero, the pond parked against whichever of
+  four edges the seed rolled (including the bottom, now the hero's own
+  lane), and the hero ended up half outside the frame on two seeds out of
+  three. Staged in depth now — a back band for the trees and the boar, a
+  middle ground for the pond, a front lane for the hero — with the trees
+  **assigned** one to each side edge rather than rolled, close enough that
+  part of each canopy sits outside the frame. That overhang is the point:
+  a canopy filling an upper corner reads as the scene continuing past the
+  panel, where the same tree in the middle just stands in front of the
+  subject.
+- **Keeping the hero in frame is not the same as keeping it in the
+  picture.** Its lane is inset by its own drawn extent (read off
+  `CharacterView.HEAD_TOP_Y` and `SCALE`, never pinned) *and* past both
+  framing trunks, after a rendered seed showed it hard against the left
+  edge under that side's canopy with the middle of the panel empty beside
+  it. It also opens centre stage facing the camera and holds one ordinary
+  `IDLE` beat before behaving randomly — it used to spawn at a random
+  clear point and roll its first action, so the first thing a player saw
+  of their own character was a back, mid-stride.
+- **Two tests passed while a rendered frame said otherwise, and both are
+  fixed at the root.** The boar-is-smaller-than-the-hero assertion measured
+  `texture.get_height()` — but every illustrated animal frame is composited
+  onto one shared 340×330 canvas with its feet on a shared baseline, so the
+  texture is mostly transparent padding and its height says nothing about
+  how big the animal reads; it uses `get_used_rect()` now. Once that was
+  fixed it passed again, because it measured a scale nothing had yet
+  overwritten: a `CreatureMarker` owns its `scale` and recomputes it from
+  its species profile and growth on every animation step, so the diorama's
+  value lasted until the marker's next frame (measured live at 29.4 × 19.9
+  against the hero's 19.6 — exactly the unscaled size). The boar hangs
+  under a scaling holder now, re-derived each frame, and the test forces
+  the marker to rewrite its own scale first. `CreatureMarker.
+  set_status_bars_visible` also takes the combat UI off it — a real marker
+  arrives wearing a health bar, and a red bar floating over a character
+  portrait is nobody's idea of a portrait.
+- **The pond's silhouette now resolves at a fixed cell COUNT**
+  (`POND_GRID_COLUMNS`), not a fixed cell world size. Sizing cells at one
+  world tile quietly made the pond's SHAPE depend on how big the pond was,
+  since the corner-erosion pass only has as much detail as it has cells:
+  already a blunt 4×3 rectangle before, and 2×2 at the halved footprint,
+  with no interior left to keep solid. Two things fell out of that.
+  `biome_at_global` had been conflating the incoming world tile size with
+  the pond's own cell size (the same number until now), and it has to test
+  a tile by **overlap** rather than by its centre — the whole pond is about
+  one world tile across now, so a centre test answered "land" for tiles a
+  fish was swimming in the middle of, and a fish checks the tile it wants
+  to step onto before committing (`FishMarker._compute_is_water_tile`). It
+  froze where it floated.
+- **Five older tests encoded the scatter and are rewritten to the property
+  each was really guarding**, not deleted: the pond moves across the frame
+  from seed to seed (it used to be shoved against a random edge); no trunk
+  stands in the pond; a framing tree stays anchored in frame even though it
+  overhangs it; the pond's tiles cover one grid CELL where the test said
+  one world tile; and the hold-still ripple test compares the hero's
+  position across steps instead of using a 2.5-unit "arrived" tolerance
+  that, at the shipped pond size, is wider than the wade-in distance and so
+  counted the deliberate entry splash. The grass-reaches-the-middle guard
+  now asks about the clear ground nearest the centre, because the centre is
+  the pond now and a cell under water cannot grow a clump under any noise
+  scale — counting it measured the pond, not the noise field it was written
+  for.
+- ⬜ **The panel still overruns the Character tab's first unscrolled view by
+  ~12px** (`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+  character_tab`). Pre-existing, and untouched by this work: the panel is
+  still exactly 496×248, so the overrun is exactly what it was.
 
 ✅ **The static hero portrait is now a real, live, always-animating mini
 scene.** Asked directly, after the static-portrait panel had shipped and
@@ -4812,6 +6308,81 @@ No live world-boss/creature-fitness simulation exists yet, but the promotion mat
   needs the still-unbuilt spell-DSL runtime or a narrower boss-only
   executor as a smaller first step.
 
+### Monsters (`concept/monsters.md`)
+
+A design + art brief, written to obey `worldbosses.md`'s standing rule that
+nothing is placed: a monster is an animal whose own fitness promoted it, or
+a species a biome genuinely affords. Nine are specified across three tiers.
+Nothing in the roster is built — no `CreatureInfo` entry, no
+`MYTHIC_ROSTER_BY_REGION` line, no sheet.
+
+What IS built is the art pipeline's side of it, so commissioned rows have
+somewhere to land:
+
+- ✅ **Attack, hurt and death rows are wired end to end.** Declaring the
+  band is the whole integration: `IllustratedAnimalSprite.has_action`/
+  `_build_textures` key off `"<action>_bands"` generically, and
+  `declared_actions()`/`species_ids()` read the registry itself rather than
+  restating it (the hand-kept-list failure mode this repo keeps
+  rediscovering). `attack` already resolved, to the walk cycle, for any
+  species without dedicated art — a charge is a run, and the alternative
+  was the reported "when the boar is attacking it switches to old
+  procedural sprite".
+- ✅ **`hurt` and `death` are one-shot rows** (`ONE_SHOT_ACTIONS`): they
+  play through once off their own clock, started at the moment of the
+  event, so a flinch beginning mid-cycle still starts at frame 0 and a
+  second hit restarts it rather than inheriting the first's remaining time.
+  `death` additionally stops on its final frame
+  (`HOLDS_LAST_FRAME_ACTIONS`) — load-bearing, not decorative: the held
+  index sits one past the end of the row, so a wrapping modulo would put
+  the corpse back on its feet for exactly the step the body is meant to be
+  resting (pinned by a test that fails on that mutation).
+- ✅ **`CreatureMarker` has the states to ask for them.** `take_damage`
+  flinches on a survivable hit; `_die` lets the body collapse before the
+  marker goes, and only then does the carcass land — where the body came to
+  rest, rather than on top of a creature still falling over. A collapsing
+  body does nothing else (no AI, no movement, no growth, no disease tick)
+  and cannot be killed again. The death is still **booked against the
+  region on the killing blow**, never at the end of the row: a death that
+  only lands when an animation finishes is one a chunk unload mid-collapse
+  would lose outright.
+- ✅ **A death that begins mid-step stops that step too.** Three ticks at
+  the top of `_process` run unconditionally and can each kill — disease, an
+  ignite/blight tick, a Death Cap's weakened roll — and each was followed
+  by a guard asking only whether the marker had been *freed*. A body that
+  collapses first is not freed for several steps, so the step it died on
+  went on to run its AI: measured at ~23,000 world units of wandering by a
+  corpse before `_death_has_begun()` replaced those guards.
+- ✅ **Neither row may borrow another**, unlike swim→walk / drink→idle /
+  idle→eat-frame-0. A flinch built from the walk cycle reads as a stumble,
+  and a death built from a cycling row would never end. Both states are
+  therefore gated on the art really existing, which means **every creature
+  in the game today behaves exactly as it did before this landed** —
+  `_begin_one_shot` returns false for all of them.
+- ⬜ **No sheet declares `hurt_bands` or `death_bands` yet.** The wiring is
+  in place and unexercised until real art arrives; the tests drive it
+  through a stub sheet that subclasses the real sprite class.
+- ⬜ **No `defend` action exists.** The prompt skeleton asks artists for a
+  DEFEND row; it will slice correctly and never be asked for until a
+  braced/guarding behaviour is built.
+- 🚧 **Tier C's "bound to a kind of place" rule is specified, not built** —
+  it needs a real predicate per monster (a bog, a scree slope, a worked
+  shaft) and those predicates do not all exist.
+- ✅ **Tier B needs no new mechanism** — Rimewolf is a roster line in
+  `worldbosses.md`'s existing `MYTHIC_ROSTER_BY_REGION` plus art.
+
+Stale doc comments corrected in the same pass, all found by reading the
+code rather than the headers: `IllustratedAnimalSprite`'s class header and
+`has_action`'s own doc both claimed attack had no fallback, four lines
+above the branch that gives it one, and the header still listed three
+registered species when there are ten. `test_illustrated_animal_sprite.gd`
+carried the same claim plus several comments describing horse/deer/boar as
+having no eat or idle rows, which they have had for some time — two of its
+fallback tests were pointed at species that no longer take the fallback
+they were named for, and now use `wolf`/`sheep`/`alpaca`/`krampus`, which
+genuinely do.
+
+
 ### Evolution (`concept/evolution.md`)
 
 No genetics reaches a living animal: an offspring inherits its species string and nothing else (`CreatureRenderer.spawn_single`, `src/rendering/creature_renderer.gd:263`, rolls a fresh `randi()` wander seed on `:266`, and that seed is exactly what `CreatureInfo` derives level and max_health from, `src/world/creature_info.gd:351-353`). Three pieces of the machinery are nonetheless real, tested and **unwired** -- marked 🚧 individually below, not ⬜ -- and DNA does exist elsewhere in the tree for trees (`TreeGenome`) and for character creation (`HeroDna`). Unmarked entries below are ⬜ Not started:
@@ -5814,7 +7385,7 @@ No faction/reputation system exists. All ⬜ Not started:
 
 ### Exploration (`concept/exploration.md`)
 
-No map/fog-of-war/waypoint exploration mechanics exist beyond raw walking. All ⬜ Not started except the two below:
+**The act of exploring is built** (2026-09-20, `concept/discovery.md`): walking records the chunk underfoot on the live `ExploredTiles`, newly-walked ground pays once at the journey ring's own declared price, and crossing a ring boundary raises a card naming what is new and lethal there. What is still missing is the other half — there is no fogged in-world map render or waypoint UI (the `/map` console command remains the honest interim call site, see `concept/wayfinding.md`), the explored record is session-only, and nothing below is built, so there is still nothing out there to FIND. All ⬜ Not started except the two below:
 
 - **History-Seeded POI System** (large) — ⬜ Not started. No POI/ruin/dungeon generator exists anywhere in `src/world/` yet (checked before building the obstacle below) — placement is the honest next step, not silently implied by the obstacle existing.
 - **Abandoned Settlements** (medium) — a settlement lost to a `concept/quests.md` village-endangerment fight is now a named, specific cause among these (2026-08-13), the unresolved quest itself standing in as the ruin's "what happened" fragment.
@@ -8865,9 +10436,9 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
 
 - **Carcass entity** (medium) — ✅ Done — `src/rendering/carcass.gd`:
   spawned in place of the old instant loot drop, for every species
-  `LootTable` already covers (herbivore/boar/predator/lynx — the same
-  scope as today's real drop table, no new per-species tuning in this
-  pass). Real ordered parts (hide → meat → guts,
+  `LootTable` covered at the time (herbivore/boar/predator/lynx — the same
+  scope as that pass's real drop table, no new per-species tuning in it;
+  widened to every spawnable species on 2026-09-21, see "Kills pay"). Real ordered parts (hide → meat → guts,
   `src/gameplay/butchering.gd`'s `PART_ORDER`), one swing removes the
   next remaining part (`Carcass.butcher`, same melee-range-sweep shape as
   chop/smash/pull). Independent rot clock (`ROT_SECONDS`, tuned to be
@@ -9482,9 +11053,12 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   carcass` / `test_a_herbivore_never_scans_for_carcasses` /
   `test_scavenging_only_feeds_the_predator_when_the_bite_actually_lands`
   (`test_creature_marker.gd`).
-- ⬜ Species-specific butcher yields (a bear's hide vs. a boar's hide) —
-  every carcass-eligible species shares one part order/quantity today,
-  mirroring `LootTable`'s own existing flat-by-role shape.
+- ✅ Species-specific **meat** yields (2026-09-21) — `Butchering.base_meat_
+  for` derives the cut from the animal's own real `CreatureMass`; see the
+  "Kills pay" entry near the top of this file. Species-specific **hide**
+  yields stay ⬜ and deliberately flat: a hide is a fact about having been
+  an animal, not a quantity, and sizing it wants a hide *grade* rather
+  than a count.
 - ⬜ Persistence/catch-up integration for carcasses across a chunk
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
@@ -12629,6 +14203,9 @@ New concept doc (2026-08-25), written for the one mechanism below:
 - **A merchant buys the whole village, not one of its cupboards** — ✅ Done (2026-09-20) — reported with the town panel open: "The village produces way too much food and the NPCs don't have an income" (`Food feeds 387 of 16`, `Gold 1`, `Happiness 62% (worst: income)`). **One fault, not two.** A settlement keeps goods in more than one container — `VillageMarket.stock`, and every structure's own `StructureStock` — and `MerchantVisit`, the only thing that turns goods into gold, was only ever shown the first. `SettlementFood` was taught to count the shelves when the bread chain landed (`milling_and_baking.md`, "Food that counts"); the merchant never was. So a village hauls its whole harvest into the warehouse — which is precisely what the carter's round is *for* — and thereby puts it beyond the reach of its own income. `src/emergence/settlement_surplus.gd` is the one view: `combined()` adds the containers up for the merchant to price, `allocate()` says how much to take from each, in view order, never more than a container holds. Pure — it never touches what it is shown, so a sale that cannot be completed has changed nothing, the same division `MerchantVisit` itself keeps. The market is drawn from **first**, deliberately: it is the abstract ledger a village trades out of anyway, while a warehouse shelf is a real building the player can walk up to and open, so what the player can *see* is the last thing to go. **Does not merge the containers** — `milling_and_baking.md`'s "three food containers, one eater" is still open; this says only that the merchant reads all of them. Tests: `test_settlement_surplus.gd` 13/13, `test_merchant_buys_the_whole_village.gd` 4/4, `test_merchant_visit.gd` 25/25, `test_village_wages.gd` 20/20, `test_npc_economy.gd` 80/80, `test_village_market.gd` 25/25. **Measured against the rest of the requested loop, which already exists:** the merchant's cadence already tops out at one call a day (`VISITS_PER_DAY 0.4 × (1 + SURPLUS_DRAW 1.5)` = 1.0 at full surplus), so he was always willing to come daily and simply had nothing to buy — the binding constraint on clearing a 387-unit backlog is `CART_CAPACITY` (20 units a visit), not the frequency. Progressive taxation by estate is likewise already real and wired (`VillageEstates.BASE_TAX_PER_DAY` kossaet 0.25 → buerger 1.75, through `VillageWages.estate_tax_for`, called from `EarthChunkManager`). **Still open:** producers' own gold is still conjured per unit gathered (`NpcProduction.YIELD_TO_GOLD_RATE`) rather than paid out of the civic purse, so "NPCs get paid by the City Hall" is true for non-producers only; and nothing yet throttles production against demand, which is the other half of "produces way too much food".
 - **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
 - **Village economy balance: wages, labour-priced exports, and a larder that is kept** — ✅ Done (2026-09-20) — reported with the town panel open: "Farmers produce herbs, but all houses are at 0% herbs... the city makes not enough money to pay each worker's income, so the price for goods when selling to the travel merchant needs to be based on per capita work output. The city should generate double the income through export goods than it costs to pay all workers. Also the city should always keep a minimum stock; enough to keep feeding the population", and "distribution of food to houses is only at 60%, which should saturate at 100%". **Measured first** (`tools/probe_village_economy.gd`, a real village east of Berlin, 1200 s): the herbalist's crop sat on the farmhouse shelf (13–43 units) while the estate draw read only the two markets, so every cottage read Herb 0.00; the cart sold the food down to a larder of 25 units — `EstateConsumption.demand_for` over 2.5 days, a 3600-second-day basket handed a 60-second-day cover, i.e. two assessments of food for ten households — so food satisfaction sawed 0.33 → 1.00 → 0.42; and a visit paid 20 gold that ten subsistence wages drained the same tick, purse 0 → 20 → 1, wallets 0, ten of ten broke, "worst: income" permanent. Five mechanisms, specified in `concept/village_economy_balance.md` before the code: (1) a **living wage** — the measured draw at the market's own price, times two ("a day's keep and as much again"), paid every assessment out of the same purse the cart fills through the one new transfer `NpcEconomy.pay_wage_from_purse`, whole coins, remainder carried, poorest first, no arrears; (2) the **merchant pays labour value** — `MerchantVisit.price_index` is twice the wage bill since his last call over the surplus's base value, floored at the farm gate (per unit, `2 × wage ÷ per-capita output`, measured by the merchant at his own gate rather than by any production hook), the cart carries what that takes, and a hoard still cannot become a windfall; (3) the **minimum stock** is the granary's own draw over the cart's round in assessments (`SettlementSurplus.minimum_stock_for`, 60 units for ten) plus the fuel the estates burn over it and one whole unit of shelf granularity (`minimum_fuel_for`), and the cart never sells below either; (4) a **full larder** is a day's meals on the measured draw (`FOOD_STOCK_PER_HOUSEHOLD_TARGET` 4.0 → 2.4, pinned to the derivation — it had been left at one assessment of the *old* draw); (5) the **estate draw reads the larder shelves** as well as both markets, stall before ledger before shelf. **Measured after, same village:** roster 10 at every sample, herb 1.00 at every sample, fuel 1.00 at every sample, purse 384 → 1584, wallets 64 → 1066, 0 of 10 broke, income never the worst need, happiness up to 0.76 from 0.64. **Two regressions the measurement caught in the first cut and closed:** a cart carrying the whole surplus stripped the woodpile (fuel 0.00, roster 10 → 6 through the ladder's exodus) — hence the fuel half of the reserve; and a larder target the size of the whole reserve (6.0) read a village with a day or two of food below the subsistence floor while every belly was full — hence a day's meals. **One latent fault found on the way:** `_collect_estate_tax` looked households up with `household_for` (a by-member lookup) and had debited nobody since the tax became a transfer; its test passed only because the fixture drew a merchant. Fixed to `get_household`, pinned against the wallets. 🚧 **Stated rather than hidden:** once everyone can afford a meal the same village eats its shelves down to 0 over the second half of the run — a production deficit poverty used to mask, answered by `village_estates.md` mechanism 7's works-scaling rather than by anything here — and the estate layer still reads food off stock, not off the flow of meals, so a village growing exactly what it eats reads short. Meal gold is still a sink and the purse still dies on a chunk reload. Tests: `test_village_living_wage.gd` 14/14 (new), `test_earth_chunk_manager_village_wages.gd` 9/9 (new), `test_merchant_visit.gd` 48/48, `test_earth_chunk_manager_merchant_labour_value.gd` 4/4 (new), `test_settlement_surplus.gd` 24/24, `test_earth_chunk_manager_village_larder.gd` 5/5 (new), `test_household_wellbeing.gd` 31/31, `test_earth_chunk_manager_estate_larder_draw.gd` 6/6 (new), `test_earth_chunk_manager_village_estates.gd` 49/49, `test_merchant_buys_the_whole_village.gd` 12/12, `test_village_immigration.gd` 20/20, `test_gold_has_one_faucet.gd` 7/7, `test_npc_economy.gd` 84/84, `test_village_wages.gd` 29/29, `test_estate_consumption.gd` 22/22. Concept docs cross-aligned: `traveling_merchants.md`, `village_estates.md`, `village_growth.md`, `hud.md`, `economy.md`, `settlement_food_calibration.md`.
+- **The works keep up with the mouths: the food production deficit** — ✅ Done (2026-09-20) — asked directly after the above: "fix the food production deficit so a fed village keeps its stock". **Measured first** (`tools/probe_village_economy.gd` extended with a harvest tally and a works report, `tools/probe_field_room.gd`, `tools/probe_field_timeline.gd`): three farmhouses stood and the settlement counted one; the assembly voted a trade hall with food at 0.00 because the second-farmhouse petition died on a husbandman gate no cottager can pass; and the roster was sized on the stub world's 18.5 units a field a day when a real field yields 5 — the walk between cottage and field eats most of a 27.5-second work window. Specified as `concept/village_economy_balance.md` mechanism 6 before the code. **The fix:** the assembly's food works are worked by trade (`VillageAssembly` `field_hands`, counted off the settlement's real roster by `EarthChunkManager._field_hands_for_settlement`); `_settlement_building_counts` counts the farmhouses that stand; `VillageFarm.FIELD_YIELD_PER_LIVED_DAY` 5.0 pins the measured yield and `SettlementFoodDemand` reads it, so a field hand feeds two households, a founding five needs three and a village of ten needs five; `SettlementGenerator` staffs the founding roster first (its demand, then the carter, then the sawyer) and conscripts the grown village's demand from newcomers only; and a growth farmhouse is sited by the founding placement's own field-aware search (`VillageRenderer.farm_plot_with_field`, shared with `_place_farms_if_missing`, outskirts when the streets are full, keeping off landmarks and rising projects). **Measured after, same village:** three farmers, a herbalist and a fisher for ten households, four farmhouses standing; the shelves hold 37–45 units and food reads 1.00 at every sample of the first 600 s where the first pass drained to 2 units and 0.00; 360 units harvested over twenty lived days (4.5 a field a day). **What it costs:** five farmsteads for ten households is paid in frontage — a village of fourteen has a plot or two left, and a mill's spur cannot lane through the farm belt on the south (0 of 12 stub villages heal a south-side mill, 12 of 12 a north-side one); two packing tests restated for it, and a third caught the belt packing two farmsteads yard to yard on the outskirts under main's fence rule (28 open sides) — `VillageFarm.yards_touch` keeps one clear column or row between two yards for the rail line their fields share (`test_village_farm.gd` 5 new pins, `test_no_two_farmsteads_stand_yard_to_yard`). 🚧 **Stated rather than hidden:** the deficit returns when an eleventh household immigrates as a fisher, because a pond is dug only at founding or on a later visit (`village_ponds.md`) so the newcomer counts as a producer and produces nothing until the next load — the shelves fall 45 → 4; the household store's occupation ignores conscription (production follows the roster, the census reads the store); fuel read 0.00 at two samples while a trade hall took its wood and the purse fell once at the newcomer's arrival, neither root-caused; the commute is the lever that would cut the belt. Tests: `test_village_assembly.gd` 48/48, `test_earth_chunk_manager_building_counts.gd` 3/3 (new), `test_settlement_food_demand.gd` 16/16, `test_settlement_generator.gd` 33/33, `test_earth_chunk_manager_field_hands.gd` 3/3 (new), `test_earth_chunk_manager_farm_growth_site.gd` 3/3 (new), `test_village_farm.gd` 93/93, `test_village_renderer.gd` 153/153, `test_earth_chunk_manager_village_growth.gd` 40/40. Concept docs cross-aligned: `village_estates.md` (mechanism 7), `settlement_food_calibration.md`, `village_farms.md`.
+- **A fisher who arrives in play digs their pond the day their house stands** — ✅ Done (2026-09-20) — asked directly after the above: "fix the immigrant fisher so they dig their pond on arrival". **Measured first:** a newcomer's house completed through the growth ladder with the household that owns it on its record and nothing about who lives there, so their trade reached the record, the pond was dug and the hut raised only on the next chunk load; and in real play the newcomer never got a house at all — a household is housed by *owning* one, the roof that let them in belonged to the village, and the ladder then owed them a house it could not site, so they waited beside two empty houses (the probe's fisher at 750 s: no pond, no shelf for the rest of the run). Specified in `concept/village_ponds.md` ("A pond dug the day the fisher's house stands") and `concept/village_growth.md` ("…and nobody ever moved in") before the code. **The fix, in three parts:** (1) `VillageRenderer.settle_the_ground`, run by `EarthChunkManager._place_completed_building_project` — the founding's own passes around the people already standing: a house its owner lives in carries their trade and seed (the recovery's backfill, done now), fields, ponds and huts through the same idempotent `_if_missing` passes, every villager handed their own ground again as plain properties, whoever owns a house living at its door; ponds are handed to the fisher whose house they lie beside (the record's resident) rather than by roster order, which handed a newly housed third fisher nothing; (2) `_house_the_waiting`, run from the immigration step: each household with nowhere to live takes a standing house nobody on the roster owns (raised for nobody, or a departed household's), oldest waiting first, one household to a roof, as a real property transfer, and the ground settles around them the same step; (3) `_respawn_village` keeps the market the village already trades in — the purse and the stall lived on the `VillageMarket` `spawn_village` creates fresh, and every arrival's re-derivation had been wiping them (the first measurement's unexplained 720 → 369 at the newcomer's sample). **Two first cuts measured worse and were replaced:** re-deriving the whole village on a completed building restarted every villager's errand — 309 units harvested in twenty lived days against 360, food 44 → 12 by 600 s, roster 10 → 6 → 5 through the estate exodus — so the completion settles the ground and rebuilds nobody (pinned: `test_a_house_standing_does_not_rebuild_the_rest_of_the_village`); and the same run showed the purse at 0 the moment the house completed, which was the fresh market. **Measured after, the probe's village:** the fisher who arrived at 750 s moved into the ladder's roof on the next step, its record says a fisher lives there, the ladder stopped asking for a house, 363 units harvested, roster 10 → 11 kept, purse 0 → 1671. 🚧 **Stated rather than hidden:** on that village they still work no water — the roof stands in the farm belt and every free rectangle in a pond's reach lies on a farmstead's beds, so the dig is refused exactly as a founding fisher's would be there; the village of eleven keeps a producer who cannot produce (shelves 6–18 units through the second half). The mechanism digs where the roof has ground (pinned on a real chunk whose next villager fishes: `test_earth_chunk_manager_newcomer_pond.gd` 12/12). Levers named in the ponds doc: a move-in that prefers a roof with room for the newcomer's works when there is a choice, and siting the roof for nobody where the trade that takes it has ground. The arrival's own re-derivation still restarts the village once (unchanged, now measured); a chunk unload still loses the purse. Tests: `test_earth_chunk_manager_newcomer_pond.gd` 12/12 (new), `test_earth_chunk_manager_village_respawn.gd` 4/4 (new), `test_earth_chunk_manager_ponds.gd` 33/33, `test_village_pond_hut_wiring.gd` 5/5, `test_village_renderer.gd` 156/156, `test_village_farm.gd` 114/114, `test_earth_chunk_manager_village_growth.gd` 40/40, `test_earth_chunk_manager_village_estates.gd` 49/49, `test_earth_chunk_manager_village_mortality.gd` 5/5, `test_earth_chunk_manager_village_store.gd` 9/9, `test_village_assembly.gd` 48/48, `test_settlement_construction.gd` 17/17, `test_construction_labor.gd` 12/12, `test_construction_catchup.gd` 12/12, `test_construction_project_store.gd` 33/33, `test_earth_chunk_manager_buildings.gd` 46/46, `test_civic_build_decision.gd` 10/10, `test_earth_chunk_manager_city_hall.gd` 4/4, `test_earth_chunk_manager_city_hall_rising.gd` 20/20. Concept docs cross-aligned: `village_ponds.md`, `village_growth.md`, `village_economy_balance.md`, `traveling_merchants.md`.
+- **Pre-existing failure found on the way, recorded rather than chased** (2026-09-20): `test_earth_chunk_manager_bread_chain.gd`'s `test_spare_hands_gather_building_material_between_assessments` reads stone and plant fibre at 0 after the settlement steps while wood is gathered. A/B'd with the branch's working tree swapped to main's own `src` and `tests`: it fails identically at `origin/main` (1bab6e0) and at `03a85ca`, main as it stood before any of today's pushes, so neither the food-works sizing nor the arrival work is its cause. 10 of 11 in that file pass. Not root-caused here; the gathering step is outside both requests.
 - **A village square is laid around what stands in it** — ✅ Done (2026-09-20) — reported a further time: "There are still villages without plaza." Measured rather than guessed (`tools/probe_village_supply.gd`, new): of the two genuine villages in a 14-chunk sweep, chunk (682,132) had **8 of its 48 square cells paved — exactly the one street row crossing it**, with a `farm_fence_east` at (15,13) and a `warehouse` at (20,13) standing inside the square. Two separate faults, each fatal alone. (1) The paving pass walked the rect and **returned on the first cell it could not take**, so one rail cancelled the whole square; it steps over such a cell now, because a square laid *around* what stands in it is still a square. (2) It **skipped the pass entirely whenever the civic doorstep already carried a road tile** — and the street crossing the square paves exactly that cell — so a village that lost its square once could never gain it back on any later visit; that short-circuit is gone, and the walk being idempotent means every visit heals it. A floor remains, since scattered cells are stray paving rather than a square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned at both ends rather than by a number somebody liked. One existing test changed deliberately: it asserted that *not one* cell was paved when a house stood on any of them — broader than its own stated intent ("rather than paving through a building") and exactly the reported defect; it now pins both halves honestly. Tests: `test_village_layout.gd` 93/93, `test_village_renderer.gd` 136/136, `test_village_plaza_wiring.gd` 3/3.
 - **Planner build palette reads as a build menu** — ✅ Done (2026-09-20) — asked directly, with a screenshot of ten identical text buttons in a row: "Make the Planner / Building HUD more professional and more like Anno 1806. Add Icons not only text". Planner mode's palette is now `src/ui/blueprint_palette_view.gd`: a titled card with a row of category tabs (Roads / Homes / Production / Civic), the slots of whichever category is open, and a footer naming what is armed and what it will cost. Each slot carries the building's **own picture** and its name — icons alone would trade one unreadable menu for another, since a sawmill and a blacksmith are both a brown roof at 48 pixels — and a hover gives the whole reckoning: name, footprint in tiles, the real material list, the real hours. **The icon is cut from that building's own `BuildingCatalog.finished_sheet_chain`**, the very sheet `EarthChunkManager` draws the finished building from, so there is no second picture of any building free to drift from the first (`src/ui/blueprint_icon.gd` — trimmed to its own art, fitted into the box with its aspect intact rather than squashed square, centred on a transparent canvas; pavement draws the real road tile it will lay). The tabs **are** `BuildingCatalog`'s own id lists read at runtime (`src/ui/blueprint_palette_model.gd`), never a second grouping, so a building added to the game lands in the right tab for free; and the two numbers on a card arrive as the same calls the raising path makes (`_item_catalog.display_name_of`, `_chunk_manager.build_labor_hours_for`), so the menu cannot quote a price or a job size the site then disagrees with. Work that costs no hours reads as **"Laid by hand"** rather than "0 hours" — `PlanRaising.is_laid_by_hand`'s own rule, said in the menu instead of discovered at the site. **Two defects the rendered probe caught that the headless tests could not** (`tools/probe_build_palette.gd`, per this repo's probe-before-you-trust convention): the armed slot and open tab were drawn in the theme's ordinary `pressed` shade, ~5% of value from normal and invisible over the card's dark background (now `UiTheme.selected_button_stylebox`, see the theme row below); and three tabs read as open at once, because `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so a tab opened from code left the previous one looking open. Tests: `test_blueprint_palette_view.gd` 15/15 (the real widget, driven for real), `test_blueprint_palette_model.gd` 22/22, `test_blueprint_icon.gd` 12/12, `test_world_planner_mode_wiring.gd` 31/31. **Nothing about the card's size is written down** — a slot is as wide as the widest name in its own tab, measured at the font it is really drawn in; the card is as wide as its slots; the footer wraps rather than clips and cannot widen either. That came out of merging `main`, where a concurrent session had landed the UI-scale setting: sweeping the probe across every scale the player can pick showed **six of the ten names clipping at 1.75** ("Warehouse" wanting 137px of a slot offering 84) and only 7px of headroom at 1.00, so the defect predated the slider — `UiScale` scales font sizes and deliberately not card widths, which is its own documented limit. Zero clipped names at 0.75, 1.00 and 1.75 now, footer included. **Known gap:** `CHARTERED_BUILDING_IDS` (trade hall, mage guild) is still not offered — a charter is a settlement-tier gate (`concept/settlement_charter.md`), and whether a player may plan a blueprint they could never raise is a separate question from how the menu looks.
 - **Every HUD card is laid out by its column** — ✅ Done (2026-09-20) — reported with both open: "The Town Panel and Warehouse / Building panel overlap.. a panel should occupy space and make other panels render below it.. don't use fixed coords". The HUD column system already stated the rule in its own doc comment ("each builder simply adds to the column it belongs in and never positions itself against its neighbour's height"); the **building readout was the one card that never joined it** — `PRESET_CENTER_RIGHT`, a hand-picked 24px from the edge, 180px tall whatever it held — while `_hud_right_column` grew down from the minimap straight into it. The settlement card landing in that column is what made the collision visible; the panel had been placed against nothing all along. It is a card in the right column now, **last**, because the cards above are standing readouts and this one comes and goes with a click, so it opens beneath them rather than shoving them about; closed it costs nothing, since a hidden child of a `VBox` leaves no hole (the same property the message stack already relies on). Its builder also had to move in `_ready` — it ran *before* `_build_hud_columns`, so there was no column to join. Pinned three ways: the stacking driven for real against a real `HousePanel` in a real `VBoxContainer` (a taller card above pushes it further down; a hidden one leaves no hole), a source-contract check on the builder, and a **generalised** check over every builder that adds a card, so the next panel cannot reintroduce the defect by being written the old way. Rendered for a look with `tools/probe_hud_column_flow.gd`: no overlap, 4px apart, both hugging the right edge. Tests: `test_hud_panel_flow.gd` 6/6, `test_world_hud.gd` 24/24, `test_hud_readouts.gd` 40/40, `test_house_panel.gd` 42/42, `test_ui_scale.gd` 15/15.
@@ -13440,17 +15017,17 @@ New mechanisms:
   `test_an_unpenned_animal_left_hungry_leaves_instead_of_dying` as the boundary
   that keeps the two rules from colliding. The fence is precisely what removed
   the animal's own option to solve the problem, which is what makes penning a
-  responsibility rather than free storage. **It does not leave a carcass, and
-  that is a named prerequisite (⬜) rather than something either doc may
-  assume:** `_die()` routes through `_spawn_carcass_if_eligible` (`:1879`),
-  which returns immediately when `LootTable.drops_for(species)` comes back
-  empty, and `LootTable._DROPS` (`src/gameplay/loot_table.gd:19-24`) has rows
-  for `herbivore`, `boar`, `predator` and `lynx` **only** -- so a starved
-  sheep, goat or horse vanishes without remains and never reaches
-  `concept/carrion.md`'s loop, which would make the one consequence that is
-  supposed to teach the lesson invisible. Giving the keepable roster its own
-  drop rows (hide + meat, on the `herbivore` row's shape) comes first, driven
-  by `test_every_keepable_species_leaves_a_carcass`.
+  responsibility rather than free storage. **It did not leave a carcass, and that
+  was a named prerequisite (⬜):** `_die()` routes through
+  `_spawn_carcass_if_eligible`, which returns immediately when
+  `LootTable.drops_for(species)` comes back empty, and `LootTable._DROPS`
+  had rows for `herbivore`, `boar`, `predator` and `lynx` **only** -- so a
+  starved sheep, goat or horse vanished without remains and never reached
+  `concept/carrion.md`'s loop, which made the one consequence that is
+  supposed to teach the lesson invisible. **Resolved 2026-09-21** (✅): the
+  drop table is derived from `CreatureMass` rather than authored, so every
+  species the world spawns -- the whole keepable roster included -- leaves a
+  real carcass. See the "Kills pay" entry near the top of this file.
 - **A pen as a placed structure** (large) — ⬜ Not started — two new
   `BuildingPiece` rows (`wood_fence`, `wood_gate`) beside the existing twelve,
   reusing the placeable path (`src/gameplay/item_catalog.gd` +
@@ -13835,13 +15412,15 @@ because this ledger is where the honesty lives:
    *composed* speed multiplier dropping below the animal's flee speed --
    see the approach entry under Animal Husbandry above.
 4. An earlier draft of the rewrite claimed the starved penned animal "leaves a
-   real carcass and joins carrion.md's loop". It does not: `LootTable._DROPS`
-   covers `herbivore`/`boar`/`predator`/`lynx` only and
+   real carcass and joins carrion.md's loop". At the time it did not:
+   `LootTable._DROPS` covered `herbivore`/`boar`/`predator`/`lynx` only and
    `CreatureMarker._spawn_carcass_if_eligible` returns immediately on an empty
-   drop list, so no keepable species leaves remains today. Both the rewritten
-   `taming.md` §7 and `animal_husbandry.md` now carry the correction and name
-   the loot rows as a prerequisite; see the neglect entry under Animal Husbandry
-   above.
+   drop list, so no keepable species left remains. Both the rewritten
+   `taming.md` §7 and `animal_husbandry.md` carried the correction and named
+   the loot rows as a prerequisite. **That prerequisite was met on
+   2026-09-21** -- the table is derived from `CreatureMass` now and every
+   spawnable species leaves a body -- so the original claim is true as of that
+   date; see the neglect entry under Animal Husbandry above.
 
 - **Rivers: the boulder's shore band, not a halo** (small) — ✅ Done —
   reported against the boulder ring introduced earlier: "The rocks should
@@ -31697,3 +33276,43 @@ player feels a thicket, so a boar pushes through bramble untouched; and
 the drawn clump is wider than its tile while the penalty is not, so a
 player can be visually waist-deep in canes from the next tile over and
 walk at full speed.
+
+## A starving village plants what actually feeds it (`concept/village_farms.md`, 2026-09-20)
+
+Reported live with the panels open: *"The farmers produce mostly herbs even
+though it says it can feed 0 / 10 ... the supply chain needs to be stable,
+so that happiness can saturate at 100% and unlock second tier buildings"*.
+
+✅ **Measured, and the first measurement was wrong in an instructive way.**
+A probe that only LOADED chunks read an empty satisfaction dict and would
+have reported "the demand rule never fires at all". A settlement only reads
+its own basket when it is STEPPED, so the probe advances real world time
+now (`tools/probe_village_cropping.gd`, kept). With the clock running:
+
+```
+satisfaction: { "wood": 1.0, "herb": 0.0, "kind:food": 0.0 }
+scores:       { "herb": 0.0, "carrot": 0.0, "potato": 0.0, "wheat": inf }
+a wheat-farmer sows: herb    a herb-farmer sows: herb
+```
+
+✅ **The tie was the bug.** Both goods at 0.0 means every food crop scores
+identically — the normal state of a village that needs feeding, not an edge
+case — and the tie fell through to *declaration order*, where `herb` is
+first. Every field in a starving village sowed the crop that feeds it least:
+20g of herbs against a 170g potato.
+
+✅ **Below `HUNGRY_BELOW` the heavier harvest breaks the tie**, on the
+`ItemCatalog`'s own real produce masses rather than numbers invented for
+this; above it the occupation tie-break stands exactly as documented. The
+floor is bounded by the two readings that define it (strictly above the
+starving villages measured, no higher than the half-fed case the occupation
+rule was written for), both test-pinned.
+
+✅ **Verified end to end on the same three villages**: every farmer sows
+`potato` now, wheat- and herb-farmers alike.
+
+🚧 **Three tests in `test_npc_marker_farming.gd` fail, and failed before
+this** — A/B'd against the parent commit, 36 passing and 3 failing either
+way, same names. Not this work's, and not silently absorbed.
+
+Tests: 21/21 in `test_village_crop_choice.gd` (+6).

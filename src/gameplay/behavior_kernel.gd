@@ -33,14 +33,27 @@ extends RefCounted
 ##   pull  = sum over channels of features * sensitivity * valence
 ##   score = |pull| * level * weight
 ##
-## where `weight` is the stimulus's own `strength` when the SENSE that
-## reported it knows how loud it is at this range (smell, with its dilution
-## law), and otherwise Affinity.proximity(distance), a unit-free ranking so
-## that between two equal stimuli the nearer one wins -- which is exactly
-## the old `_nearest`. The SIGN of the winning pull picks approach or avoid.
-## The kernel never drops a stimulus a sense chose to report: range is
-## Olfaction.dilution's or SENSE_RADIUS's business, and a strength of zero
-## is how a sense says "out of range".
+## where `weight` is Affinity.proximity(distance) -- a unit-free ranking so
+## that between two equal stimuli the nearer one wins, which is exactly the
+## old `_nearest` -- or the stimulus's own `strength` when the SENSE that
+## reported it knows how loud it is at this range.
+##
+## A reported `strength` MUST be on that same proximity scale. It is not a
+## second opinion about distance, it is that ranking already attenuated by
+## whatever the sense knows: a smell hands back
+## `proximity(px) * dilution(tiles)`, carrion hands back the proximity of a
+## fly-shortened distance. The kernel cannot check this, and the one
+## producer that broke it cost the game its whole danger gradient -- smoke
+## reported `dilution(tiles)` alone, a 0..1 curve over twenty tiles
+## competing against a 1/(1+px) curve, so a campfire ten tiles away beat a
+## player two tiles away by 10.9x and every lit fire became a twenty-tile
+## no-predator zone. See test_stimulus_scale.gd, which pins the rule
+## behaviourally in both directions.
+##
+## The SIGN of the winning pull picks approach or avoid. The kernel never
+## drops a stimulus a sense chose to report: range is Olfaction.dilution's
+## or SENSE_RADIUS's business, and a strength of zero is how a sense says
+## "out of range".
 ##
 ## A stimulus is {"position": Vector2, "features": {channel: float}} plus
 ## whatever the caller wants back: the winning stimulus is returned whole, so
@@ -128,6 +141,9 @@ static func perceived(receptors: Dictionary, channels: Array, stimuli: Array) ->
 	return noticed
 
 
+## See the header: a reported `strength` is this same proximity ranking
+## already attenuated by what the sense knows, NOT a second opinion about
+## distance on a curve of its own.
 static func _weight(stimulus: Dictionary, position: Vector2) -> float:
 	if stimulus.has("strength"):
 		return maxf(float(stimulus["strength"]), 0.0)

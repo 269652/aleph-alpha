@@ -469,3 +469,73 @@ func test_framing_an_unknown_archetype_leaves_the_view_alone():
 	view.frame_archetype("not_a_class")
 	assert_almost_eq(view.pan.x, 7.0, 0.001)
 	assert_almost_eq(view.zoom, 1.25, 0.001)
+
+
+# -- the path reads back (docs/concept/skill_payoff.md) -----------------
+#
+# The web's measured weakness: a node said "+2 attack_damage" and a player
+# had no idea what that bought. NodePayoff renders a node by calling the
+# real consumer function twice -- at the character's current stat and at
+# the one this node would grant -- so the tooltip states the actual effect
+# on something they have watched move.
+
+const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
+
+
+func test_a_node_whose_stat_has_a_live_consumer_shows_the_real_before_and_after():
+	view.set_payoff_facts({})
+	var shown := false
+	for node_id in web.node_ids():
+		var info := web.node_info(node_id)
+		if String(info.get("stat_name", "")) == "":
+			continue
+		var previews: Array = NodePayoff.preview_for(
+			[{"stat_name": String(info["stat_name"]), "bonus_amount": web.effective_bonus(node_id, {})}],
+			{}, NodePayoff.default_consumers({})
+		)
+		var live := previews.filter(func(p): return String(p.get("unit", "")) != NodePayoff.UNIT_DECLARED)
+		if live.is_empty():
+			continue
+		var text := _tooltip(node_id)
+		assert_string_contains(text, "→", "a live node must show a before → after: %s" % text)
+		# ...and the two sides must DIFFER. A preview whose before equals
+		# its after still prints an arrow while saying nothing, which is
+		# exactly what a caller passing the wrong key produces -- the
+		# first cut of this wiring did, and this assertion is what caught
+		# it.
+		var arrow_line := ""
+		for line in view.node_tooltip(node_id):
+			if String(line).contains("→"):
+				arrow_line = String(line)
+				break
+		var sides := arrow_line.split("→")
+		assert_eq(sides.size(), 2, "one arrow, two sides: %s" % arrow_line)
+		assert_ne(
+			sides[0].strip_edges().split(" ")[-1], sides[1].strip_edges(),
+			"a node that changes nothing is not a payoff: %s" % arrow_line
+		)
+		shown = true
+		break
+	assert_true(shown, "at least one node in the web has a live consumer to preview")
+
+
+func test_a_node_whose_stat_has_no_consumer_says_so_honestly_rather_than_inventing_one():
+	view.set_payoff_facts({})
+	var text_of_inert := ""
+	for node_id in web.node_ids():
+		var info := web.node_info(node_id)
+		var stat := String(info.get("stat_name", ""))
+		if stat == "":
+			continue
+		if not NodePayoff.stats_without_consumers([{"stat_name": stat, "amount": 1.0}]).is_empty():
+			text_of_inert = _tooltip(node_id)
+			break
+	assert_ne(text_of_inert, "", "the web still has stats with no consumer (see skill_payoff.md)")
+	assert_false(
+		text_of_inert.contains("→"),
+		"a stat nothing reads must not pretend to a before and after: %s" % text_of_inert
+	)
+
+
+func test_the_tooltip_still_works_before_any_payoff_facts_are_given():
+	assert_false(_tooltip("berserkers_fury").is_empty(), "a view with no facts set still describes a node")

@@ -267,6 +267,29 @@ Status:
   is still pinned at 1.0. Wiring that is the same open item it always was —
   it changes a mature, tuned meter, which is why this pass deliberately did
   not take a free ride on it.
+- ✅ (2026-09-20) **The player's sprint is the second real sink, and the
+  first that costs the player anything.** `SprintCost`
+  (`src/gameplay/sprint_cost.gd`) is the whole rule: one tuned constant,
+  `SECONDS_OF_SPRINT_FROM_FULL` = 14 s, from which the drain rate is
+  derived; walking stays free for ever so a player out of wind is never
+  stranded; and the "can you run" gate is `SurvivalMeters.
+  EXHAUSTED_THRESHOLD` itself, so the **Exhausted** chip on the panel and
+  the legs refusing to run are one fact that cannot drift apart. The
+  exhaustion half of "debuffs, not death" is now reachable for the player,
+  and `ConditionPenalty.stamina_regen_multiplier` finally has a player-side
+  consequence.
+
+  **Why it was done as part of the gameplay overhaul rather than as a
+  tuning pass**: a free, unlimited sprint at exactly twice walking speed
+  meant every predator in the game could be ignored by holding a key, so
+  `RegionDifficulty`'s EASY/MEDIUM/HARD rings gated which species may
+  *spawn* while gating nothing about whether a player could walk — run —
+  into lethal country. Measured at play scale
+  (`test_sprint_cost.gd`): one full burst carries **80 m**, the safe ring's
+  radius is **684 m**, and reaching the HARD tier is over thirty full
+  stamina bars and more than ten minutes of walking. Distance is a cost
+  again, which is what lets the world's danger gradient mean something.
+  See [journey_rings.md](journey_rings.md).
 
 ### Open questions
 

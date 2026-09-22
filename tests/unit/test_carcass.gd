@@ -276,3 +276,42 @@ func test_corpse_age_drives_fly_count_which_measurably_raises_local_disease_risk
 		blown_risk, fresh_risk,
 		"a fly-blown corpse should carry measurably higher local disease risk than a fresh one"
 	)
+
+
+# -- species: what died decides how much meat is on it ---------------------
+
+## docs/concept/carrion.md carried this as ⬜ from the day it was written:
+## every carcass cut into the same two steaks whatever had died. A bear is
+## worth more than a squirrel because a bear IS more meat.
+func test_a_bear_carcass_cuts_into_more_meat_than_a_squirrel_carcass():
+	assert_gt(_meat_off(_carcass_of("bear")), _meat_off(_carcass_of("squirrel")))
+
+
+## And the species the game had already costed keeps exactly its old cut,
+## so deriving the rest rebalances nothing that was already balanced.
+func test_a_boar_carcass_still_cuts_into_what_it_always_did():
+	assert_eq(_meat_off(_carcass_of("boar")), Butchering.BASE_MEAT_COUNT)
+
+
+## The two corrections compose rather than replace one another: a fat bear
+## is still more than an average bear.
+func test_a_heavier_than_average_bear_still_cuts_into_more_than_an_average_one():
+	var fat := _carcass_of("bear")
+	fat.mass_ratio = 1.5
+	assert_gt(_meat_off(fat), _meat_off(_carcass_of("bear")))
+
+
+func _carcass_of(species: String) -> Carcass:
+	var body := Carcass.new()
+	body.species = species
+	add_child_autofree(body)
+	return body
+
+
+## The meat count off one whole butchering of `body`, whatever else has
+## already been dropped this test.
+func _meat_off(body: Carcass) -> int:
+	var before := _drops.size()
+	body.butcher()  # hide
+	body.butcher()  # meat
+	return _drops[before + 1].count

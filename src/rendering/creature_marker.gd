@@ -35,6 +35,17 @@ const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+const EcologicalGrudge = preload("res://src/gameplay/ecological_grudge.gd")
+const NightMare = preload("res://src/gameplay/night_mare.gd")
+const HitFlash = preload("res://src/rendering/hit_flash.gd")
+const BiteTell = preload("res://src/rendering/bite_tell.gd")
+const Discovery = preload("res://src/gameplay/discovery.gd")
+## The play-scale tile in pixels, for converting a species profile's
+## tiles-per-second pace into this scene's own pixel speeds. Restated
+## rather than preloading TerrainRenderer (a creature does not otherwise
+## need the renderer) and pinned to it by test.
+const TILE_SIZE_PX := 16
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
@@ -276,8 +287,41 @@ var _animation := preload("res://src/rendering/procedural_animal_animation.gd").
 ## see IllustratedAnimalSprite) instead of ProceduralAnimalSprite's
 ## primitive-shape generation. Checked first in _animation_step; every
 ## species/action it doesn't cover falls back to _animation as before.
-var _illustrated := preload("res://src/rendering/illustrated_animal_sprite.gd").new()
+const IllustratedAnimalSprite = preload("res://src/rendering/illustrated_animal_sprite.gd")
+var _illustrated := IllustratedAnimalSprite.new()
 var _current_action := "walk"
+
+## The one-shot row (see IllustratedAnimalSprite.ONE_SHOT_ACTIONS) playing
+## right now, "" when none is -- a flinch or a collapse, which OVERRIDE
+## whatever the AI settled on for as long as they last. Kept apart from
+## _current_action because that one is reset to "walk" at the top of every
+## step and rewritten by whichever behaviour wins: a row that has to
+## survive across steps cannot live there.
+var _one_shot_action := ""
+
+## How far into that row we are. Its OWN clock, started at the moment the
+## creature entered the state, rather than the shared _elapsed_time every
+## cycling action reads -- a flinch that began mid-cycle has to start at
+## frame 0, or half the hits in a fight would show only the tail end of one.
+var _one_shot_elapsed := 0.0
+
+## True while a death row is still playing: the creature is dead, it is
+## just not finished falling over. Nothing else about it runs while this is
+## set -- no AI, no movement, no growth, no disease tick -- and it can only
+## ever be true for a species that really HAS death art (see _die), so every
+## creature in the game today takes the same instant path it always did.
+var _dying := false
+
+## True once a HELD one-shot row (see
+## IllustratedAnimalSprite.HOLDS_LAST_FRAME_ACTIONS) has run out of frames.
+## The row does NOT clear itself then -- it stops on its final frame, the
+## pose the body actually comes to rest in, and that pose is rendered for a
+## real step before whatever raised the row ends it (for a death, before
+## the carcass replaces the marker). This is also what makes the clamp in
+## _animation_step load-bearing rather than merely defensive: the held
+## index sits one past the last frame, so a wrapping modulo would put the
+## corpse back on its feet for exactly that step.
+var _one_shot_held := false
 
 var _wander := CreatureWander.new()
 ## Seeded from wander_seed in _ready so a herd doesn't cross into hunger in
@@ -543,7 +587,8 @@ func _ready() -> void:
 	# keyed off wander_seed, so it's deterministic and reproducible from the
 	# same individual across sessions, just like every other AnimalFitness
 	# trait this seed already drives.
-	modulate = coat_tint_for(_fitness.phenotype_for(wander_seed)["coat_vibrancy"])
+	_coat_tint = coat_tint_for(_fitness.phenotype_for(wander_seed)["coat_vibrancy"])
+	modulate = _coat_tint
 
 	_health_bar_bg = ColorRect.new()
 	_health_bar_bg.color = HEALTH_BAR_BG_COLOR
@@ -840,7 +885,28 @@ func _process(frame_delta: float) -> void:
 	if delta < 0.0:
 		return
 	_elapsed_time += delta
+	# A body already collapsing does nothing else: no AI, no movement, no
+	# growth, no disease tick, not even a knockback. Same early-return shape
+	# as the rooted/dormant branches further down, placed one rung ABOVE
+	# every one of them because dead outranks every state a live creature
+	# can be in. Only ever reached by a species that really has death art
+	# (see _die) -- for everything in the game today _dying is never set and
+	# this costs one boolean test per step.
+	if _dying:
+		_step_one_shot(delta)
+		if is_queued_for_deletion():
+			return  # the row finished this step and _finish_dying took it
+		# The one exception to "a collapsing body does nothing else": the
+		# blow that killed it lit a flash, and a body that kept it lit for
+		# the whole death row would make the killing blow the one blow in
+		# the fight that never stops reading.
+		_hit_flash_step(delta)
+		_animation_step()
+		_sync_grounded_children()
+		return
+	_step_one_shot(delta)
 	_attack_cooldown_remaining = maxf(0.0, _attack_cooldown_remaining - delta)
+	_windup_step(delta)
 	# Always ages, regardless of which branch below this creature takes --
 	# a courting/restrained/tamed juvenile still grows up (see _step_growing).
 	_step_growing(delta)
@@ -849,14 +915,18 @@ func _process(frame_delta: float) -> void:
 	# (and can still die) no matter what it's doing that frame, the same way
 	# _needs.advance never pauses for those states either.
 	_disease_step(delta)
-	if is_queued_for_deletion():
+	if _death_has_begun():
 		return  # died of disease this frame -- nothing below has a live marker to act on
+	# AFTER _disease_step, deliberately: that rewrites modulate every stepped
+	# frame for anything not SUSCEPTIBLE, so a flash stepped before it would
+	# be silently swallowed on every sick creature in the game.
+	_hit_flash_step(delta)
 
 	# Same "runs unconditionally, ahead of every early-return" reasoning as
 	# disease above: an ignited/blighted creature keeps burning no matter
 	# what it's doing this frame (see docs/concept/spell_runtime.md).
 	_spell_status_step(delta)
-	if is_queued_for_deletion():
+	if _death_has_begun():
 		return  # an ignite/blight tick can kill too
 
 	# Same reasoning again: a weakened-by-Death-Cap creature's real, small
@@ -864,7 +934,7 @@ func _process(frame_delta: float) -> void:
 	# docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
 	# real toxic effects").
 	_mushroom_effect_step(delta)
-	if is_queued_for_deletion():
+	if _death_has_begun():
 		return  # a Death Cap weakened tick can kill too
 
 	if _knockback_time_remaining > 0.0:
@@ -995,7 +1065,7 @@ func _process(frame_delta: float) -> void:
 		_append_tile_stimuli(_cached_stimuli)
 		_cached_threats = _nodes_of(_behavior.threats(_decision_context(null)))
 		_cached_caution_threats = (
-			_outdoor_players_near(CAUTION_RADIUS) if fears_players() else []
+			_outdoor_players_near(CAUTION_RADIUS) if steers_clear_of_players() else []
 		)
 		_cached_blockers = _blockers_near(BLOCKER_SCAN_RADIUS)
 		_cached_nearby_herbivores = _nearby_herbivore_creatures()
@@ -1011,6 +1081,8 @@ func _process(frame_delta: float) -> void:
 	# it fresh every frame is what makes the walk read as smooth rather than
 	# stepping toward a stale point.
 	var courting_partner := courtship_partner()
+	_refresh_grudge()
+	_alp_step(delta)
 	var decision := _behavior.decide(_decision_context(courting_partner))
 
 	_apply_decision(decision, delta)
@@ -1072,6 +1144,40 @@ func set_order(new_order: int) -> bool:
 ## carrots taming would spend the rest of its life fleeing from them.
 func fears_players() -> bool:
 	return not is_tame()
+
+
+## Whether this animal steers AROUND people while roaming -- a DIFFERENT
+## question from whether it perceives them at all, which `fears_players`
+## answers and which one predicate was answering for both.
+##
+## A hunter does not. Measured before this existed: the caution ramp
+## `clampf((CAUTION_RADIUS - d) / (CAUTION_RADIUS - SENSE_RADIUS), 0, 1)`
+## saturates at EXACTLY SENSE_RADIUS -- the distance at which a predator
+## would first perceive the player at all -- so a wandering wolf's closing
+## speed toward a player was 24 px/s at 160, 6 at 100, 3 at 90 and 0.00 at
+## 80. It asymptoted to its own perception boundary and could never cross
+## it. A predator could never INITIATE on a player; it only ever fought one
+## who had walked into its bubble.
+##
+## Cut here and NOT at fears_players, which is the on switch for the whole
+## PLAYER receptor channel (CreatureBehavior's sensitivity map): making a
+## predator "not fear players" would zero its PLAYER sensitivity and stop it
+## attacking at all. The obvious fix is the opposite of a fix.
+##
+## Broader than "predator", because nothing that will fight you gives you a
+## wide berth: a boar is aggressive without hunting anything for food.
+##
+## The herbivore behaviour the five existing caution tests protect is
+## untouched -- a calm grazer still keeps its distance, which is what ended
+## the flee hysteria those tests were written for.
+func steers_clear_of_players() -> bool:
+	if info == null:
+		return false
+	return (
+		fears_players()
+		and not info.is_predator
+		and info.temperament != CreatureInfo.AGGRESSIVE
+	)
 
 
 ## Movement for a tamed, un-roped animal carrying out its order.
@@ -1582,15 +1688,84 @@ func _is_fresh_water_tile(tile: Vector2i) -> bool:
 	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile.x, tile.y)
 
 
+## What this creature's sprite is showing right now: a one-shot row (hurt,
+## death) overrides everything while it plays; otherwise whatever the AI
+## settled on this step, with a standing "walk" reading as idle.
+func current_action() -> String:
+	if _one_shot_action != "":
+		return _one_shot_action
+	if _current_action == "walk" and not _is_moving:
+		return "idle"
+	return _current_action
+
+
+## Enters `action`'s one-shot row IF this species really has art for it,
+## and reports whether it did. Gated on the art existing rather than
+## approximated from another row: hurt and death deliberately have no
+## fallback (see IllustratedAnimalSprite.ONE_SHOT_ACTIONS), and no sheet
+## declares either today, so this returns false for every creature
+## currently in the game and each of them keeps its exact previous
+## behaviour. The day a sheet grows hurt_bands or death_bands, the row
+## plays with no further wiring.
+##
+## Restarts the clock on re-entry, which is what makes a second hit during
+## a flinch replay the row from frame 0 rather than inherit the first's
+## remaining time.
+func _begin_one_shot(action: String) -> bool:
+	if info == null or not _illustrated.has_action(info.species, action):
+		return false
+	_one_shot_action = action
+	_one_shot_elapsed = 0.0
+	_one_shot_held = false
+	# Shown NOW, on the step the hit landed, not on the next one -- a flinch
+	# that starts a frame late reads as unrelated to the blow that caused it,
+	# and a death row's frame 0 is what a killing blow leaves on screen.
+	_animation_step()
+	return true
+
+
+## How long one pass of `action`'s row takes: its own frame count at the
+## shared per-frame cadence. Derived from the art rather than configured,
+## so a 3-frame flinch and a 9-frame collapse each last exactly as long as
+## the artist drew them.
+func _one_shot_duration(action: String) -> float:
+	if info == null:
+		return 0.0
+	var frames: int = _illustrated.generate_textures(info.species, action).size()
+	return float(maxi(frames, 1)) * ANIMATION_FRAME_DURATION
+
+
+## Advances whatever one-shot row is playing and ends it when it runs out:
+## a flinch hands the creature back to its AI, a collapse finishes the death
+## (see _finish_dying). No-op when no row is playing, which is every step of
+## every creature in the game today.
+func _step_one_shot(delta: float) -> void:
+	if _one_shot_action == "":
+		return
+	if _one_shot_held:
+		# The resting pose has had its step on screen; whatever raised the
+		# row now ends it.
+		if _dying:
+			_finish_dying()
+		return
+	_one_shot_elapsed += delta
+	if _one_shot_elapsed < _one_shot_duration(_one_shot_action):
+		return
+	if IllustratedAnimalSprite.holds_last_frame(_one_shot_action):
+		_one_shot_held = true
+		return
+	_one_shot_action = ""
+
+
 func _animation_step() -> void:
 	if info == null:
 		return
-	if _world != null and (_perception.is_on(_world, _current_tile(), "water") or _is_fresh_water_tile(_current_tile())):
+	# A one-shot row outranks the water check too: a creature that dies in a
+	# river collapses, it does not go back to swimming.
+	if _one_shot_action == "" and _world != null and (_perception.is_on(_world, _current_tile(), "water") or _is_fresh_water_tile(_current_tile())):
 		_current_action = "swim"
 
-	var action := _current_action
-	if action == "walk" and not _is_moving:
-		action = "idle"
+	var action := current_action()
 
 	var uses_illustrated := _illustrated.has_action(info.species, action)
 	if not _animation_frames.has(action):
@@ -1629,6 +1804,17 @@ func _animation_step() -> void:
 		# creature's own _elapsed_time starts at 0.0 and advances by the same
 		# per-frame delta absent an LOD stagger.
 		texture = frames[_animation.idle_frame_index(_elapsed_time, wander_seed, frames.size())]
+	elif IllustratedAnimalSprite.plays_once(action):
+		# Paced by the row's OWN clock (see _one_shot_elapsed), not the
+		# shared _elapsed_time. A held row (death) clamps on its final
+		# frame so the body stays where it fell; a running one (hurt) is
+		# cleared by _step_one_shot before its index can overrun, and the
+		# wrap is belt-and-braces for an LOD step that overshoots the end.
+		var index := int(_one_shot_elapsed / ANIMATION_FRAME_DURATION)
+		if IllustratedAnimalSprite.holds_last_frame(action):
+			texture = frames[mini(index, frames.size() - 1)]
+		else:
+			texture = frames[index % frames.size()]
 	else:
 		texture = frames[int(_elapsed_time / ANIMATION_FRAME_DURATION) % frames.size()]
 	_apply_action_scale(uses_illustrated, action)
@@ -1780,10 +1966,20 @@ func _apply_action_scale(uses_illustrated: bool, action: String = "walk") -> voi
 	# normal size once mature -- the mammal counterpart to
 	# AmbientFlyerMarker._step_growing's own adult_scale * size_scale_at.
 	var new_scale := _base_scale * MammalGrowth.size_scale_at(age_seconds, info.species)
+	# The rear-up before a strike (BiteTell, docs/concept/predator_profiles.
+	# md), folded in HERE rather than written onto `scale` from outside --
+	# this line runs on every stepped frame and would revert an external
+	# bump within one of them. Exactly Vector2.ONE when nothing is coming,
+	# so there is no restore branch to get wrong.
+	#
+	# _shadow_base_scale deliberately keeps the UNREARED size: a shadow is
+	# cast on the ground by a body that has not moved, and growing it with
+	# the rear-up would read as the animal rising off its own shadow.
+	_shadow_base_scale = new_scale
+	new_scale *= BiteTell.scale_multiplier(_windup_remaining, _windup_total)
 	if new_scale == scale:
 		return
 	scale = new_scale
-	_shadow_base_scale = new_scale
 
 
 ## How fast a serpent can swing its heading, in radians/sec. A snake is a
@@ -1964,6 +2160,24 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# covers all of them.
 	if disease_id == DiseaseModel.HERD and disease_state == DiseaseModel.State.INFECTED:
 		speed *= _disease_model.movement_speed_multiplier(disease_severity)
+	# And the `slow` spell atom, at the same choke point and for the same
+	# reason (docs/concept/spell_runtime.md).
+	#
+	# Measured: `grep -c SLOW` over this file returned ZERO. The marker
+	# carried the stacks faithfully in active_spell_debuffs and its movement
+	# never looked at them, so Frost Lance -- whose own source is
+	# `frost_damage(magnitude: 6) |> slow(duration: 3)` -- slowed nothing in
+	# the world and half of a two-atom spell was decoration. `freeze` and
+	# `root` worked only because is_rooted() stops the creature outright;
+	# `slow` is the one that needed a speed, and a speed was the one thing
+	# nothing multiplied.
+	#
+	# The SHARED figure, not a second opinion: Player wears exactly this
+	# multiplier when slowed (_status_speed_multiplier), so one spell means
+	# one thing to everything it lands on. Multiplied rather than replacing,
+	# so a sick AND slowed animal is slower than either.
+	if _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.SLOW) > 0:
+		speed *= SpellStatusEffects.SLOW_SPEED_MULTIPLIER
 	# Real slope underfoot slows a creature exactly the way it slows the
 	# player (see _terrain_speed_multiplier above) -- one query for the tile
 	# this creature is CURRENTLY standing on, not a scan over any area, so
@@ -2056,8 +2270,73 @@ func _decision_context(partner: Node) -> Dictionary:
 		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),
 		"is_world_boss": info.is_world_boss,
 		"is_aggroed": info.is_aggroed,
+		"waits_for_its_moment": _waits_for_its_moment(),
 		"stimuli": stimuli,
 	}
+
+
+## A grudge-bearer's aggro, read off the live ecosystem simulation
+## (docs/concept/monsters.md, entry 5 -- the Curupira, "the ecosystem sim is
+## the aggro table").
+##
+## The only creature in the game whose hostility is a fact about the REGION
+## rather than about the player's position: it is quiet while the local herd
+## is above maximum sustainable yield and hostile once somebody has hunted
+## it below (EcologicalGrudge, whose threshold is the peak of the very
+## logistic curve PopulationModel runs). Re-read rather than latched, so a
+## forest that recovers forgives.
+## Whether this species perceives nothing until its own condition is met
+## (docs/concept/monsters.md -- the Curupira's footprint, the Alp's
+## sleeper). Everything else in the game perceives threats always.
+func _waits_for_its_moment() -> bool:
+	if info == null:
+		return false
+	return EcologicalGrudge.BEARS_A_GRUDGE.has(info.species) or info.species == ALP_SPECIES
+
+
+## The Alp, which is not an animal: it sits on a sleeper's chest and presses
+## (docs/concept/monsters.md entry 3, docs/concept/sleep.md). It is the
+## exact inverse of every other creature here -- dangerous while the player
+## is NOT -- so it neither hunts nor bites, and standing up is what makes a
+## character safe from it. The "never bites" half is enforced in
+## _try_attack, through NightMare's own rule.
+const ALP_SPECIES := NightMare.SPECIES
+
+
+func _alp_step(delta: float) -> void:
+	if info == null or info.species != ALP_SPECIES:
+		return
+	var player := _cached_player
+	if player == null or not is_instance_valid(player):
+		return
+	if not player.has_method("is_resting"):
+		return
+	var dark := true
+	if _world != null and _world.has_method("current_sun_elevation_deg"):
+		dark = NightMare.is_dark(_world.current_sun_elevation_deg())
+	var its_moment: bool = NightMare.preys_on({"resting": player.is_resting(), "dark": dark})
+	info.is_aggroed = its_moment
+	if not its_moment:
+		return
+	if position.distance_to(player.position) > ATTACK_RANGE:
+		return
+	# The drain, and only the drain -- never health. It empties the bar the
+	# sleeper was resting to fill, so waking costs them the night and NOT
+	# waking costs them the morning.
+	if player.get("survival") != null:
+		NightMare.press(player.survival, delta)
+
+
+func _refresh_grudge() -> void:
+	if info == null or not EcologicalGrudge.BEARS_A_GRUDGE.has(info.species):
+		return
+	if _world == null or not _world.has_method("herbivore_population_at_chunk"):
+		return
+	var chunk := Discovery.chunk_of(_current_tile())
+	info.is_aggroed = EcologicalGrudge.is_provoked(
+		_world.herbivore_population_at_chunk(chunk),
+		_world.herbivore_capacity_at_chunk(chunk)
+	)
 
 
 ## This individual's genome: the stored one when it has one (a bred or
@@ -2147,15 +2426,23 @@ func _apply_decision(decision: Dictionary, delta: float) -> void:
 		# it. Measured at the time: a wall one tile ahead, and the animal
 		# crossed two full tiles through it in a single 0.5s step.
 		"attack":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			# _advance_gated is where the plant-to-strike freeze lives, so
+			# this reads exactly as it always did: a committed creature
+			# simply does not advance. Measured across the twelve biting
+			# profiles, a creature that kept closing during its own windup
+			# would defeat the player's dodge for ten of them -- a bear
+			# closes 62.2 px in its 0.90 s, against a dodge worth 20.
+			# Frozen, the gap at resolve is always R + 20 > 16
+			# (docs/concept/predator_profiles.md).
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_attack(_stimulus_node(decision))
 			_current_action = "attack"
 		"hunt":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_eat(_stimulus_node(decision))
 			_current_action = "attack"
 		"scavenge":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_scavenge(_stimulus_node(decision))
 			_current_action = "attack"
 		"seek_water":
@@ -2207,17 +2494,170 @@ func _step_courtship_movement(direction: Vector2, delta: float) -> void:
 const VENOMOUS_SPECIES := {"venomous_snake": true}
 
 
+## How fast this individual runs when it is hunting you, from its own
+## species profile (SpeciesBite, docs/concept/predator_profiles.md).
+##
+## Measured before this existed, and the sharpest single fact about the
+## world's difficulty gradient: HUNT_SPEED is 36.0 px/s while
+## Player.BASE_SPEED is 40.0 -- so every pursuer in the game was outWALKED
+## by a player who never touched the sprint key. A ring that gates which
+## species may spawn gates nothing at all when none of them can close a
+## metre on you.
+##
+## A species with no profile keeps the shared HUNT_SPEED, so nothing
+## unprofiled silently stops moving.
+func hunt_speed() -> float:
+	var species := info.species if info != null else ""
+	if SpeciesBite.has_profile(species):
+		return float(
+			SpeciesBite.profile_for(species)["pursuit_speed_tiles_per_second"]
+		) * TILE_SIZE_PX
+	return HUNT_SPEED
+
+
+## What this individual bites for, from its own species profile
+## (SpeciesBite, docs/concept/predator_profiles.md). Falls back to the
+## shared ATTACK_DAMAGE for a species with no profile -- an unprofiled
+## animal must still be able to hurt you, not silently deal zero.
+## Scaled by this individual's own level, which is the whole point of a
+## level: "that one is bigger" has to be a warning rather than a longer
+## chore (docs/concept/combat.md, "A level is a bigger animal").
+func bite_damage() -> float:
+	var species := info.species if info != null else ""
+	var authored := ATTACK_DAMAGE
+	if SpeciesBite.has_profile(species):
+		authored = SpeciesBite.bite_damage_for(species)
+	return authored * _level_growth()
+
+
+## How much bigger this individual is than the smallest of its kind.
+func _level_growth() -> float:
+	return CreatureInfo.level_growth(info.level) if info != null else 1.0
+
+
+## How long this individual telegraphs a bite at `target_max_health`.
+##
+## Asked of the INDIVIDUAL'S bite, not the species sheet's, and that is what
+## makes scaling the bite safe rather than cruel.
+## `required_windup_seconds` derives the tell from the fraction of your
+## health the blow would take, so a harder-hitting animal is automatically
+## warned about for longer -- but only if it is asked about the blow this
+## animal actually lands. A level-5 wolf hitting for 10 on the tell of one
+## that hits for 6 is exactly the cheap shot the fairness model forbids.
+##
+## The authored column stays a FLOOR, the same way `windup_seconds_for`
+## treats it: an animal is never telegraphed for less than its sheet says.
+func windup_seconds_against(target_max_health: float) -> float:
+	var species := info.species if info != null else ""
+	if not SpeciesBite.has_profile(species):
+		return 0.0
+	return maxf(
+		float(SpeciesBite.profile_for(species)["windup_seconds"]),
+		SpeciesBite.required_windup_seconds(bite_damage(), target_max_health)
+	)
+
+
+## How long this individual waits between bites, from the same profile.
+## A heavy hitter swings slowly, which is what gives a player the room to
+## answer it.
+func bite_cooldown_seconds() -> float:
+	var species := info.species if info != null else ""
+	if SpeciesBite.has_profile(species):
+		return SpeciesBite.bite_cooldown_seconds_for(species)
+	return ATTACK_COOLDOWN
+
+
 func _try_attack(target: Node) -> void:
 	if target == null or _attack_cooldown_remaining > 0.0:
 		return
+	# The Alp never strikes: what it takes is the rest itself, and a bite
+	# would cancel its own mechanic on the frame it landed, because
+	# Player.take_damage wakes a sleeper (docs/concept/monsters.md entry 3,
+	# docs/concept/sleep.md). Its harm is _alp_step's press, which runs
+	# whether or not it ever reaches this path.
+	if info != null and NightMare.presses_instead_of_striking(info.species):
+		return
+	if _windup_remaining > 0.0:
+		return  # already committed -- the clock resolves it, not a second decision
 	if position.distance_to(target.position) > ATTACK_RANGE:
 		return
+	if not target.has_method("take_damage"):
+		return
+	# The telegraph this species is owed, from the table that has carried it
+	# since it was written and never had a caller
+	# (docs/concept/predator_profiles.md). It takes the TARGET's own live max
+	# health by design -- a frailer character is warned longer, not less --
+	# so the number is read here, where the target is known, rather than
+	# baked per species.
+	var windup := windup_seconds_against(_max_health_of(target))
+	if windup <= 0.0:
+		# A species with no bite is owed no telegraph, and a zero-length
+		# windup must not become a state a grazer sits in every frame.
+		_land_bite(target)
+		return
+	_windup_remaining = windup
+	_windup_total = windup
+	_windup_target_id = target.get_instance_id()
+
+
+## What the jaws finally close on, or nothing.
+##
+## The range is re-checked against the target's CURRENT position, and that
+## check is the whole reason a dodge is worth anything: without it the
+## windup is a delayed guaranteed hit whose only counter is the player's
+## 0.25 s invincibility boolean -- a window that always ends exactly when
+## the jaws close, so reacting on the FIRST frame of the tell would be
+## punished on eleven of the twelve biting species.
+##
+## A miss still charges the recovery, so a dodge buys TIME rather than one
+## skipped hit.
+func _resolve_windup() -> void:
+	var target := instance_from_id(_windup_target_id) as Node2D
+	_windup_target_id = 0
+	_windup_total = 0.0
+	if target == null or not is_instance_valid(target) or info == null or _dying:
+		return
+	# A miss costs the recovery too, which is what makes a dodge buy TIME
+	# rather than one skipped hit. Charged here for the miss and inside
+	# _land_bite for the hit -- never both, which an adversarial read of
+	# this function caught as a redundant double assignment.
+	if position.distance_to(target.position) > ATTACK_RANGE:
+		_attack_cooldown_remaining = bite_cooldown_seconds()
+		return  # the jaws closed on empty ground
 	if target.has_method("take_damage"):
-		target.take_damage(ATTACK_DAMAGE)
-		if VENOMOUS_SPECIES.has(info.species) and target.has_method("apply_venom"):
-			target.apply_venom()
-		_try_transmit_predator_disease(target)
-		_attack_cooldown_remaining = ATTACK_COOLDOWN
+		_land_bite(target)
+	else:
+		_attack_cooldown_remaining = bite_cooldown_seconds()
+
+
+## The bite itself, once something is really there to bite.
+##
+## What THIS animal bites for, not one number every species shares
+## (docs/concept/predator_profiles.md). Measured before SpeciesBite: a mouse
+## and a bear both bit for ATTACK_DAMAGE 6.0 on the same 0.8 s cooldown, so
+## the world's difficulty rings gated which species may spawn while gating
+## nothing a player could feel. A species with no profile of its own falls
+## back to the shared constants rather than dealing nothing.
+func _land_bite(target: Node) -> void:
+	target.take_damage(bite_damage())
+	if VENOMOUS_SPECIES.has(info.species) and target.has_method("apply_venom"):
+		target.apply_venom()
+	_try_transmit_predator_disease(target)
+	_attack_cooldown_remaining = bite_cooldown_seconds()
+
+
+## The target's own live maximum health, for the telegraph it is owed. A
+## player carries `max_health`; a creature carries `info.max_health`. Falls
+## back to the table's own reference player rather than to zero, which
+## `required_windup_seconds` reads as "warn them for the maximum".
+func _max_health_of(target: Node) -> float:
+	var direct = target.get("max_health")
+	if direct != null and float(direct) > 0.0:
+		return float(direct)
+	var target_info = target.get("info")
+	if target_info != null and float(target_info.max_health) > 0.0:
+		return float(target_info.max_health)
+	return SpeciesBite.PLAYER_REFERENCE_MAX_HEALTH
 
 
 ## Predator (rabies-like) disease transmission: rides this SAME bite,
@@ -2461,6 +2901,18 @@ func _fence_blocks_movement(heading: Vector2) -> bool:
 ## trees, but must not be talked out of running by the very thing it's
 ## running from.
 func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats: bool) -> void:
+	# An animal that has planted itself to strike does not move, whatever
+	# the AI decides this frame (docs/concept/predator_profiles.md).
+	#
+	# The guard lives at the single movement choke point rather than in the
+	# "attack" arm, and that is a measured correction rather than tidiness:
+	# a committed creature whose decision flips -- to wander, to graze, to
+	# flee -- was still free to walk away from its own bite, and a bear's
+	# 0.90 s telegraph is long enough to do it. The jaws then closed on
+	# empty ground it had left itself.
+	if is_winding_up():
+		_is_moving = false
+		return
 	if _gate_standing:
 		# The gate already said "nowhere to go" this sensing window -- hold
 		# idle until fresh senses instead of re-scanning every candidate
@@ -3046,11 +3498,28 @@ func _scan_smoke_stimuli() -> Array:
 		return []
 	var stimuli: Array = []
 	for fire_position in _world.campfires_near(position, Olfaction.MAX_RANGE_TILES):
-		var distance_tiles := position.distance_to(fire_position) / _tile_size
+		var distance_px := position.distance_to(fire_position)
+		var distance_tiles := distance_px / _tile_size
 		stimuli.append({
 			"position": fire_position,
 			"features": {Ethogram.SMOKE: 1.0},
-			"strength": Olfaction.dilution(distance_tiles),
+			# On the SHARED ranking scale (Affinity.proximity, in pixels),
+			# attenuated by the smell's own dilution law rather than ranked
+			# by it. Measured before this line was a product: a strength of
+			# dilution(tiles) alone -- a 0..1 curve over twenty tiles --
+			# competed directly against every other stimulus's
+			# proximity(pixels) = 1/(1+px). A player two tiles away scored
+			# 0.0303 and a campfire ten tiles away scored 0.330, so the fire
+			# won by 10.9x and the crossover sat at 17.75 tiles. Since the
+			# fear wiring is the first rung of the mammal ladder and smoke's
+			# valence is negative, an aggressive predator two tiles from the
+			# player resolved that wiring on SMOKE and fled.
+			#
+			# A lit campfire was therefore a TWENTY-TILE no-predator zone --
+			# four times SENSE_RADIUS, twice CAUTION_RADIUS -- and a player
+			# who lit one at camp was untouchable inside 320 px. The whole
+			# danger gradient, switched off by the first fire.
+			"strength": Affinity.proximity(distance_px) * Olfaction.dilution(distance_tiles),
 		})
 	return stimuli
 
@@ -3091,9 +3560,146 @@ func _nearest_node(nodes: Array) -> Node:
 ## no health lost, no aggro gained, nothing else in this function runs.
 ## Once aggroed, or for any non-boss species, damage always applies exactly
 ## as before this feature existed.
-func take_damage(amount: float) -> void:
-	if info == null:
+## This creature's own coat, remembered rather than written once and
+## forgotten -- the tint it should be wearing whenever nothing is happening
+## to it (see coat_tint_for, docs/concept/animal_genetics.md).
+##
+## Measured: nothing in this codebase could name a creature's baseline tint,
+## which is why HEALTHY_MODULATE_COLOR was a flat Color.WHITE and why the
+## first time an animal recovered from a disease its coat tell was erased
+## for the rest of its life. A hit flash restoring the same WHITE would have
+## done it on every blow, so the fix and the feature are one change.
+var _coat_tint := Color.WHITE
+
+## Seconds left on the flash a blow lit (see HitFlash). Counted down in
+## _process, AFTER _disease_step, because the disease tint rewrites modulate
+## on every stepped frame for anything not SUSCEPTIBLE and would otherwise
+## swallow the blow.
+var _hit_flash_remaining := 0.0
+
+## How much of its own health bar the blow that lit it cost, 0..1 -- the
+## mirror of the severity the player's own screen flash reads, so a scratch
+## and a near-killing blow do not light an animal identically.
+var _hit_flash_severity := 1.0
+
+
+func base_modulate() -> Color:
+	return _coat_tint
+
+
+## One frame of a struck body being lit. Written unconditionally rather than
+## only while a flash is running: HitFlash.tint returns the base exactly once
+## the clock is out, so there is no "restore" branch to get wrong, and an
+## infected creature's per-frame tint is leaned rather than fought.
+func _hit_flash_step(delta: float) -> void:
+	if _hit_flash_remaining <= 0.0:
 		return
+	_hit_flash_remaining = maxf(0.0, _hit_flash_remaining - delta)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining, _hit_flash_severity)
+
+
+## What this creature would be wearing with no flash on it: its pallor if it
+## is visibly sick, its own coat otherwise.
+func _disease_aware_base() -> Color:
+	if disease_state == DiseaseModel.State.INFECTED:
+		return SICK_MODULATE_COLOR
+	return base_modulate()
+
+
+# -- the telegraph (docs/concept/predator_profiles.md) ---------------------
+#
+# SpeciesBite's windup_seconds column was authored, fairness-tested and
+# balanced against the player's own dodge -- and completely dead. A bite
+# landed on the frame a creature crossed ATTACK_RANGE, so the whole
+# fairness model was arithmetic about a thing that never happened.
+
+## Seconds left before the jaws close, and how long the whole rear-up was
+## (the tell reads the ratio, so it has to remember both).
+var _windup_remaining := 0.0
+var _windup_total := 0.0
+
+## Who it committed to. An instance id rather than a reference: the target
+## can legitimately be freed mid-windup, and _resolve_windup re-validates
+## exactly as _stimulus_node already does.
+var _windup_target_id := 0
+
+
+func is_winding_up() -> bool:
+	return _windup_remaining > 0.0
+
+
+func windup_remaining() -> float:
+	return _windup_remaining
+
+
+## One frame of the jaws coming. Ticked beside the bite cooldown, ABOVE
+## every early return, so a commitment keeps running through a shove, a
+## root or a lost target -- what a shove buys is DISTANCE, and distance is
+## what _resolve_windup's range check reads.
+##
+## Being hit deliberately does NOT cancel it: the player's own swing is on
+## a 0.5 s cooldown, shorter than eleven of the twelve windups, so an
+## interrupt would make every heavy predator unbiteable again -- the exact
+## unloseable fight this overhaul just finished removing.
+func _windup_step(delta: float) -> void:
+	if _windup_remaining <= 0.0:
+		return
+	_windup_remaining = maxf(0.0, _windup_remaining - delta)
+	if _windup_remaining <= 0.0:
+		_resolve_windup()
+
+
+func take_damage(amount: float) -> void:
+	if info == null or _dying:
+		return  # already dead, just not finished falling over -- a corpse
+		        # cannot be killed again (that would book the death twice
+		        # and leave two carcasses)
+	if info.is_world_boss and not info.is_aggroed:
+		if not _boss_aggro.deals_real_damage(amount, info.max_health):
+			return
+		info.is_aggroed = true
+	var health_before := info.health
+	info.health = _health.take_damage(info.health, amount)
+	_update_health_bar()
+	# It lights up (docs/concept/feedback.md), and how hard says how much of
+	# its own bar that took -- the mirror of the severity the player's screen
+	# reads, so the exchange says the same thing in the same way both ways.
+	# Lit BEFORE the death branch so the killing blow is not the one blow in
+	# the fight that does not read. Set here rather than in _process because
+	# take_damage is called from OUTSIDE the step -- a player's swing, a
+	# predator's bite -- so this is the only place that knows one landed.
+	_light_hit_flash((health_before - info.health) / maxf(info.max_health, 1.0))
+	if _health.is_dead(info.health):
+		_aggressor = null
+		_die()
+		return  # a lethal hit does not flinch on its way out: the death row
+		        # is the one that plays, and only one can play at a time
+	# A survivable hit flinches -- one pass of the hurt row, then straight
+	# back to whatever the AI was doing. A no-op for every species without
+	# hurt art, which today is all of them (see _begin_one_shot), which is
+	# exactly why the flash above is what a player actually sees.
+	_begin_one_shot("hurt")
+
+
+## Damage that is already inside this animal: an ignite or a blight tick
+## (docs/concept/spell_runtime.md).
+##
+## A tick is NOT a blow, the same split `Player.take_tick_damage` already
+## draws, and the reason is visible here rather than arithmetic: every
+## damage-over-time step passes a per-frame FRACTION, so routing one through
+## `take_damage` relights the hit flash sixty times a second and pins a
+## burning animal at peak red for the whole burn. A creature permanently the
+## colour of "just hit" tells a player nothing about when it was hit.
+##
+## So: no flash, no flinch row, and nothing to be angry at -- a burn has
+## nobody to blame. Death still goes through the one `_die()` choke point.
+func take_tick_damage(amount: float) -> void:
+	if info == null or _dying or amount <= 0.0:
+		return
+	# The world-boss filter stays: a tick that does not clear BossAggro's
+	# real-damage threshold bounces off a sleeping boss exactly as a feeble
+	# blow does (docs/concept/worldbosses.md), so a burn cannot whittle one
+	# down without ever waking it.
 	if info.is_world_boss and not info.is_aggroed:
 		if not _boss_aggro.deals_real_damage(amount, info.max_health):
 			return
@@ -3101,7 +3707,16 @@ func take_damage(amount: float) -> void:
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
 	if _health.is_dead(info.health):
+		_aggressor = null
 		_die()
+
+
+## Lights the flash a blow just earned, at a depth that says how much of
+## this animal's own bar it cost.
+func _light_hit_flash(severity: float) -> void:
+	_hit_flash_remaining = HitFlash.SECONDS
+	_hit_flash_severity = clampf(severity, 0.0, 1.0)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining, _hit_flash_severity)
 
 
 ## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
@@ -3247,7 +3862,9 @@ func _spell_status_step(delta: float) -> void:
 	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
 		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
 		if stacks > 0:
-			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+			take_tick_damage(
+				_spell_status_effects.damage_per_second(debuff_id, stacks) * delta
+			)
 	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
 
 
@@ -3311,6 +3928,32 @@ func _mushroom_effect_step(delta: float) -> void:
 	active_mushroom_debuffs = _debuff_stack.advance(active_mushroom_debuffs, delta)
 
 
+## Shows or hides every status bar this marker carries -- health, and the
+## taming trust bar above it. For a marker being used as SCENERY rather
+## than as a live animal: the character creator's own ambient boar (see
+## CharacterPreviewDiorama) is a real marker, so it arrived wearing the
+## world's combat UI, and a red health bar floating over a character
+## portrait is nobody's idea of a portrait.
+##
+## Deliberately a method here rather than the caller reaching into
+## _health_bar_bg/_health_bar_fill/_trust_bar: which bars exist, and which
+## of them are independently gated (the trust bar only shows while the
+## player is genuinely in the taming loop -- see _trust_bar's own gate), is
+## this marker's business, and a caller poking at children would silently
+## miss the next bar added. Hiding is one-way for exactly that reason: the
+## trust bar's own gate decides when it comes back.
+func set_status_bars_visible(shown: bool) -> void:
+	for bar in [_health_bar_bg, _health_bar_fill, _trust_bar]:
+		if bar != null and not shown:
+			bar.visible = false
+	if not shown:
+		return
+	if _health_bar_bg != null:
+		_health_bar_bg.visible = true
+	if _health_bar_fill != null:
+		_health_bar_fill.visible = true
+
+
 func _update_health_bar() -> void:
 	if info == null or _health_bar_fill == null:
 		return
@@ -3334,7 +3977,52 @@ func _die() -> void:
 	# unguarded call. _book_death_against_the_region is the version that skips
 	# animals the player has a stake in -- carrying capacity governs WILD
 	# animals, and KeptAnimals says so in its own doc comment.
+	# Booked AT ONCE, on the killing blow -- never deferred to the end of a
+	# death row below. A death that only lands when an animation finishes is
+	# a death a chunk unload mid-collapse would lose outright, and the
+	# aggregate restocking whatever the player just hunted is the exact bug
+	# this booking was added to close.
 	_book_death_against_the_region()
+	# The clock and the pose go together: a creature killed mid-strike must
+	# not keep a windup running, or -- once any species ships death art and
+	# _dying is really set -- it would stay visibly reared over its own
+	# corpse for the whole death row, because _apply_action_scale still runs
+	# from that branch (docs/concept/predator_profiles.md).
+	_windup_remaining = 0.0
+	_windup_total = 0.0
+	_windup_target_id = 0
+	if _begin_one_shot("death"):
+		_dying = true
+		return  # the body collapses first; _finish_dying lands the carcass
+	_spawn_carcass_if_eligible()
+	queue_free()
+
+
+## The end of a death row: the carcass lands where the body finally came to
+## rest, and the marker goes. Deliberately AFTER the row rather than on the
+## killing blow -- a carcass appearing on top of a creature still visibly
+## collapsing is the same "evaporates instead of being cut down" mistake
+## docs/concept/carrion.md was written to fix, just one animation later.
+## Only ever reached by a species with real death art; everything else took
+## the instant path in _die above.
+## True once this creature's death has BEGUN, whether or not the marker has
+## gone yet -- freed outright (no death art) or still collapsing (_dying).
+## What the three unconditional ticks at the top of _process check: each of
+## disease, an ignite/blight tick and a Death Cap's weakened roll can kill,
+## and each has to stop the rest of that step when it does. Asking
+## is_queued_for_deletion() alone was right while every death freed the
+## marker in the same frame; a body that collapses first is dead for a
+## handful of steps before that ever becomes true, and the step it died on
+## went on to run its AI -- a dead animal wandering off (pinned by
+## test_a_death_that_begins_mid_step_stops_the_rest_of_that_step).
+func _death_has_begun() -> bool:
+	return _dying or is_queued_for_deletion()
+
+
+func _finish_dying() -> void:
+	_one_shot_action = ""
+	_one_shot_held = false
+	_dying = false
 	_spawn_carcass_if_eligible()
 	queue_free()
 
@@ -3430,10 +4118,13 @@ func _disease_step(delta: float) -> void:
 ## reuses Sprite2D's own `modulate` rather than a new rendering system --
 ## same reasoning as the taming sick pip, but shown on EVERY infected
 ## creature, tamed or wild, not just ones the player has a stake in.
+## A creature that is NOT visibly sick goes back to being ITSELF -- its own
+## coat -- not to flat white. Measured bug: HEALTHY_MODULATE_COLOR is
+## Color.WHITE and this runs on every stepped frame for anything not
+## SUSCEPTIBLE, so the first time an animal recovered, the coat tell
+## AnimalFitness gave it was erased permanently.
 func _update_disease_tint() -> void:
-	modulate = (
-		SICK_MODULATE_COLOR if disease_state == DiseaseModel.State.INFECTED else HEALTHY_MODULATE_COLOR
-	)
+	modulate = HitFlash.tint(_disease_aware_base(), _hit_flash_remaining, _hit_flash_severity)
 
 
 ## Herd (foot-and-mouth-like) proximity transmission: an infected herbivore
@@ -3505,6 +4196,86 @@ func _nearest_contaminated_carcass() -> Node:
 ## Starts a shove of `force` total displacement, played out smoothly over
 ## KNOCKBACK_DURATION (see _process/Knockback.step) rather than teleporting
 ## instantly. A knockback already in progress is replaced by the new one.
+## Who hit this animal, while it still cares. Null for anything that has
+## not been struck, and cleared by death -- a corpse holds no grudge.
+var _aggressor: Node = null
+
+
+func aggressor() -> Node:
+	return _aggressor
+
+
+## How far a blow of this force really moves THIS body.
+##
+## Measured before this existed: every swing shoved every creature the flat
+## `Player.KNOCKBACK_FORCE` of 60 px, whether it landed on a 0.5 kg
+## squirrel or a 300 kg bear. The player's reach is 20 px and a creature's
+## is 16, the player's cooldown is 0.5 s, and `_process` returns early for
+## the whole KNOCKBACK_DURATION -- so one swing put a bear outside its own
+## bite range AND froze its AI while it slid. A player who held the attack
+## key and walked forward killed every predator in the roster without being
+## bitten once.
+##
+## Momentum against mass is the model this project already uses everywhere
+## else (Throwable.impact_knockback, PebbleDispersion, the Kick action): the
+## same blow moves a light body further than a heavy one. The reference is
+## SpeciesBite.REFERENCE_SPECIES, the wolf this game derives every bite from
+## -- so a wolf is shoved exactly as far as it always was and the existing
+## 60 px calibration is preserved, while heavier animals hold their ground.
+##
+## Capped at the incoming force so this can only ever REDUCE a shove: a
+## squirrel does not fly across the screen because it is light.
+func knockback_distance_for(force: Vector2) -> float:
+	var incoming := force.length()
+	if incoming <= 0.0 or info == null:
+		return 0.0
+	var mass := CreatureMass.mass_kg_for(info.species)
+	if mass <= 0.0:
+		return incoming
+	var reference := CreatureMass.mass_kg_for(SpeciesBite.REFERENCE_SPECIES)
+	return minf(incoming * reference / mass, incoming)
+
+
+## A blow, as an EVENT rather than as arithmetic.
+##
+## Before this, `take_damage` subtracted health, updated the bar and called
+## a flinch that is a no-op for every species -- it set no target, raised no
+## aggro and woke no herd. There was no damage-driven aggro anywhere in the
+## game: a creature struck from behind carried on with its errand.
+##
+## The shove is applied through `knockback_distance_for`, so what moves is a
+## function of the blow AND the body it lands on, and the aggro is recorded
+## only if the animal survived, because a corpse has no opinion.
+func struck_by(attacker: Node, amount: float, force: Vector2 = Vector2.ZERO) -> void:
+	if info == null or _dying:
+		return
+	if force.length() > 0.0:
+		apply_knockback(force.normalized() * knockback_distance_for(force))
+	take_damage(amount)
+	if info == null or _dying or _health.is_dead(info.health):
+		return
+	_aggressor = attacker
+	info.is_aggroed = true
+
+
 func apply_knockback(force: Vector2) -> void:
+	# An animal that has planted itself to strike is BRACED, and a braced
+	# animal is not shoved (docs/concept/predator_profiles.md).
+	#
+	# Not flavour -- the hole the freeze opens, measured rather than
+	# reasoned about. The freeze is what makes the dodge real, because a
+	# creature that kept closing would defeat it for ten of the twelve
+	# biting profiles. But a frozen creature cannot close again either, so
+	# any shove during a windup would make the bite whiff: a bear is shoved
+	# 8 px per swing and winds up for 0.90 s, during which the player's
+	# 0.5 s swing lands twice. Sixteen pixels, and the jaws close on nothing
+	# for ever -- precisely the unloseable fight this overhaul had just
+	# finished removing.
+	#
+	# The asymmetry IS the design: moving yourself out of reach answers a
+	# bite; shoving the animal does not. Being struck still hurts it and
+	# still makes it angry (see struck_by) -- only its footing is unmoved.
+	if is_winding_up():
+		return
 	_knockback_remaining = force
 	_knockback_time_remaining = KNOCKBACK_DURATION

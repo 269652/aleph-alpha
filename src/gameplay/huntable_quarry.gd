@@ -155,7 +155,7 @@ static func meat_yield_of(candidate) -> int:
 	var info = candidate.get("info")
 	if info == null:
 		return 0
-	return Butchering.meat_count(0.0, _mass_ratio_of(candidate, info))
+	return Butchering.meat_count(0.0, _mass_ratio_of(candidate, info), info.species)
 
 
 static func _mass_ratio_of(candidate, info) -> float:

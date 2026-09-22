@@ -95,8 +95,24 @@ molecules, what emits them, and how a smell thins with range.
   (`EarthChunkManager.campfires_near`) reads as a real SMOKE stimulus to
   every mammal (`CreatureMarker._scan_smoke_stimuli`), wired to the same
   fear gate a predator or the player already drives — a lit fire empties
-  the meadow around it. Strength follows `Olfaction.dilution` like any
-  other smell. Species without their own `Ethogram.SPECIES` smell record
+  the meadow around it.
+
+  **Its strength is `proximity(px) × dilution(tiles)`, not the dilution
+  alone**, and the correction is worth recording because the original cost
+  the game its danger gradient. `BehaviorKernel` ranks every stimulus by
+  `Affinity.proximity(distance_in_PIXELS)` = 1/(1+px), except one carrying
+  its own `strength` — and smoke reported `dilution(tiles)`, a 0..1 curve
+  over twenty tiles, competing directly against it. Measured: a player two
+  tiles away scored **0.0303** and a campfire ten tiles away **0.330**, so
+  the fire won by 10.9× and the crossover sat at 17.75 tiles. The fear
+  wiring is the first rung of the mammal ladder, so an aggressive predator
+  two tiles from the player resolved it on SMOKE and fled. **A lit campfire
+  was a twenty-tile no-predator zone** — four times `SENSE_RADIUS`, twice
+  `CAUTION_RADIUS` — and a player who lit one at camp was untouchable
+  inside 320 px. The dilution law is still the smell's own; it attenuates
+  the shared ranking rather than replacing it.
+
+  Species without their own `Ethogram.SPECIES` smell record
   (most of them) react through the mammal body plan's own SMOKE default
   (sensitivity 1.0, valence -1.0 — the same severity as PREDATOR/PLAYER),
   not a per-species nose.

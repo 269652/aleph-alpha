@@ -17,6 +17,8 @@ const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const NpcProduction = preload("res://src/world/npc_production.gd")
 
 
 ## A region with controllable readings, the same shape SettlementGranary.
@@ -45,18 +47,25 @@ func test_the_count_is_the_villages_own_draw_over_what_one_producer_yields():
 		)
 
 
-## A founding village of five needs exactly one: its draw is six food units
-## an assessment and a real worked field brings in about seven and a half.
-## The old rule's answer, for the first time for a reason.
-func test_a_founding_village_of_five_needs_one_food_producer():
-	assert_eq(SettlementFoodDemand.producers_needed(5), 1)
+## A founding village of five needs THREE: its draw is six food units an
+## assessment and a real field, worked from a cottage a street away for the
+## work blocks of a real day, brings in two and a half
+## (docs/concept/village_economy_balance.md mechanism 6). It used to say
+## one, sized against a stub-world field nobody ever walked home from --
+## and a real village of ten with three fields ate its shelves to zero.
+func test_a_founding_village_of_five_needs_three_food_producers():
+	assert_eq(
+		SettlementFoodDemand.producers_needed(5),
+		int(ceil(float(SettlementGranary.subsistence_draw(5)) / SettlementFoodDemand.yield_per_producer_per_assessment()))
+	)
+	assert_eq(SettlementFoodDemand.producers_needed(5), 3)
 
 
 ## ...and a village that grows past what one field feeds needs a second,
 ## which is the whole point of making it demand-driven.
 func test_a_village_that_outgrows_one_field_needs_another():
 	var one_feeds: int = SettlementFoodDemand.households_fed_per_producer()
-	assert_gt(one_feeds, 5, "precondition: one field really does feed more than a founding roster")
+	assert_gt(one_feeds, 0, "precondition: one field really does feed somebody")
 	assert_eq(SettlementFoodDemand.producers_needed(one_feeds), 1)
 	assert_eq(SettlementFoodDemand.producers_needed(one_feeds + 1), 2)
 
@@ -66,16 +75,65 @@ func test_a_village_with_nobody_in_it_needs_nobody_to_feed_it():
 	assert_eq(SettlementFoodDemand.producers_needed(-3), 0)
 
 
-## What one producer brings in is REAL WORK, not the ambient drip. At 0.22
-## food per assessment against a draw of 6, no amount of foraging feeds five
-## households -- which is correct, and is why a village farms.
-func test_one_producer_is_measured_by_real_work_not_by_foraging():
+## What one producer brings in is a REAL FIELD'S day, on the assessment
+## clock: VillageFarm.FIELD_YIELD_PER_LIVED_DAY over the assessments in the
+## day the farmer's own schedule runs on.
+func test_one_producer_is_measured_by_what_a_real_field_yields_in_a_day():
 	assert_almost_eq(
 		SettlementFoodDemand.yield_per_producer_per_assessment(),
-		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK
-		/ VillageFarm.WORK_BLOCK_SECONDS * SettlementState.ASSESSMENT_SECONDS,
+		VillageFarm.FIELD_YIELD_PER_LIVED_DAY
+		/ (VillageFarm.SECONDS_PER_LIVED_DAY / SettlementState.ASSESSMENT_SECONDS),
 		0.001
 	)
+
+
+## And it is still REAL WORK, not the ambient drip: at 0.22 food an
+## assessment against a draw of 6, no amount of foraging feeds five
+## households -- which is correct, and is why a village farms.
+func test_one_producer_is_measured_by_real_work_not_by_foraging():
+	var drip: float = (
+		NpcProduction.new().yield_per_second("farmer", _region(0.3, 0.0, 0.0), Vector2.ZERO)
+		* SettlementState.ASSESSMENT_SECONDS
+	)
+	assert_gt(SettlementFoodDemand.yield_per_producer_per_assessment(), drip * 4.0)
+
+
+# -- the real field's day, pinned ------------------------------------------
+#
+# MEASURED (tools/probe_village_economy.gd, tools/probe_field_timeline.gd,
+# a real village east of Berlin): three six-bed fields harvested 299 units
+# in 20 lived days, and 163 in 10 -- five a field a day, against the 18.5 a
+# day the stub-world measurement behind FIELD_YIELD_PER_WORK_BLOCK works
+# out to. The stub's farmer never walks home: a real one works the day's
+# two work blocks, commutes from a cottage a street away at walking pace,
+# fetches water, and leaves beds empty for most of the day.
+
+## A real field yields less per day than a field worked without ever
+## leaving it -- the commute and the well are real.
+func test_a_real_field_yields_less_per_day_than_the_stubs_field_that_nobody_walks_home_from():
+	var continuous_day: float = (
+		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK / VillageFarm.WORK_BLOCK_SECONDS
+		* VillageFarm.SECONDS_PER_LIVED_DAY
+	)
+	assert_lt(VillageFarm.FIELD_YIELD_PER_LIVED_DAY, continuous_day)
+
+
+## But a field is still worth raising: it feeds at least one household's
+## day of meals, so a farmhouse is never a building for nobody.
+func test_a_real_field_still_feeds_at_least_one_household():
+	assert_gt(
+		VillageFarm.FIELD_YIELD_PER_LIVED_DAY,
+		SettlementState.FOOD_PER_HOUSEHOLD * VillageFarm.SECONDS_PER_LIVED_DAY / SettlementState.ASSESSMENT_SECONDS
+	)
+	assert_gt(SettlementFoodDemand.households_fed_per_producer(), 0)
+
+
+## The day the yield is measured over is the farmer's own: the clock their
+## schedule turns on, and the one every other lived-day reading shares.
+func test_the_fields_day_is_the_farmers_own_clock():
+	var NpcMarker = load("res://src/rendering/npc_marker.gd")
+	assert_almost_eq(VillageFarm.SECONDS_PER_LIVED_DAY, NpcMarker.SECONDS_PER_SIMULATED_DAY, 0.001)
+	assert_almost_eq(VillageFarm.SECONDS_PER_LIVED_DAY, MerchantVisit.SECONDS_PER_DAY, 0.001)
 
 
 # -- which trade ------------------------------------------------------------
