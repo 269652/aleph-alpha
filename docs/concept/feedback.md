@@ -195,6 +195,33 @@ this HUD already shows conditions as chips (`HudReadouts.condition_chips`).
 So `hurt` fires on the discrete blow and nothing else, and the chip carries
 the rest.
 
+**That trade is only honest if the chip is really there, and once it was
+not.** Reported from play on 2026-09-22 as *"I constantly die out of
+nowhere"*. There are exactly two doors into the player's health —
+`take_damage`, which answers, and `take_tick_damage`, which by the rule
+above answers nothing — and `Player.active_effects()` gathered venom, spell
+debuffs, food buffs and the shield while never gathering
+`active_mushroom_toxin_debuffs`. The state was tracked, ticked, and already
+in the identical `DebuffStack` shape sitting beside it. So a Death Cap
+drained a character at up to 4.5 health a second with **no receipt and no
+chip**: nothing on screen named it, and the design's own justification for
+the silence — *the chip carries the rest* — was not true of it.
+
+So the rule has a guard now, stated as the invariant rather than as that
+one omission (`test_nothing_kills_in_silence.gd`): **every continuous harm
+the character can suffer must name itself on the row.** A future tick
+source cannot be added without its chip.
+
+Two sources deliberately outside it, each for a reason rather than an
+oversight:
+
+- **Bramble thorns** take 2% of max health over a four-second crossing
+  (0.72 a second at the reference character) and have no debuff state at
+  all, because the thicket is its own chip: you can *see* the brambles you
+  are standing in. A poison is invisible; a thicket is not.
+- **The Alp** drains stamina rather than health (`NightMare.press`), so it
+  cannot kill and is not continuous harm in this sense.
+
 ### The three intervals
 
 | constant | value | what it is |

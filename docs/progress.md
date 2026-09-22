@@ -48,6 +48,57 @@ each other.* Two measurements under it, both taken by driving the real code:
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
 
+- ✅ **Nothing kills you in silence** (2026-09-22) — see
+  `concept/feedback.md`. Reported from play: *"I constantly die out of
+  nowhere."*
+
+  **Traced rather than guessed.** There are exactly **two** doors into the
+  player's health: `take_damage`, which answers with a flash, a number and
+  a screen tint, and `take_tick_damage`, which answers **nothing** on
+  purpose — a receipt every frame is a buzz, not an answer. Starving,
+  dehydration and cold turned out to be movement debuffs rather than health
+  damage; drowning does none; the Alp drains stamina. So every unexplained
+  death had to come through the silent door.
+
+  Two suspects were ruled out before the real one was found, and both are
+  worth recording so the next reader does not re-open them:
+
+  - `CreatureMarker.PREDATION_DAMAGE` is **1000.0**, one-shot-lethal, and
+    `_try_eat` gates only on `has_method("take_damage")` — which `Player`
+    implements. It looks exactly like the culprit. It is not reachable: the
+    hunt wiring fires on the `FLESH` channel, which
+    `_scan_nearby_creatures` populates purely from the creature group,
+    while the player is published on `PLAYER`, which drives the
+    *telegraphed* `attack` instead.
+  - The player's health **is** on the HUD, in the survival column.
+
+  **The real fault**: `Player.active_effects()` gathered venom, spell
+  debuffs, food buffs and the shield — and never
+  `active_mushroom_toxin_debuffs`, although that state is tracked, ticked,
+  and already in the identical `DebuffStack` shape sitting directly beside
+  it. Measured, a Death Cap takes up to **4.5 health a second** (killing a
+  145-health character in 32 s) with **no receipt and no chip**. Nothing on
+  screen named it. `feedback.md`'s own justification for the silence —
+  *"the chip carries the rest"* — was simply not true of it.
+
+  One `append_array`, plus the label the row needed (`Poisoned`, rather
+  than `effect_chip`'s raw-id fallback printing `mushroom_toxin 42s` at a
+  player). The suite pins the **contract** rather than the omission: every
+  continuous harm must name itself, so the next tick source cannot be added
+  without its chip.
+
+  Two sources stay deliberately outside that rule, each for a reason:
+  **bramble thorns** (0.72 health a second, and the thicket is its own chip
+  — you can see what you are standing in) and **the Alp** (stamina, not
+  health, so it cannot kill).
+
+  Tests: `test_nothing_kills_in_silence.gd` 7 (new), plus an 11-suite batch
+  over the feedback and status side — `test_effect_chips`,
+  `test_hud_readouts`, `test_mushroom_toxin`, `test_player_damage_over_time`,
+  `test_venom_model`, `test_debuff_stack`, `test_world_hurt_flash_wiring`,
+  `test_player_answerback`, `test_spell_status_effects` — **159 passing,
+  zero failures, zero risky**, on a clean boot.
+
 - ✅ **A level is a bigger animal — every axis, not just health**
   (2026-09-22) — see `concept/combat.md`, section of that name. Closes the
   🚧 gap this overhaul's previous slice recorded rather than papered over.

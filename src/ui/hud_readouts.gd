@@ -120,6 +120,11 @@ static func diagnostics_lines(
 ## `time_remaining` -- only the reading was missing.
 const EFFECT_LABELS := {
 	"venom": "Venomed",
+	# A toxin takes health every frame and said nothing at all until
+	# 2026-09-22: it was not gathered into Player.active_effects(), so it
+	# never reached this table to be missing a name from. Reported from play
+	# as "I constantly die out of nowhere".
+	"mushroom_toxin": "Poisoned",
 	"ignite": "Burning",
 	"blight": "Blighted",
 	"freeze": "Frozen",

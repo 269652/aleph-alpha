@@ -1983,6 +1983,15 @@ func active_effects() -> Array:
 	var effects: Array = []
 	effects.append_array(active_venom_debuffs)
 	effects.append_array(active_spell_debuffs)
+	# Reported from play as "I constantly die out of nowhere", and this was
+	# the reason. A mushroom toxin takes health every frame through
+	# take_tick_damage, which answers nothing BY DESIGN -- a receipt per
+	# frame is a buzz, not an answer (docs/concept/feedback.md). That design
+	# is only honest because the chip carries what the receipt does not, and
+	# this list was the chip: tracked, ticked, already in the identical
+	# DebuffStack shape as venom beside it, and never gathered. So eating a
+	# Death Cap drained a character with NOTHING on screen naming it.
+	effects.append_array(active_mushroom_toxin_debuffs)
 	# A food buff names its own effect rather than a debuff id, so it is
 	# translated into the shared shape here -- one stack, because eating a
 	# second meal refreshes a buff rather than deepening it.
