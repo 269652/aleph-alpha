@@ -48,6 +48,47 @@ each other.* Two measurements under it, both taken by driving the real code:
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
 
+- ✅ **A new mage can cast, and an old save catches up** (2026-09-22) —
+  see `concept/magic.md`.
+
+  Reported from play, having picked mage at character creation: *"Z tries
+  to sell to a merchant / /arena does not exist / 6,7,8 are empty ... No
+  way to cast anything atm."*
+
+  **Checked before answering, and the code was not at fault.** A new suite
+  drives the whole path `World._spawn_local_singleplayer` drives — class
+  lens, starting hand, the bar, the key — and every part held on `main`: a
+  mage is born with 55 mana, keys 6/7/8 are filled, `cast_held()` produces
+  a spell and spends the pool, and a full pool buys more than five casts.
+  `sell` has been **Y** and `cast` **Z** in *every* revision of
+  `keybindings.gd`, so no shipped default ever put selling on the cast key;
+  and `/arena` has been on `main` since 2026-09-21 (`72b65e0`). The report
+  therefore describes a build older than that commit, plus a
+  `user://keybindings.cfg` carrying a hand-made override.
+
+  **But updating would not have fixed it, and that part WAS a real fault.**
+  `known_spell_ids` is persisted, so a character created while the starting
+  hand was `["fire_bolt"]` restores that narrower list over the wider
+  default — keys 7 and 8 stay empty for ever, the player sees no change
+  after updating, and reasonably concludes the feature does not work. The
+  saved list is now a **floor** rather than the whole truth: a starting
+  spell is one every character is born knowing and none can unlearn, so an
+  older character catches up on load while keeping everything a guild
+  taught them.
+
+  Two guards added from the report's own words rather than from the fix:
+  **no two verbs may share a default key** (asserted across the whole
+  `ACTIONS` table, so a collision fails a suite instead of being found in
+  play), and the bar's first three slots must be non-empty for a fresh
+  character.
+
+  Tests: `test_a_new_mage_can_cast.gd` 10 (new), plus a 12-suite batch —
+  `test_nothing_kills_in_silence`, `test_spell_tuition`,
+  `test_player_spell_slots`, `test_player_persistence`, `test_keybindings`,
+  `test_world_spell_hud`, `test_spell_kill_credit`, `test_battle_loop`,
+  `test_combat_pacing`, `test_level_scaling` — **189 passing, zero
+  failures, zero risky**, on a clean boot.
+
 - ✅ **Nothing kills you in silence** (2026-09-22) — see
   `concept/feedback.md`. Reported from play: *"I constantly die out of
   nowhere."*

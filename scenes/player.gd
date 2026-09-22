@@ -1418,6 +1418,18 @@ func apply_save_dict(data: Dictionary) -> void:
 	# grant this player was already born with.
 	if data.has("known_spell_ids"):
 		_known_spell_ids = Array(data["known_spell_ids"] as Array, TYPE_STRING, "", null)
+	# The saved list is a FLOOR, not the whole truth. A starting spell is one
+	# every character is born knowing and none can unlearn, so a character
+	# saved while the starting hand was narrower catches up to it here.
+	#
+	# Without this, updating the game does not fix the thing the update was
+	# for: a mage created when the hand was ["fire_bolt"] would load with
+	# keys 7 and 8 still empty for ever, see no change, and reasonably
+	# conclude the feature does not work. Reported from play exactly that
+	# way -- "6,7,8 are empty ... No way to cast anything atm".
+	for starting_id in SpellTuition.STARTING_SPELL_IDS:
+		if not _known_spell_ids.has(starting_id):
+			_known_spell_ids.append(starting_id)
 	# The weave and its parts. A save written before spells could be
 	# composed has none of these keys and simply loads a character who has
 	# not woven anything -- which is exactly true of them.
