@@ -48,6 +48,37 @@ each other.* Two measurements under it, both taken by driving the real code:
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
 
+- ✅ **A cast you can see** (2026-09-22) — see `concept/spell_runtime.md`,
+  "A cast is always visible". Asked from play: *"do the spells have
+  visuals?"* and *"spells should be able to be cast without a target"*.
+
+  They do have visuals — `SpellEffectMarker` grows, holds and fades each
+  atom's procedural sprite. It was spawned **only where an atom landed**,
+  and `_resolve_cast_target` returns `null` the moment nothing is in range.
+  Fire Bolt is `cast(touch)` at **24 px**, so unless a creature was
+  practically underfoot, a cast **spent the mana, played the swing, and
+  showed nothing anywhere.** With no sound either (`get("sound")` still has
+  zero consumers), "nothing happens" was the only honest reading available
+  to a player, and it is indistinguishable from a dead key — which is
+  exactly how it was reported, after two other explanations had been
+  checked and ruled out.
+
+  A cast that finds nothing now shows at its **aim point**: `self` on the
+  caster, `area` at the area centre, `projectile` at `PROJECTILE_RANGE`,
+  `touch` at `TOUCH_RANGE`. So a miss reads as a miss rather than a fizzle
+  — and since the fall point is the delivery's real reach, watching your
+  own misses is how the reach of each delivery becomes legible without a
+  manual.
+
+  Casting without a target needed no change: nothing ever gated a cast on
+  having something to hit. The mana is spent, the pipeline resolves, the
+  world is simply not changed by it. That was already true; it is now
+  visibly true.
+
+  Tests: `test_a_new_mage_can_cast.gd` 14 (4 new), plus a 12-suite batch
+  over the magic side — **154 passing, zero failures, zero risky**, on a
+  clean boot.
+
 - ✅ **A new mage can cast, and an old save catches up** (2026-09-22) —
   see `concept/magic.md`.
 

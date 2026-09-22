@@ -158,6 +158,38 @@ The same rule binds anything else the player throws. A thrown stone that
 damages a creature without angering it is the same bug wearing different
 clothes.
 
+### A cast is always visible
+
+> **A spell you paid for shows itself, whether or not it found anything.**
+
+`SpellEffectMarker` grows, holds and fades an atom's own procedural sprite
+at the place the atom landed — and it was spawned *only* where one landed.
+`_resolve_cast_target` returns `null` the moment nothing is in range, and
+Fire Bolt is `cast(touch)` at **24 px**, so unless a creature was
+practically underfoot a cast spent the mana, played the swing, and showed
+**nothing anywhere**.
+
+Reported from play as *"nothing happens"*, which is the correct reading: a
+player cannot tell an invisible cast from a dead key. There is no sound to
+fall back on either — `get("sound")` still has zero consumers repo-wide.
+
+magic.md's rule is that an affordable spell still has to **land**. It is
+allowed to hit nothing. It is not allowed to be invisible.
+
+So a cast that finds no target shows at its **aim point**: out along the
+way it was aimed, at the reach that delivery actually has — `self` on the
+caster (that *is* where it happened), `area` at the area centre,
+`projectile` at `PROJECTILE_RANGE`, `touch` at `TOUCH_RANGE`. A miss reads
+as a miss, something that left your hands and fell short, rather than as a
+fizzle; and because the fall point is the delivery's real reach, **watching
+your own misses is how the reach of each delivery becomes legible** without
+a manual.
+
+**Spells are castable without a target, by design.** Nothing gates a cast
+on having something to hit: the mana is spent, the pipeline resolves, the
+world is simply not changed by it. That was already true and is now
+visibly true.
+
 ### Per-atom mechanics
 
 `spell_atom_catalog.gd`'s own `mag_ref`/`dur_ref` shape is the organizing

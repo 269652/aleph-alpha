@@ -3830,12 +3830,48 @@ func _apply_cast_step(step: Dictionary, delivery: String) -> float:
 
 	var target = _resolve_cast_target(delivery)
 	var dealt := 0.0
+	var landed := false
 	if target is Array:
 		for one in target:
 			dealt += _apply_cast_step_to(atom_id, params, one)
+			landed = landed or one != null
 	else:
 		dealt += _apply_cast_step_to(atom_id, params, target)
+		landed = target != null
+	# A spell you paid for is always VISIBLE, even when it finds nothing.
+	#
+	# The effect used to be spawned only where an atom landed, and
+	# `_resolve_cast_target` returns null the moment nothing is in range.
+	# Fire Bolt is cast(touch) at 24 px, so unless a creature was
+	# practically underfoot a cast spent the mana, played the swing, and
+	# showed NOTHING anywhere -- which a player cannot tell apart from a
+	# dead key, and which is exactly how it was reported from play.
+	#
+	# magic.md's rule is that an affordable spell still has to LAND: it is
+	# allowed to hit nothing. It is not allowed to be invisible.
+	if not landed:
+		_spawn_spell_effect(atom_id, _aim_point(delivery))
 	return dealt
+
+
+## Where a spell goes when it finds nothing to go to: out along the way it
+## was aimed, at the reach that delivery actually has. So a miss reads as a
+## miss -- something left your hands and fell short -- rather than as a
+## fizzle, and the reach of each delivery is legible from watching it.
+func _aim_point(delivery: String) -> Vector2:
+	var facing := _last_facing_direction
+	if facing.length() < 0.001:
+		facing = Vector2.DOWN
+	facing = facing.normalized()
+	match delivery:
+		"self":
+			return position
+		"area":
+			return _spell_targeting.area_center(position, facing)
+		"projectile":
+			return position + facing * SpellTargeting.PROJECTILE_RANGE
+		_:
+			return position + facing * SpellTargeting.TOUCH_RANGE
 
 
 ## One atom against one target: the blow, the effect it throws, and -- when

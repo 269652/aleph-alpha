@@ -172,3 +172,91 @@ func test_catching_up_does_not_cost_a_character_what_they_were_taught():
 		"a spell bought at a guild must survive the catch-up"
 	)
 	reloaded.queue_free()
+
+
+# -- a cast you can see -----------------------------------------------------
+
+## Asked from play: *"do the spells have visuals?"*
+##
+## They do -- `SpellEffectMarker` grows, holds and fades an atom's own
+## procedural sprite. But it is spawned ONLY when `apply_to_target` returned
+## true, and that returns false the moment the target is null. Fire Bolt is
+## `cast(touch)` at 24 px, so unless a creature is practically underfoot,
+## `_resolve_cast_target` finds nothing and the cast shows **nothing at
+## all**: the mana is already spent, the character plays its swing, and no
+## spell appears anywhere.
+##
+## A player cannot tell that from a dead key, which is exactly how this was
+## reported. magic.md's rule is that an affordable spell still has to LAND --
+## it is allowed to hit nothing. It is not allowed to be invisible.
+const SpellEffectMarker = preload("res://src/rendering/spell_effect_marker.gd")
+
+
+## Every spell effect currently in the world. Counted as a DELTA by the
+## tests below rather than against zero: a marker frees itself when its
+## grow-hold-fade tween finishes, and no tween advances in a headless test,
+## so earlier casts in this same suite leave theirs standing.
+func _effects_in_the_world() -> Array:
+	var seen: Array = []
+	for child in player.get_parent().get_children():
+		if child is SpellEffectMarker:
+			seen.append(child)
+	return seen
+
+
+func test_a_cast_that_hits_nothing_still_shows_itself():
+	var before: int = _effects_in_the_world().size()
+
+	player._last_facing_direction = Vector2.RIGHT
+	assert_true(player.cast_spell("fire_bolt"), "precondition: the cast resolved")
+
+	assert_gt(
+		_effects_in_the_world().size(), before,
+		"a spell you paid for must appear somewhere, even when it finds nothing"
+	)
+
+
+## And it appears where it was AIMED rather than on top of the caster, so a
+## miss reads as a miss -- something left your hands and fell short --
+## rather than as a fizzle.
+func test_the_miss_appears_out_in_front_of_the_caster():
+	var before: Array = _effects_in_the_world()
+
+	player._last_facing_direction = Vector2.RIGHT
+	player.cast_spell("fire_bolt")
+
+	var fresh: Array = []
+	for effect in _effects_in_the_world():
+		if not before.has(effect):
+			fresh.append(effect)
+	assert_false(fresh.is_empty(), "no effect was spawned at all")
+	for effect in fresh:
+		assert_gt(
+			effect.position.x, player.position.x,
+			"a spell aimed right must show to the right of the caster"
+		)
+
+
+## A projectile reaches further than a touch spell, and a miss shows that:
+## watching where your spell falls is how the reach of each delivery
+## becomes legible without a manual.
+func test_a_projectile_miss_falls_further_out_than_a_touch_miss():
+	const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
+	player._last_facing_direction = Vector2.RIGHT
+	assert_almost_eq(
+		player._aim_point("projectile").x,
+		player.position.x + SpellTargeting.PROJECTILE_RANGE, 0.001
+	)
+	assert_almost_eq(
+		player._aim_point("touch").x,
+		player.position.x + SpellTargeting.TOUCH_RANGE, 0.001
+	)
+	assert_gt(player._aim_point("projectile").x, player._aim_point("touch").x)
+
+
+## A self-delivered spell shows on the caster, because that is where it
+## happened -- a heal that appeared twenty pixels away would be a lie about
+## what it did.
+func test_a_self_spell_shows_on_the_caster():
+	player._last_facing_direction = Vector2.RIGHT
+	assert_almost_eq(player._aim_point("self").x, player.position.x, 0.001)
