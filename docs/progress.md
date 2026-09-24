@@ -6361,7 +6361,38 @@ somewhere to land:
   `_begin_one_shot` returns false for all of them.
 - ⬜ **No sheet declares `hurt_bands` or `death_bands` yet.** The wiring is
   in place and unexercised until real art arrives; the tests drive it
-  through a stub sheet that subclasses the real sprite class.
+  through a stub sheet that subclasses the real sprite class. One goblin
+  sheet has now been generated against the brief and **rejected at audit**
+  (`tools/probe_sheet_audit.gd` runs a candidate through the real
+  `detect_frames`, with the real parameters, before anyone registers it):
+  the art follows the brief row for row — six rows, right order, death
+  settling flat — but the delivery slices to a single 1536×1024 "frame"
+  and would raise in `Image.set_pixel`.
+- 🐛 **That rejection was the brief's fault, and the brief's fault was a
+  lying code comment.** `monsters.md` told artists to use a solid
+  near-black background. `SpriteSheetSlicer.detect_frames` calls a pixel
+  empty only when it is transparent or a pale near-neutral divider — **no
+  opaque backdrop qualifies, pure black included** — but the column scan's
+  `mx == 0` branch carried a comment claiming it "matches is_empty()'s own
+  zero-max case", a case `is_empty` does not have. It is a divide-by-zero
+  guard for the saturation ratio below it, unreachable for an opaque pixel
+  at any normal `divider_gray_min`. Reading that comment is what put the
+  near-black instruction into the brief, and the test written to *pin* the
+  brief is what caught it — `test_no_opaque_backdrop_separates_frames_not_
+  even_pure_black` went red against the very belief it was written to
+  confirm, and stayed red until the claim was fixed rather than the test.
+  The comment now says what the line does, and the brief specifies
+  **magenta**: what every shipped sheet already uses, and the only safe key
+  here — measured on the real delivery, a BLACK key at even ±0.08 deletes
+  a third of the drawing's own pixels, so a near-black sheet cannot be
+  rescued after the fact (`tools/probe_sheet_rescue.gd` sweeps that
+  trade-off so the question gets answered before anyone tries).
+  The same delivery's second fault is pinned alongside: its cell borders
+  measured 112–143 where 178 is the divider floor, and because a border
+  runs the full WIDTH of its row, one mid-grey rule leaves no empty column
+  anywhere. A narrow vertical rule inside a gap is harmless by contrast
+  (discarded under `min_frame_width`) — the two look like one problem and
+  only one of them is, so both are tests.
 - ⬜ **No `defend` action exists.** It will slice correctly and never be
   asked for until a braced/guarding behaviour is built. The prompt skeleton
   no longer asks artists for one: it was swapped for **EAT**, the same

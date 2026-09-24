@@ -264,3 +264,85 @@ func test_detect_rows_reads_a_pale_divider_as_empty():
 	var rows := _slicer().detect_rows(image, 0, 8, 2)
 	assert_eq(rows.size(), 1, "an opaque pale background is still background")
 	assert_eq(rows[0], Rect2i(0, 5, 8, 4))
+
+
+# -- what "empty" means to detect_frames, and why the art brief says magenta
+
+
+## NO opaque backdrop separates frames -- pure black included. The only
+## pixels detect_frames calls empty are transparent ones and pale
+## near-neutral dividers, so an opaque backdrop of any colour reads as
+## drawing in every column and the whole row collapses to one frame.
+##
+## Worth pinning precisely because the code says otherwise: the column
+## scan's `mx == 0` branch carries a comment claiming it matches
+## "is_empty()'s own zero-max case", which does not exist -- is_empty calls
+## black content too, and that branch is a divide-by-zero guard for the
+## saturation ratio below it, unreachable for an opaque pixel at any normal
+## divider_gray_min. Reading that comment is what put "#0a0a0a is fine if
+## it is exactly black" into docs/concept/monsters.md's art brief; this
+## test is what took it back out.
+func test_no_opaque_backdrop_separates_frames_not_even_pure_black():
+	for backdrop in [Color8(0, 0, 0), Color8(10, 10, 10), Color8(30, 30, 42), Color8(14, 16, 17)]:
+		var frames := _slicer().detect_frames(_sheet_on(backdrop), 0, 40, 8, 1)
+		assert_eq(frames.size(), 1, "backdrop %s should defeat frame detection" % backdrop)
+
+
+## Transparency is what actually separates them.
+func test_frames_separate_over_a_transparent_backdrop():
+	var frames := _slicer().detect_frames(_sheet_on(Color(0, 0, 0, 0)), 0, 40, 8, 1)
+	assert_eq(frames.size(), 3, "three drawings separated by transparent gaps")
+
+
+## Chroma-keying that backdrop to real transparency first is what rescues
+## it -- the route every sheet in this repo actually takes, just with
+## magenta rather than a colour the art also contains.
+func test_keying_the_backdrop_out_first_restores_the_frames():
+	var keyed := SpriteSheetSlicer.chroma_keyed(_sheet_on(Color8(10, 10, 10)), Color8(10, 10, 10), 0.05)
+	assert_eq(_slicer().detect_frames(keyed, 0, 40, 8, 1).size(), 3)
+
+
+## A drawn cell BORDER only stays out of the way when it is pale on every
+## channel (>= DEFAULT_DIVIDER_GRAY_MIN) and near-neutral. This is the more
+## dangerous half of the pair, because a border runs the full WIDTH of its
+## row: one mid-grey horizontal rule puts a content pixel in every column
+## at once, so the row has no empty column anywhere and collapses to a
+## single frame no matter how clean the gaps between the drawings are.
+## The other half of the same reported delivery -- its borders measured
+## around 112-143, where 178 is the floor.
+func test_a_mid_grey_cell_border_collapses_the_row_to_one_frame():
+	var pale := _sheet_on(Color(0, 0, 0, 0), Color8(200, 200, 200))
+	assert_eq(_slicer().detect_frames(pale, 0, 40, 8, 1).size(), 3, "a pale border stays out of the way")
+	var mid := _sheet_on(Color(0, 0, 0, 0), Color8(128, 128, 128))
+	assert_eq(_slicer().detect_frames(mid, 0, 40, 8, 1).size(), 1, "a mid-grey one does not")
+
+
+## A vertical rule inside a gap is harmless whatever its colour -- it is
+## narrower than min_frame_width, so it is discarded rather than mistaken
+## for a drawing. Worth stating beside the test above, because the two look
+## like the same "drawn divider" problem and only one of them is.
+func test_a_narrow_vertical_rule_in_a_gap_is_discarded_not_mistaken_for_a_frame():
+	var image := _sheet_on(Color(0, 0, 0, 0))
+	for gap in 4:
+		var x: int = gap * 30 + 4
+		for y in image.get_height():
+			image.set_pixel(x, y, Color8(128, 128, 128))
+	assert_eq(_slicer().detect_frames(image, 0, 40, 8, 1).size(), 3)
+
+
+## Three 20px drawings on `backdrop`, separated by 10px gaps. `border`, when
+## given, is ruled across the FULL WIDTH at the top and bottom of the band
+## -- what a drawn cell grid actually puts on a sheet.
+func _sheet_on(backdrop: Color, border = null) -> Image:
+	var image := Image.create(100, 40, false, Image.FORMAT_RGBA8)
+	image.fill(backdrop)
+	for drawing in 3:
+		var left := 10 + drawing * 30
+		for x in range(left, left + 20):
+			for y in range(10, 30):
+				image.set_pixel(x, y, Color(0.2, 0.7, 0.3))
+	if border != null:
+		for x in image.get_width():
+			image.set_pixel(x, 1, border)
+			image.set_pixel(x, image.get_height() - 2, border)
+	return image
