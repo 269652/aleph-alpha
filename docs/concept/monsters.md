@@ -187,18 +187,42 @@ Measured from `IllustratedAnimalSprite` and `SpriteSheetSlicer`, not assumed:
 - **Solid MAGENTA background (`#FF00FF`), and real gaps between frames.**
   This is the one instruction a sheet cannot survive getting wrong, and it
   is worth knowing exactly why rather than taking it on faith.
-  `detect_frames` walks columns and asks whether each is empty, and the
-  only pixels it calls empty are **transparent** ones and **pale
-  near-neutral dividers** (≥ 0.7 on every channel). *No* opaque backdrop
-  qualifies — pure black included. So a "near-black" backdrop reads as
-  drawing in every column and the whole sheet slices to a single frame.
-  Magenta instead is chroma-keyed to real transparency before any of that
-  runs (`chroma_key` / `chroma_key_tolerance`), which is why every sheet
-  that actually ships in this repo uses it. It is also the only safe key: it is nowhere near any
+  `detect_frames` walks columns and asks whether each is empty, and it
+  calls a pixel empty on exactly two grounds: it is **transparent**, or it
+  is **opaque but pale and near-neutral** (≥ 0.7 on every channel, low
+  saturation — the divider rule). Everything else is drawing. So a dark
+  backdrop occupies every column and the whole sheet slices to one frame,
+  and **`#0a0a0a` is the one instruction that cannot work at all**.
+
+  That leaves two backdrops that do, and this repo ships both:
+
+  | Backdrop | Needs a key? | Use it when |
+  | --- | --- | --- |
+  | Near-white `#FEFEFE` | **No** — the divider rule already calls it empty | the creature has nothing near-white on it (boar, deer, horse) |
+  | Magenta `#FF00FF` | Yes, `chroma_key` + `chroma_key_tolerance` | anything else, and always when in doubt (sheep, wolf, the bosses) |
+
+  White is simpler, and for a plain-coloured animal it is the better
+  choice. The catch is that the rule which makes it work cannot tell a
+  white backdrop from near-white, low-saturation **art** — bone, cream
+  wool, white cloth, pale horn — and swallows it. That is precisely why
+  sheep, with its cream fleece, is on magenta while boar is not. A goblin
+  hung with bone fetishes wants magenta for the same reason.
+
+  Magenta is also the safer key in a way black could never be: no drawing
+  is anywhere near it, so a generous tolerance swallows the anti-aliased
+  silhouette edge without touching the creature. Measured on a real
+  near-black delivery, a **black** key at even ±0.08 deletes a third of the
+  drawing's own pixels — there is no rescuing such a sheet after the fact. It is also the only safe key: it is nowhere near any
   colour in the art, so a generous tolerance swallows the anti-aliased
   silhouette edge without touching the creature. A *black* key cannot —
   measured on a real near-black delivery, keying black at even ±0.08
   deletes a third of the drawing's own pixels.
+  - Audit before registering: `tools/probe_sheet_audit.gd` runs a
+    candidate through the real `detect_frames` with the real parameters and
+    says whether each row slices, where the feet land, and how much the
+    drawn area varies frame to frame. Calibration from shipped sheets: a
+    locomotion row sits at ×1.03–×1.16 of area variation, and its feet
+    within about 1 px.
   - **Frames must be at least 60 px wide** after keying:
     `IllustratedAnimalSprite._slice_bands` passes `min_frame_width` 60 (not
     the slicer's own default 8), and anything narrower is discarded
@@ -286,7 +310,8 @@ breaks the slicer.
 > facing right**, in a painterly hand-illustrated style with clean readable
 > silhouettes and no text or labels.
 >
-> Solid pure magenta background (#FF00FF), the same magenta everywhere,
+> Solid pure magenta background (#FF00FF) — the creature carries bone, so
+> a white backdrop would swallow it — the same magenta everywhere,
 > with no gradient or vignette. Each animation is **one horizontal row**;
 > separate rows and individual frames with **clear empty magenta gaps**, not
 > with drawn borders or boxes. Every frame in every row shares the **same
@@ -404,13 +429,21 @@ Generate each row separately if the generator degrades across a large
 canvas — the slicer takes bands per row, so a per-row file with its own
 `_bands` entry is equally valid and usually cleaner.
 
-**A hard ceiling, not a preference:** every frame is re-composited onto one
-shared `CANVAS_SIZE` of 340×330 with its ground-contact row landing on
-`BASELINE_Y` 310. A drawn subject whose content bounding box exceeds that
-overflows the canvas outright — `Image.set_pixel` raises on an
-out-of-bounds index; it does not silently clip. The largest frame in the
-current roster measures 302×293, so ~300×290 of real content per frame is
-the working bound.
+**Not a ceiling — a shared scale.** Every frame is re-composited onto one
+`CANVAS_SIZE` of 340×330 with its ground-contact row on `BASELINE_Y` 310.
+Oversized content does *not* overflow: `normalize_frames` picks ONE scale
+for the whole set, `min(canvas.x / widest, baseline_y / tallest)`, and
+resizes every frame by it. (This doc previously claimed an overflow raises
+in `Image.set_pixel`, carried out of a stale comment on `CANVAS_SIZE`
+itself; it does not, and the claim is pinned false by
+`test_content_far_larger_than_the_canvas_is_scaled_down_not_overflowed`.)
+
+What that shared scale *does* mean is that the widest or tallest frame in a
+row sets the size **every other frame in that row** renders at. One frame
+drawn out of scale with its siblings shrinks all of them — which is the
+mechanical reason "the creature is the same scale throughout" is in the
+prompt, not an aesthetic preference. Around 300×290 of drawn content per
+frame keeps a creature near the roster's existing resolution.
 
 Apparent size on screen is NOT how big the creature is drawn:
 `marker_scale` is `BASE_WORLD_WIDTH (24) * AnimalAnatomy.world_scale /
