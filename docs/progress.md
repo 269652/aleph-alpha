@@ -6362,9 +6362,21 @@ somewhere to land:
 - ⬜ **No sheet declares `hurt_bands` or `death_bands` yet.** The wiring is
   in place and unexercised until real art arrives; the tests drive it
   through a stub sheet that subclasses the real sprite class.
-- ⬜ **No `defend` action exists.** The prompt skeleton asks artists for a
-  DEFEND row; it will slice correctly and never be asked for until a
-  braced/guarding behaviour is built.
+- ⬜ **No `defend` action exists.** It will slice correctly and never be
+  asked for until a braced/guarding behaviour is built. The prompt skeleton
+  no longer asks artists for one: it was swapped for **EAT**, the same
+  mistake at the opposite end and the more expensive of the two — `eat` is
+  one of only three rows with no fallback at all, so a species without it
+  drops to procedural art the moment it grazes. Measured against the code
+  after a commissioned-looking reference sheet (11 rows, four directional
+  variants each) turned out to be about half unusable here: this engine is
+  side-view-only with `flip_h`, and `CreatureMarker`'s entire action
+  vocabulary is `walk`/`eat`/`drink`/`swim`/`attack` plus a derived `idle`
+  and the two one-shots. `monsters.md` gained a "What NOT to commission"
+  section naming both classes of waste, plus the hard 340×330 canvas
+  ceiling (an overflow raises in `Image.set_pixel`; it does not clip) and
+  the fact that apparent size comes from `AnimalAnatomy.world_scale`, not
+  from how big the art is drawn.
 - 🚧 **Tier C's "bound to a kind of place" rule is specified, not built** —
   it needs a real predicate per monster (a bog, a scree slope, a worked
   shaft) and those predicates do not all exist.
