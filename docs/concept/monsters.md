@@ -184,9 +184,37 @@ Measured from `IllustratedAnimalSprite` and `SpriteSheetSlicer`, not assumed:
 - **One action per ROW**, frames left to right within it. Rows may differ in
   frame count, and frame widths within a row may differ — `detect_frames`
   finds the bands. Do not force a uniform grid.
-- **Thin divider lines between cells, solid near-black background.** The
-  loader flood-fills the border away; a soft vignette around each cell is
-  tolerated (`alpha_threshold`) but a crisp divider is better.
+- **Solid MAGENTA background (`#FF00FF`), and real gaps between frames.**
+  This is the one instruction a sheet cannot survive getting wrong, and it
+  is worth knowing exactly why rather than taking it on faith.
+  `detect_frames` walks columns and asks whether each is empty, and the
+  only pixels it calls empty are **transparent** ones and **pale
+  near-neutral dividers** (≥ 0.7 on every channel). *No* opaque backdrop
+  qualifies — pure black included. So a "near-black" backdrop reads as
+  drawing in every column and the whole sheet slices to a single frame.
+  Magenta instead is chroma-keyed to real transparency before any of that
+  runs (`chroma_key` / `chroma_key_tolerance`), which is why every sheet
+  that actually ships in this repo uses it. It is also the only safe key: it is nowhere near any
+  colour in the art, so a generous tolerance swallows the anti-aliased
+  silhouette edge without touching the creature. A *black* key cannot —
+  measured on a real near-black delivery, keying black at even ±0.08
+  deletes a third of the drawing's own pixels.
+  - **Frames must be at least 60 px wide** after keying:
+    `IllustratedAnimalSprite._slice_bands` passes `min_frame_width` 60 (not
+    the slicer's own default 8), and anything narrower is discarded
+    silently rather than reported. At ~300 px of drawn content per frame
+    there is enormous headroom, but a stray mark in a gap vanishes rather
+    than becoming a bogus frame — which is the behaviour you want.
+  - With a keyed background and a real gap between frames, **divider lines
+    are unnecessary**. If a generator draws them anyway they must be pale
+    (≥ 0.7 on every channel, roughly `#B3B3B3` or lighter) and near-
+    neutral; a mid-grey border reads as drawing, and because a cell border
+    runs the full width of its row, one such line is enough to make every
+    column non-empty and collapse the row to one frame.
+- **Deliver PNG, never a lossy format.** A lossy WebP/JPEG smears both
+  invariants above at once: measured on one delivery, a backdrop painted as
+  a flat fill arrived varying from 14 to 42 across the sheet, and the
+  divider lines came back mid-grey. Losslessly-compressed PNG or nothing.
 - **One consistent ground-contact line across every frame of every row.**
   Frames are re-composited onto one canvas with the contact row landing on
   `BASELINE_Y`. A frame whose feet float re-composites wrong.
@@ -258,12 +286,13 @@ breaks the slicer.
 > facing right**, in a painterly hand-illustrated style with clean readable
 > silhouettes and no text or labels.
 >
-> Solid near-black background (#0a0a0a). Each animation is **one horizontal
-> row**; separate rows and individual frames with **thin 2px light divider
-> lines**. Every frame in every row shares the **same ground line** — the
-> feet touch the same height in all of them — and the creature is the
-> **same scale** throughout. No drop shadows, no glow, nothing crossing a
-> divider.
+> Solid pure magenta background (#FF00FF), the same magenta everywhere,
+> with no gradient or vignette. Each animation is **one horizontal row**;
+> separate rows and individual frames with **clear empty magenta gaps**, not
+> with drawn borders or boxes. Every frame in every row shares the **same
+> ground line** — the feet touch the same height in all of them — and the
+> creature is the **same scale** throughout. No drop shadows, no glow,
+> nothing crossing a gap. Output as PNG.
 >
 > Rows, top to bottom:
 > 1. **IDLE** — 4 frames, breathing and a small weight shift.
