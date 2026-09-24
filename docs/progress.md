@@ -6361,10 +6361,92 @@ somewhere to land:
   `_begin_one_shot` returns false for all of them.
 - ⬜ **No sheet declares `hurt_bands` or `death_bands` yet.** The wiring is
   in place and unexercised until real art arrives; the tests drive it
-  through a stub sheet that subclasses the real sprite class.
-- ⬜ **No `defend` action exists.** The prompt skeleton asks artists for a
-  DEFEND row; it will slice correctly and never be asked for until a
-  braced/guarding behaviour is built.
+  through a stub sheet that subclasses the real sprite class. One goblin
+  sheet has now been generated against the brief and **rejected at audit**
+  (`tools/probe_sheet_audit.gd` runs a candidate through the real
+  `detect_frames`, with the real parameters, before anyone registers it):
+  the art follows the brief row for row — six rows, right order, death
+  settling flat — but the delivery slices to a single 1536×1024 "frame"
+  and would raise in `Image.set_pixel`.
+- 🐛 **That rejection was the brief's fault, and the brief's fault was a
+  lying code comment.** `monsters.md` told artists to use a solid
+  near-black background. `SpriteSheetSlicer.detect_frames` calls a pixel
+  empty only when it is transparent or a pale near-neutral divider — **no
+  opaque backdrop qualifies, pure black included** — but the column scan's
+  `mx == 0` branch carried a comment claiming it "matches is_empty()'s own
+  zero-max case", a case `is_empty` does not have. It is a divide-by-zero
+  guard for the saturation ratio below it, unreachable for an opaque pixel
+  at any normal `divider_gray_min`. Reading that comment is what put the
+  near-black instruction into the brief, and the test written to *pin* the
+  brief is what caught it — `test_no_opaque_backdrop_separates_frames_not_
+  even_pure_black` went red against the very belief it was written to
+  confirm, and stayed red until the claim was fixed rather than the test.
+  The comment now says what the line does, and the brief specifies
+  **magenta**: what every shipped sheet already uses, and the only safe key
+  here — measured on the real delivery, a BLACK key at even ±0.08 deletes
+  a third of the drawing's own pixels, so a near-black sheet cannot be
+  rescued after the fact (`tools/probe_sheet_rescue.gd` sweeps that
+  trade-off so the question gets answered before anyone tries).
+  The same delivery's second fault is pinned alongside: its cell borders
+  measured 112–143 where 178 is the divider floor, and because a border
+  runs the full WIDTH of its row, one mid-grey rule leaves no empty column
+  anywhere. A narrow vertical rule inside a gap is harmless by contrast
+  (discarded under `min_frame_width`) — the two look like one problem and
+  only one of them is, so both are tests.
+- 🐛 **Two more false claims came out of the same audit, both mine, both
+  caught by validating the probe against sheets that already ship.** A
+  probe that lies is a documented hazard in this repo, and this one lied
+  three times before it was trustworthy:
+  - It measured sheets **without their chroma key**, so `sheep.png` — which
+    ships and works — audited as broken: its magenta counted as drawing, so
+    every "frame" was the whole cell and every row looked like it
+    overflowed. It now applies the key exactly where `_slice_bands` does,
+    and uses the slicer's **own** `content_rect` rather than a
+    reimplementation, since a probe that reimplements the pipeline can
+    disagree with it.
+  - Its backdrop verdict counted the **drawing's own dark fur** as
+    backdrop, firing on `boar_walk.png`. Corner sampling replaced it — then
+    that failed too, because `sheep.png`'s corners are near-white while the
+    backdrop *inside* its cells is magenta. The verdict now comes from what
+    the sheet actually DID (a row slicing to one frame), with the backdrop
+    offered as the diagnosis, plus the modal opaque colour, which does find
+    sheep's magenta.
+  - **"Oversized content overflows the canvas and raises in
+    `Image.set_pixel`" is false**, and it was in `IllustratedAnimalSprite`'s
+    own `CANVAS_SIZE` comment, in `monsters.md` as a hard ~300×290 ceiling,
+    in the probe, and in what was told to the user.
+    `SpriteSheetSlicer.normalize_frames` picks ONE scale for the whole set,
+    `min(canvas.x / widest, baseline_y / tallest)`, and resizes every frame
+    by it, so it cannot overflow. What the shared scale really means is
+    better: the widest frame in a row sets the size **every other frame in
+    it** renders at, so one out-of-scale frame shrinks all its siblings —
+    the mechanical reason a row must be drawn at a consistent size. Both
+    pinned.
+- 🐛 **And the headline recommendation was wrong: a WHITE backdrop needs no
+  chroma key at all.** `boar_walk.png` ships on `rgba(253,254,253)`,
+  declares no key, and slices to its 8 frames — pale and near-neutral is
+  exactly what the divider rule already calls empty. The obvious
+  generalisation from the black case ("no opaque backdrop works") is false,
+  and briefing an artist on it sends them to a key they do not need. The
+  brief now carries both: white for a plain-coloured animal, magenta when
+  the creature has near-white parts, because the same rule that makes white
+  work swallows bone, cream wool and white cloth — which is why sheep is on
+  magenta and boar is not, and why a bone-hung goblin wants magenta too.
+- ⬜ **No `defend` action exists.** It will slice correctly and never be
+  asked for until a braced/guarding behaviour is built. The prompt skeleton
+  no longer asks artists for one: it was swapped for **EAT**, the same
+  mistake at the opposite end and the more expensive of the two — `eat` is
+  one of only three rows with no fallback at all, so a species without it
+  drops to procedural art the moment it grazes. Measured against the code
+  after a commissioned-looking reference sheet (11 rows, four directional
+  variants each) turned out to be about half unusable here: this engine is
+  side-view-only with `flip_h`, and `CreatureMarker`'s entire action
+  vocabulary is `walk`/`eat`/`drink`/`swim`/`attack` plus a derived `idle`
+  and the two one-shots. `monsters.md` gained a "What NOT to commission"
+  section naming both classes of waste, plus the hard 340×330 canvas
+  ceiling (an overflow raises in `Image.set_pixel`; it does not clip) and
+  the fact that apparent size comes from `AnimalAnatomy.world_scale`, not
+  from how big the art is drawn.
 - 🚧 **Tier C's "bound to a kind of place" rule is specified, not built** —
   it needs a real predicate per monster (a bog, a scree slope, a worked
   shaft) and those predicates do not all exist.

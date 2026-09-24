@@ -184,9 +184,61 @@ Measured from `IllustratedAnimalSprite` and `SpriteSheetSlicer`, not assumed:
 - **One action per ROW**, frames left to right within it. Rows may differ in
   frame count, and frame widths within a row may differ — `detect_frames`
   finds the bands. Do not force a uniform grid.
-- **Thin divider lines between cells, solid near-black background.** The
-  loader flood-fills the border away; a soft vignette around each cell is
-  tolerated (`alpha_threshold`) but a crisp divider is better.
+- **Solid MAGENTA background (`#FF00FF`), and real gaps between frames.**
+  This is the one instruction a sheet cannot survive getting wrong, and it
+  is worth knowing exactly why rather than taking it on faith.
+  `detect_frames` walks columns and asks whether each is empty, and it
+  calls a pixel empty on exactly two grounds: it is **transparent**, or it
+  is **opaque but pale and near-neutral** (≥ 0.7 on every channel, low
+  saturation — the divider rule). Everything else is drawing. So a dark
+  backdrop occupies every column and the whole sheet slices to one frame,
+  and **`#0a0a0a` is the one instruction that cannot work at all**.
+
+  That leaves two backdrops that do, and this repo ships both:
+
+  | Backdrop | Needs a key? | Use it when |
+  | --- | --- | --- |
+  | Near-white `#FEFEFE` | **No** — the divider rule already calls it empty | the creature has nothing near-white on it (boar, deer, horse) |
+  | Magenta `#FF00FF` | Yes, `chroma_key` + `chroma_key_tolerance` | anything else, and always when in doubt (sheep, wolf, the bosses) |
+
+  White is simpler, and for a plain-coloured animal it is the better
+  choice. The catch is that the rule which makes it work cannot tell a
+  white backdrop from near-white, low-saturation **art** — bone, cream
+  wool, white cloth, pale horn — and swallows it. That is precisely why
+  sheep, with its cream fleece, is on magenta while boar is not. A goblin
+  hung with bone fetishes wants magenta for the same reason.
+
+  Magenta is also the safer key in a way black could never be: no drawing
+  is anywhere near it, so a generous tolerance swallows the anti-aliased
+  silhouette edge without touching the creature. Measured on a real
+  near-black delivery, a **black** key at even ±0.08 deletes a third of the
+  drawing's own pixels — there is no rescuing such a sheet after the fact. It is also the only safe key: it is nowhere near any
+  colour in the art, so a generous tolerance swallows the anti-aliased
+  silhouette edge without touching the creature. A *black* key cannot —
+  measured on a real near-black delivery, keying black at even ±0.08
+  deletes a third of the drawing's own pixels.
+  - Audit before registering: `tools/probe_sheet_audit.gd` runs a
+    candidate through the real `detect_frames` with the real parameters and
+    says whether each row slices, where the feet land, and how much the
+    drawn area varies frame to frame. Calibration from shipped sheets: a
+    locomotion row sits at ×1.03–×1.16 of area variation, and its feet
+    within about 1 px.
+  - **Frames must be at least 60 px wide** after keying:
+    `IllustratedAnimalSprite._slice_bands` passes `min_frame_width` 60 (not
+    the slicer's own default 8), and anything narrower is discarded
+    silently rather than reported. At ~300 px of drawn content per frame
+    there is enormous headroom, but a stray mark in a gap vanishes rather
+    than becoming a bogus frame — which is the behaviour you want.
+  - With a keyed background and a real gap between frames, **divider lines
+    are unnecessary**. If a generator draws them anyway they must be pale
+    (≥ 0.7 on every channel, roughly `#B3B3B3` or lighter) and near-
+    neutral; a mid-grey border reads as drawing, and because a cell border
+    runs the full width of its row, one such line is enough to make every
+    column non-empty and collapse the row to one frame.
+- **Deliver PNG, never a lossy format.** A lossy WebP/JPEG smears both
+  invariants above at once: measured on one delivery, a backdrop painted as
+  a flat fill arrived varying from 14 to 42 across the sheet, and the
+  divider lines came back mid-grey. Losslessly-compressed PNG or nothing.
 - **One consistent ground-contact line across every frame of every row.**
   Frames are re-composited onto one canvas with the contact row landing on
   `BASELINE_Y`. A frame whose feet float re-composites wrong.
@@ -258,21 +310,25 @@ breaks the slicer.
 > facing right**, in a painterly hand-illustrated style with clean readable
 > silhouettes and no text or labels.
 >
-> Solid near-black background (#0a0a0a). Each animation is **one horizontal
-> row**; separate rows and individual frames with **thin 2px light divider
-> lines**. Every frame in every row shares the **same ground line** — the
-> feet touch the same height in all of them — and the creature is the
-> **same scale** throughout. No drop shadows, no glow, nothing crossing a
-> divider.
+> Solid pure magenta background (#FF00FF) — the creature carries bone, so
+> a white backdrop would swallow it — the same magenta everywhere,
+> with no gradient or vignette. Each animation is **one horizontal row**;
+> separate rows and individual frames with **clear empty magenta gaps**, not
+> with drawn borders or boxes. Every frame in every row shares the **same
+> ground line** — the feet touch the same height in all of them — and the
+> creature is the **same scale** throughout. No drop shadows, no glow,
+> nothing crossing a gap. Output as PNG.
 >
 > Rows, top to bottom:
 > 1. **IDLE** — 4 frames, breathing and a small weight shift.
 > 2. **WALK** — 8 frames, a full cycle returning to frame 1.
-> 3. **ATTACK** — 6 frames: wind-up, commit, strike, follow-through, two
+> 3. **EAT** — 6 frames, head down to the ground and back up.
+> 4. **ATTACK** — 6 frames: wind-up, commit, strike, follow-through, two
 >    recovery.
-> 4. **DEFEND** — 4 frames: brace, hold, hold, release.
 > 5. **HURT** — 3 frames: impact recoil, stagger, recover.
-> 6. **DEATH** — 6 frames, ending in a still pose on the ground.
+> 6. **DEATH** — 6 frames, ending in a still pose flat on the ground —
+>    the last frame HOLDS while the body rests, so it has to be a settled
+>    pose and not a mid-fall one.
 >
 > **[SILHOUETTE]** — the shape it must read as at thumbnail size.
 > **[SURFACE]** — colour, material, texture.
@@ -328,12 +384,72 @@ drawn completely straight-faced.* Motion: *idle is a normal hare; the walk
 is a normal hop; the "attack" is a half-hearted flutter and a single
 unconvincing lunge.*
 
+`EAT` replaced `DEFEND` in this skeleton once the row table above was
+measured against the code. They are the two ends of the same mistake: the
+engine has no defending state at all, so a DEFEND row slices correctly and
+is never asked for, while `eat` is one of only three rows with NO fallback
+(`hurt` and `death` are the others) — a species without it drops to
+`ProceduralAnimalAnimation` the moment it grazes, which is the exact
+art-style swap this whole pipeline exists to stop.
+
+### What NOT to commission
+
+Stock creature sheets sold as "complete" carry rows this engine cannot
+reach, and the difference is worth knowing before paying for them. Two
+distinct cases:
+
+- **Directional variants** (a DOWN / LEFT / RIGHT / UP set per row) are
+  pure waste here, and they are the single most common extra. This engine
+  is side-view only: one facing is drawn and `CreatureMarker` sets
+  `flip_h` for the other, with `faces_left` declaring which way the supplied
+  sheet happens to face (see `IllustratedAnimalSprite`'s own header — that
+  is a property of the ASSET, not of the species). A four-direction set
+  costs 4× the art for nothing.
+- **Actions with no state behind them** — `run`, `throw`, `pick up`,
+  `carry`, `cheer`, `sleep`, `defend`. `CreatureMarker`'s whole action
+  vocabulary is `walk`, `eat`, `drink`, `swim` and `attack`, plus `idle`
+  derived from a standing `walk` and the two one-shot rows. Anything else
+  needs a new state in the AI before the band can ever be requested, so
+  unlike a row the engine already asks for — where declaring
+  `"<action>_bands"` IS the entire integration — these are code, not
+  content.
+
+  `sleep` is the cheapest of them by a distance, and worth knowing if a
+  sheet includes it anyway: dormancy is already simulated
+  (`_step_dormancy`/`_dormant`, real winter hibernation), and that branch
+  early-returns without calling `_animation_step` at all, so a dormant
+  creature simply freezes on whatever frame it was showing. Setting
+  `_current_action = "sleep"` and stepping the animation there is the whole
+  job.
+
 ### Sizing the sheet
 
 At six rows and 4–8 frames of ~300px each, a sheet lands near **2400×1800**.
 Generate each row separately if the generator degrades across a large
 canvas — the slicer takes bands per row, so a per-row file with its own
 `_bands` entry is equally valid and usually cleaner.
+
+**Not a ceiling — a shared scale.** Every frame is re-composited onto one
+`CANVAS_SIZE` of 340×330 with its ground-contact row on `BASELINE_Y` 310.
+Oversized content does *not* overflow: `normalize_frames` picks ONE scale
+for the whole set, `min(canvas.x / widest, baseline_y / tallest)`, and
+resizes every frame by it. (This doc previously claimed an overflow raises
+in `Image.set_pixel`, carried out of a stale comment on `CANVAS_SIZE`
+itself; it does not, and the claim is pinned false by
+`test_content_far_larger_than_the_canvas_is_scaled_down_not_overflowed`.)
+
+What that shared scale *does* mean is that the widest or tallest frame in a
+row sets the size **every other frame in that row** renders at. One frame
+drawn out of scale with its siblings shrinks all of them — which is the
+mechanical reason "the creature is the same scale throughout" is in the
+prompt, not an aesthetic preference. Around 300×290 of drawn content per
+frame keeps a creature near the roster's existing resolution.
+
+Apparent size on screen is NOT how big the creature is drawn:
+`marker_scale` is `BASE_WORLD_WIDTH (24) * AnimalAnatomy.world_scale /
+reference_content_width`, so the drawing is normalized away and
+`world_scale` is the only dial (wolf 1.0, Krampus 2.1). Draw big for
+detail; size the creature in its anatomy profile.
 
 ## Status
 

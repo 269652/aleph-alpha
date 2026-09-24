@@ -192,7 +192,17 @@ func detect_frames(
 				break
 			var mx := maxi(maxi(r, g), b)
 			if mx == 0:
-				continue  # opaque black -- matches is_empty()'s own zero-max case
+				# Divide-by-zero guard for the saturation ratio below, NOT
+				# a rule that opaque black is background: the
+				# divider_gray_min test just above has already rejected any
+				# opaque black pixel at any normal threshold, and is_empty
+				# calls black content too. This line used to claim it
+				# "matches is_empty()'s own zero-max case", and that
+				# reading is what put a near-black backdrop into
+				# docs/concept/monsters.md's art brief -- a sheet
+				# commissioned against it slices to exactly one frame (see
+				# test_no_opaque_backdrop_separates_frames_not_even_pure_black).
+				continue
 			var mn := mini(mini(r, g), b)
 			if float(mx - mn) / float(mx) > DIVIDER_MAX_SATURATION:
 				column_is_empty = false

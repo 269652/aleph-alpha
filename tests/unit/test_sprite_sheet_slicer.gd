@@ -264,3 +264,203 @@ func test_detect_rows_reads_a_pale_divider_as_empty():
 	var rows := _slicer().detect_rows(image, 0, 8, 2)
 	assert_eq(rows.size(), 1, "an opaque pale background is still background")
 	assert_eq(rows[0], Rect2i(0, 5, 8, 4))
+
+
+# -- what "empty" means to detect_frames, and why the art brief says magenta
+
+
+## A DARK opaque backdrop never separates frames -- pure black included.
+## Nothing dark and opaque is empty to detect_frames, so every column reads
+## as drawing and the row collapses to one frame.
+##
+## Worth pinning precisely because the code says otherwise: the column
+## scan's `mx == 0` branch carries a comment claiming it matches
+## "is_empty()'s own zero-max case", which does not exist -- is_empty calls
+## black content too, and that branch is a divide-by-zero guard for the
+## saturation ratio below it, unreachable for an opaque pixel at any normal
+## divider_gray_min. Reading that comment is what put "#0a0a0a is fine if
+## it is exactly black" into docs/concept/monsters.md's art brief; this
+## test is what took it back out.
+func test_no_dark_opaque_backdrop_separates_frames_not_even_pure_black():
+	for backdrop in [Color8(0, 0, 0), Color8(10, 10, 10), Color8(30, 30, 42), Color8(14, 16, 17)]:
+		var frames := _slicer().detect_frames(_sheet_on(backdrop), 0, 40, 8, 1)
+		assert_eq(frames.size(), 1, "backdrop %s should defeat frame detection" % backdrop)
+
+
+## Transparency separates them...
+func test_frames_separate_over_a_transparent_backdrop():
+	var frames := _slicer().detect_frames(_sheet_on(Color(0, 0, 0, 0)), 0, 40, 8, 1)
+	assert_eq(frames.size(), 3, "three drawings separated by transparent gaps")
+
+
+## ...and so does an opaque near-WHITE one, with no chroma key at all,
+## because pale and near-neutral is exactly what the divider rule calls
+## empty. This is not a hypothetical: boar_walk.png ships on a
+## rgba(253,254,253) backdrop, declares no chroma_key, and slices to its 8
+## frames. Pinned because the obvious generalisation from the black case --
+## "no opaque backdrop works" -- is false, and briefing an artist on it
+## would send them to a chroma key they do not need.
+func test_an_opaque_near_white_backdrop_separates_frames_with_no_key():
+	var frames := _slicer().detect_frames(_sheet_on(Color8(253, 254, 253)), 0, 40, 8, 1)
+	assert_eq(frames.size(), 3, "white is pale and neutral, so it reads as empty")
+
+
+## The catch that decides between the two, and why sheep/wolf use magenta
+## while boar/deer/horse do not: a white backdrop is indistinguishable from
+## near-white, low-saturation ART. A creature carrying bone, cream wool or
+## white cloth loses it to the backdrop rule.
+func test_a_white_backdrop_eats_near_white_parts_of_the_drawing():
+	var image := _sheet_on(Color8(253, 254, 253))
+	# A bone-white detail on the middle drawing -- pale, barely saturated.
+	for x in range(45, 65):
+		for y in range(12, 28):
+			image.set_pixel(x, y, Color8(246, 244, 238))
+	var slicer := _slicer()
+	var frames := slicer.detect_frames(image, 0, 40, 8, 1)
+	var middle := slicer.content_rect(image, frames[1], 0.3, 0.7)
+	assert_eq(
+		middle.size.x, 20,
+		"the bone detail should have been swallowed, leaving only the 20px body"
+	)
+
+
+## Chroma-keying that backdrop to real transparency first is what rescues
+## it -- the route every sheet in this repo actually takes, just with
+## magenta rather than a colour the art also contains.
+func test_keying_the_backdrop_out_first_restores_the_frames():
+	var keyed := SpriteSheetSlicer.chroma_keyed(_sheet_on(Color8(10, 10, 10)), Color8(10, 10, 10), 0.05)
+	assert_eq(_slicer().detect_frames(keyed, 0, 40, 8, 1).size(), 3)
+
+
+## A drawn cell BORDER only stays out of the way when it is pale on every
+## channel (>= DEFAULT_DIVIDER_GRAY_MIN) and near-neutral. This is the more
+## dangerous half of the pair, because a border runs the full WIDTH of its
+## row: one mid-grey horizontal rule puts a content pixel in every column
+## at once, so the row has no empty column anywhere and collapses to a
+## single frame no matter how clean the gaps between the drawings are.
+## The other half of the same reported delivery -- its borders measured
+## around 112-143, where 178 is the floor.
+func test_a_mid_grey_cell_border_collapses_the_row_to_one_frame():
+	var pale := _sheet_on(Color(0, 0, 0, 0), Color8(200, 200, 200))
+	assert_eq(_slicer().detect_frames(pale, 0, 40, 8, 1).size(), 3, "a pale border stays out of the way")
+	var mid := _sheet_on(Color(0, 0, 0, 0), Color8(128, 128, 128))
+	assert_eq(_slicer().detect_frames(mid, 0, 40, 8, 1).size(), 1, "a mid-grey one does not")
+
+
+## A vertical rule inside a gap is harmless whatever its colour -- it is
+## narrower than min_frame_width, so it is discarded rather than mistaken
+## for a drawing. Worth stating beside the test above, because the two look
+## like the same "drawn divider" problem and only one of them is.
+func test_a_narrow_vertical_rule_in_a_gap_is_discarded_not_mistaken_for_a_frame():
+	var image := _sheet_on(Color(0, 0, 0, 0))
+	for gap in 4:
+		var x: int = gap * 30 + 4
+		for y in image.get_height():
+			image.set_pixel(x, y, Color8(128, 128, 128))
+	assert_eq(_slicer().detect_frames(image, 0, 40, 8, 1).size(), 3)
+
+
+## Three 20px drawings on `backdrop`, separated by 10px gaps. `border`, when
+## given, is ruled across the FULL WIDTH at the top and bottom of the band
+## -- what a drawn cell grid actually puts on a sheet.
+func _sheet_on(backdrop: Color, border = null) -> Image:
+	var image := Image.create(100, 40, false, Image.FORMAT_RGBA8)
+	image.fill(backdrop)
+	for drawing in 3:
+		var left := 10 + drawing * 30
+		for x in range(left, left + 20):
+			for y in range(10, 30):
+				image.set_pixel(x, y, Color(0.2, 0.7, 0.3))
+	if border != null:
+		for x in image.get_width():
+			image.set_pixel(x, 1, border)
+			image.set_pixel(x, image.get_height() - 2, border)
+	return image
+
+
+## Content far larger than the canvas does NOT overflow it: normalize_frames
+## picks ONE scale for the whole set, min(canvas.x / widest, baseline_y /
+## tallest), and every frame is resized by it before being blitted. width
+## can therefore never exceed canvas.x and height never exceeds baseline_y,
+## so `left` and `top` are always >= 0.
+##
+## Pinned because the opposite was written down in two places and acted on:
+## IllustratedAnimalSprite's CANVAS_SIZE comment says "too little margin
+## overflows the canvas outright (Image.set_pixel errors on an out-of-bounds
+## index, not a silent clip)", and that claim was carried into
+## docs/concept/monsters.md's art brief as a hard ~300x290 ceiling on drawn
+## content. Whatever was once true of it, this is what the code does now --
+## an oversized sheet comes back scaled down, not raising.
+func test_content_far_larger_than_the_canvas_is_scaled_down_not_overflowed():
+	var image := Image.create(2000, 1200, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	for x in range(100, 1900):
+		for y in range(100, 1100):
+			image.set_pixel(x, y, Color(0.2, 0.7, 0.3))
+	var canvas := Vector2i(340, 330)
+	var normalized := _slicer().normalize_frames(image, [Rect2i(0, 0, 2000, 1200)], canvas, 310)
+	assert_eq(normalized.size(), 1)
+	assert_eq(normalized[0].get_size(), canvas, "comes back canvas-sized, having been scaled to fit")
+
+
+## And the drawing really is inside the canvas afterwards, feet on the
+## baseline -- not merely clipped to it.
+func test_an_oversized_frame_still_lands_with_its_feet_on_the_baseline():
+	var image := Image.create(1200, 900, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	for x in range(50, 1150):
+		for y in range(50, 850):
+			image.set_pixel(x, y, Color(0.2, 0.7, 0.3))
+	var normalized := _slicer().normalize_frames(image, [Rect2i(0, 0, 1200, 900)], Vector2i(340, 330), 310)
+	var frame: Image = normalized[0]
+	var lowest := -1
+	for y in frame.get_height():
+		for x in frame.get_width():
+			if frame.get_pixel(x, y).a > 0.5:
+				lowest = maxi(lowest, y)
+	assert_between(lowest, 305, 310, "the drawing's own bottom row should sit on the baseline")
+
+
+## ONE scale serves the whole set, so a single oversized frame shrinks
+## every other frame in the same action. This is the real cost of a row
+## whose creature is not drawn at a consistent size -- not a crash, which
+## is what the canvas comment claimed, but a whole animation rendering
+## smaller because of one frame in it.
+func test_one_oversized_frame_shrinks_every_other_frame_in_its_set():
+	var image := Image.create(900, 400, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	# Two equal drawings, then a third drawn twice as tall.
+	_box(image, Rect2i(10, 200, 100, 100))
+	_box(image, Rect2i(310, 200, 100, 100))
+	var alone := _slicer().normalize_frames(
+		image, [Rect2i(0, 0, 300, 400), Rect2i(300, 0, 300, 400)], Vector2i(340, 330), 310
+	)
+	_box(image, Rect2i(610, 100, 100, 200))
+	var together := _slicer().normalize_frames(
+		image,
+		[Rect2i(0, 0, 300, 400), Rect2i(300, 0, 300, 400), Rect2i(600, 0, 300, 400)],
+		Vector2i(340, 330), 310
+	)
+	assert_lt(
+		_drawn_height(together[0]), _drawn_height(alone[0]),
+		"frame 0 should render smaller once an oversized sibling joins its set"
+	)
+
+
+func _box(image: Image, rect: Rect2i) -> void:
+	for x in range(rect.position.x, rect.end.x):
+		for y in range(rect.position.y, rect.end.y):
+			image.set_pixel(x, y, Color(0.2, 0.7, 0.3))
+
+
+func _drawn_height(frame: Image) -> int:
+	var top := -1
+	var bottom := -1
+	for y in frame.get_height():
+		for x in frame.get_width():
+			if frame.get_pixel(x, y).a > 0.5:
+				if top < 0:
+					top = y
+				bottom = y
+				break
+	return 0 if top < 0 else bottom - top + 1
