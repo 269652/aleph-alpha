@@ -268,11 +268,13 @@ breaks the slicer.
 > Rows, top to bottom:
 > 1. **IDLE** — 4 frames, breathing and a small weight shift.
 > 2. **WALK** — 8 frames, a full cycle returning to frame 1.
-> 3. **ATTACK** — 6 frames: wind-up, commit, strike, follow-through, two
+> 3. **EAT** — 6 frames, head down to the ground and back up.
+> 4. **ATTACK** — 6 frames: wind-up, commit, strike, follow-through, two
 >    recovery.
-> 4. **DEFEND** — 4 frames: brace, hold, hold, release.
 > 5. **HURT** — 3 frames: impact recoil, stagger, recover.
-> 6. **DEATH** — 6 frames, ending in a still pose on the ground.
+> 6. **DEATH** — 6 frames, ending in a still pose flat on the ground —
+>    the last frame HOLDS while the body rests, so it has to be a settled
+>    pose and not a mid-fall one.
 >
 > **[SILHOUETTE]** — the shape it must read as at thumbnail size.
 > **[SURFACE]** — colour, material, texture.
@@ -328,12 +330,64 @@ drawn completely straight-faced.* Motion: *idle is a normal hare; the walk
 is a normal hop; the "attack" is a half-hearted flutter and a single
 unconvincing lunge.*
 
+`EAT` replaced `DEFEND` in this skeleton once the row table above was
+measured against the code. They are the two ends of the same mistake: the
+engine has no defending state at all, so a DEFEND row slices correctly and
+is never asked for, while `eat` is one of only three rows with NO fallback
+(`hurt` and `death` are the others) — a species without it drops to
+`ProceduralAnimalAnimation` the moment it grazes, which is the exact
+art-style swap this whole pipeline exists to stop.
+
+### What NOT to commission
+
+Stock creature sheets sold as "complete" carry rows this engine cannot
+reach, and the difference is worth knowing before paying for them. Two
+distinct cases:
+
+- **Directional variants** (a DOWN / LEFT / RIGHT / UP set per row) are
+  pure waste here, and they are the single most common extra. This engine
+  is side-view only: one facing is drawn and `CreatureMarker` sets
+  `flip_h` for the other, with `faces_left` declaring which way the supplied
+  sheet happens to face (see `IllustratedAnimalSprite`'s own header — that
+  is a property of the ASSET, not of the species). A four-direction set
+  costs 4× the art for nothing.
+- **Actions with no state behind them** — `run`, `throw`, `pick up`,
+  `carry`, `cheer`, `sleep`, `defend`. `CreatureMarker`'s whole action
+  vocabulary is `walk`, `eat`, `drink`, `swim` and `attack`, plus `idle`
+  derived from a standing `walk` and the two one-shot rows. Anything else
+  needs a new state in the AI before the band can ever be requested, so
+  unlike a row the engine already asks for — where declaring
+  `"<action>_bands"` IS the entire integration — these are code, not
+  content.
+
+  `sleep` is the cheapest of them by a distance, and worth knowing if a
+  sheet includes it anyway: dormancy is already simulated
+  (`_step_dormancy`/`_dormant`, real winter hibernation), and that branch
+  early-returns without calling `_animation_step` at all, so a dormant
+  creature simply freezes on whatever frame it was showing. Setting
+  `_current_action = "sleep"` and stepping the animation there is the whole
+  job.
+
 ### Sizing the sheet
 
 At six rows and 4–8 frames of ~300px each, a sheet lands near **2400×1800**.
 Generate each row separately if the generator degrades across a large
 canvas — the slicer takes bands per row, so a per-row file with its own
 `_bands` entry is equally valid and usually cleaner.
+
+**A hard ceiling, not a preference:** every frame is re-composited onto one
+shared `CANVAS_SIZE` of 340×330 with its ground-contact row landing on
+`BASELINE_Y` 310. A drawn subject whose content bounding box exceeds that
+overflows the canvas outright — `Image.set_pixel` raises on an
+out-of-bounds index; it does not silently clip. The largest frame in the
+current roster measures 302×293, so ~300×290 of real content per frame is
+the working bound.
+
+Apparent size on screen is NOT how big the creature is drawn:
+`marker_scale` is `BASE_WORLD_WIDTH (24) * AnimalAnatomy.world_scale /
+reference_content_width`, so the drawing is normalized away and
+`world_scale` is the only dial (wolf 1.0, Krampus 2.1). Draw big for
+detail; size the creature in its anatomy profile.
 
 ## Status
 
