@@ -360,6 +360,22 @@ are pure, scene-tree-free math (see `docs/progress.md`'s magic entry). This
 section specifies only what that executor should render once it exists, not
 the executor.
 
+**Delivered art: one sheet per shared shape family, not per atom
+(2026-09-24).** This section's own "Per atom, not per spell" above called
+for one hand-drawn sheet per catalog entry. What actually shipped
+(`docs/art/ai_sprite_prompts.md` §8, `illustrated_spell_effect_sprite.gd`)
+batches delivery by the procedural generator's own 6 shared silhouette
+families instead — `assets/sprites/magic/{fire,ring,cross,chevron,
+cloud}.png`, one image per family (`cross.png` holds two: cross rows 0-2,
+spiral rows 3-5) — each atom still its own distinct 6-frame row within its
+family's sheet. A delivery-efficiency divergence, not a design one: every
+atom still reads as its own distinct picture, matching the paragraph
+above's binding requirement; only the "one file per atom" packaging
+changed, for the same "one kit per shared archetype" reason `ai_sprite_
+prompts.md` already uses for flower/item art elsewhere. All 25 atoms are
+covered — the procedural fallback above now only matters for a future atom
+added to the catalog before its own art exists.
+
 Open questions:
 
 - Delivery-method visuals (touch/projectile/area/self): no travel-time/

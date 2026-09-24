@@ -6053,7 +6053,15 @@ catalogue, a gold-for-knowledge transaction, and a structure gate on magic
   these for the first time, see below). A procedural-first VFX (
   `procedural_spell_effect_sprite.gd` + `spell_effect_marker.gd`) plays at
   the resolved target for every atom that actually lands, same two-track
-  pattern `ProceduralItemSprite` already established for items. Honest
+  pattern `ProceduralItemSprite` already established for items — **now with
+  real illustrated art for all 25 atoms** (2026-09-24, `illustrated_spell_
+  effect_sprite.gd`): a real 6-frame wind-up/peak/fade cycle per atom,
+  superseding the procedural shape everywhere it casts from. Delivered as
+  one sheet per shared silhouette family (burst/ring/cross+spiral/chevron/
+  cloud — `assets/sprites/magic/{fire,ring,cross,chevron,cloud}.png`) rather
+  than one sheet per atom as `magic.md`'s own brainstorm originally called
+  for — a delivery-efficiency divergence noted there, not a design one:
+  every atom still gets its own distinct row/art. Honest
   gaps, all named in `spell_runtime.md`: no real projectile flight (instant-
   resolve-in-a-cone), `governing_stat`/`haste_stat` default to 0.0 (no
   `evocation`/`focus` skill-web wiring yet), `portal`/`induce_mutation` cost

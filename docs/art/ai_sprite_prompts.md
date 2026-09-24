@@ -793,16 +793,24 @@ addendum:
 
 ---
 
-## 8. Spell atom effects — one sheet per atom, six shared families
+## 8. Spell atom effects — one sheet per atom, six shared families — DONE, real art registered (2026-09-24)
 
-Effect sheets for the 25 atoms in `spell_atom_catalog.gd`, real and castable
-today via the procedural fallback (`procedural_spell_effect_sprite.gd`) a
-player already sees on every cast (see [spell_runtime.md](../concept/spell_runtime.md)
+Effect sheets for the 25 atoms in `spell_atom_catalog.gd`, castable today
+via real illustrated art (`illustrated_spell_effect_sprite.gd`), the
+procedural fallback (`procedural_spell_effect_sprite.gd`) a player used to
+see on every cast now only reachable for an atom not yet in
+`spell_atom_catalog.gd` (see [spell_runtime.md](../concept/spell_runtime.md)
 and [magic.md](../concept/magic.md)'s "Atom effects render as composite
-spritemaps" section). Keyed by ATOM id, not spell/item id — an effect
-belongs to whichever atom is resolving, not to the wand or weapon that
-triggered it, so a sheet generated here replaces that ONE atom's procedural
-look everywhere it's cast from, regardless of which spell used it.
+spritemaps" and "Delivered art" sections). Keyed by ATOM id, not spell/item
+id — an effect belongs to whichever atom is resolving, not to the wand or
+weapon that triggered it, so a sheet generated here replaces that ONE
+atom's procedural look everywhere it's cast from, regardless of which
+spell used it. Delivered as one file per shared family below rather than
+one file per atom (`assets/sprites/magic/{fire,ring,cross,chevron,
+cloud}.png` — `cross.png` holds both the cross and spiral families) —
+`magic.md`'s own "Delivered art" note has the fuller reasoning; each
+family's atoms below are still that family sheet's own rows, top to
+bottom in the order listed.
 
 Same "one kit per shared shape, not per member" efficiency this doc already
 uses for flower archetypes (section 1): the procedural generator already
