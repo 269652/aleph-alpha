@@ -931,6 +931,42 @@ character — much smaller canvas than the boss attack sheets in section 6):
 
 ---
 
+### 8g. The engine now adds light and warp on top of these — do not paint them in (2026-09-24)
+
+**Read this before generating anything in section 8.** As of
+[spell_vfx.md](../concept/spell_vfx.md), casting ANY atom now layers a real
+GPU shader on top of whatever sprite is showing — an additive glow halo
+around every atom, and for the seven burst-family atoms above (8a), a
+screen-space heat-shimmer warp of whatever is behind the effect. This is
+true today even with ZERO illustrated art generated: the shader runs on the
+*procedural* sprite right now, and will keep running, unchanged, on YOUR
+illustrated sheet the moment it lands — the shader layer and the sprite
+content are deliberately independent (spell_vfx.md's design pillar 1).
+
+**So the sprite itself must not include either effect, or the engine
+doubles them up:**
+
+- **No painted glow/bloom/radiant halo around the shape.** The engine's own
+  additive pass already puts light behind and around whatever you draw.
+  Painting a soft glow into the sprite on top of that reads as a hazy double
+  glow with no crisp core — the exact "airbrushed" failure
+  [pixel_art_engine.md](../concept/pixel_art_engine.md) already warns
+  against for a different reason. Draw the burst/ring/cross/spiral/
+  chevron/cloud shape itself with hard, posterized edges (every prompt
+  above already asks for this) and let the shader add the light.
+- **No painted heat-shimmer / warped background for the burst family
+  (8a).** These seven frames are meant to sit on a clean magenta field like
+  every other frame in this doc — the screen-warp is the engine distorting
+  whatever is genuinely BEHIND the effect at render time (grass, a
+  creature, the player), which a flat sprite sheet has no way to draw and
+  should not try to fake.
+
+**What the shader layer does NOT need from you:** no new sprites, no extra
+frames, no alternate "glow" variant of any sheet. It reads the exact same
+6-frame row this section already specifies, plus one colour
+(`ProceduralSpellEffectSprite.color_for`, already the source of truth for
+every atom's tint) it takes from the engine, never from the art.
+
 ## 9. General item icons — one kit per visual archetype (2026-08-28)
 
 The full item catalog (`item_catalog.gd`'s `_ITEMS`, the single source of

@@ -120,6 +120,109 @@ each other.* Two measurements under it, both taken by driving the real code:
   `test_combat_pacing`, `test_level_scaling` — **189 passing, zero
   failures, zero risky**, on a clean boot.
 
+- ✅ **The spell graphics engine gets a shader layer, and the illustrated
+  bridge it was always missing** (2026-09-24) — see `concept/spell_vfx.md`
+  (new).
+
+  Asked directly: *"flesh out the spell graphics engine using custom
+  shaders for magic effects and instruct me to generate sprite art for all
+  the sprites you need."*
+
+  **Two real gaps, both traceable to the same cause.** Magic's own
+  2026-08-28 spec ("Atom effects render as composite spritemaps")
+  described exactly this system, and neither half had been built:
+
+  1. **No shader touched a spell effect.** This game already has nine
+     other `*_shader.gd` wrappers (`TorchGlow`, `WaterShader`,
+     `SnowSparkleShader`...) all following one convention — a CPU-mirrored
+     tuned curve, GLSL that restates it, a cached material. Spells were the
+     one combat-facing system that never joined it; `SpellEffectMarker`
+     animated a flat sprite with a plain `Tween` and nothing else.
+  2. **The illustrated bridge was never written.** `ai_sprite_prompts.md`
+     section 8 has had complete, ready-to-run prompts for all 25 atoms,
+     grouped into the same six silhouette families the procedural
+     generator uses, since 2026-08-28. Nothing ever called the loader on
+     them — the exact shape of gap `IllustratedItemArt`'s own doc comment
+     named for items, now true of spells too until this entry.
+
+  **Two shaders, grounded in a real optical distinction rather than added
+  for their own sake** (spell_vfx.md's "Real-world grounding"): a real
+  discharge of energy both throws light on what's nearby AND visibly bends
+  the air right where it releases — two different phenomena, so two
+  separate shaders rather than one trying to do both.
+
+  - **`SpellGlowShader`** — an additive halo, every atom, tinted from
+    `ProceduralSpellEffectSprite.color_for` (the one shared colour table,
+    read rather than re-declared). Timed off `SpellEffectMarker`'s own
+    grow/hold/fade beat via a `progress` uniform — the fractions are
+    *derived* from `GROW_DURATION`/`HOLD_DURATION`/`FADE_DURATION` at the
+    call site, never restated as a second set of numbers, so retuning the
+    marker's timing retunes the halo for free.
+  - **`SpellImpactDistortionShader`** — a screen-space radial warp reading
+    `SCREEN_TEXTURE`, gated to exactly the seven burst-family atoms
+    (`fire_damage`, `frost_damage`, `shock_damage`, `ignite`,
+    `induce_mutation`, `illuminate`, `fear`) via a new
+    `ProceduralSpellEffectSprite.shape_for(atom_id)` accessor — the one
+    authoritative atom→family map, shared rather than forked a second
+    time. Pinned by test that this is the *exact* seven-atom list
+    `ai_sprite_prompts.md` section 8a independently arrived at from the art
+    side — the two had never been cross-checked before.
+
+  Both follow the established convention exactly: a fragment shader cannot
+  be asserted headless, so every tuned curve (`alpha_for_progress`,
+  `radial_intensity`/`radial_strength`, `temporal_strength`) exists first
+  as a plain, tested GDScript function, and the GLSL is a restatement of
+  it, never a second untested copy. A real bug was caught in review before
+  it ever ran: the halo's GLSL declared `grow_fraction`/`hold_fraction`
+  defaults that merely *resembled* the real derived values closely enough
+  to look right by accident — fixed to receive the actual derived numbers
+  explicitly, with a regression test naming exactly that trap.
+
+  **`IllustratedSpellEffectArt`** — `IllustratedItemArt`'s exact bridge
+  shape, re-keyed by atom id: registry → resolver (against the real file
+  tree) → loader → texture, illustrated when real art exists, procedural
+  when it does not. All 25 atoms are now registered in the one shared
+  `illustrated_art_registry.gd` every other subject lives in — no second
+  bespoke registry — with the address collapsed to the one axis that
+  actually varies (`assets/sprites/<atom_id>/effect/any/default/cast.png`).
+  `SpellEffectMarker.play()` now draws through this bridge; with no art on
+  disk yet, its output is **byte-identical** to the old direct procedural
+  call, pinned by test rather than assumed.
+
+  **A second real bug, this one in the TEST SUITE, caught the same way**:
+  a marker test that calls `play()` and asserts immediately (without
+  awaiting the full beat) leaves its halo mid-flight when `after_each()`
+  frees the marker — Godot binds a `create_tween()` result to its owning
+  node, so freeing the marker mid-sequence kills the halo's own scheduled
+  `queue_free` before it runs, orphaning it as a stray sibling a LATER
+  test's naive "first `MeshInstance2D`" scan would then wrongly pick up.
+  Fixed by sweeping stray halos in `after_each()` rather than trying to
+  identify "the right" one among several.
+
+  Sprite art instructions: not rewritten (section 8 was already complete
+  and verified — by test — to cover the live 25-atom roster exactly), but
+  a new 8g addendum tells the artist explicitly **not** to paint glow or
+  heat-shimmer into the sprites now that the engine adds both at render
+  time — real, necessary new guidance the shader work created, not busywork.
+
+  Tests: `test_spell_glow_shader.gd` 22 (new), `test_spell_impact_
+  distortion_shader.gd` 21 (new), `test_illustrated_spell_effect_art.gd`
+  12 (new), `test_procedural_spell_effect_sprite.gd` 11 (3 new),
+  `test_spell_effect_marker.gd` 12 (9 new), plus an 18-suite regression
+  batch over the illustrated-art and magic side, run behind the slow
+  `test_bee_hive_marker` — **277 passing, zero failures, zero risky**, on
+  a clean boot.
+
+  Named honestly rather than hidden: **no atom has real illustrated art
+  yet** (that is on the user — see `ai_sprite_prompts.md` section 8, now
+  with its 8g addendum); **the real 6-frame beat is not played back** (the
+  marker still tweens one frame; `frames_for` returns all of them for the
+  day it does); and **only two of six silhouette families have a shader
+  technique** (burst and universal glow) — ring/cross/spiral/chevron/cloud
+  each plausibly wants its own, each deserving the same real-world
+  grounding and CPU-mirror rigor as these two, named rather than shipped as
+  an unannounced first slice of five more to come.
+
 - ✅ **Nothing kills you in silence** (2026-09-22) — see
   `concept/feedback.md`. Reported from play: *"I constantly die out of
   nowhere."*

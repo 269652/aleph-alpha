@@ -74,3 +74,45 @@ func test_texture_for_differs_between_atoms():
 		generator.texture_for("fire_damage").get_image().get_data(),
 		generator.texture_for("frost_damage").get_image().get_data()
 	)
+
+
+# -- shape_for: the one atom -> family map every consumer must share -------
+
+## A public accessor for the shape family (burst/ring/cross/spiral/chevron/
+## cloud), which `_ATOM_LOOKS` already carries internally but never exposed.
+## docs/concept/spell_vfx.md's shader-gating logic (which atoms get impact
+## distortion) needs this exact map -- reading it here rather than forking a
+## second copy is the whole reason this accessor exists: two atom->family
+## tables would drift the first time either changed.
+func test_shape_for_matches_the_internal_look_table():
+	for atom_id in _catalog.known_ids():
+		assert_true(
+			generator.has_look(atom_id), "precondition: %s has a registered look" % atom_id
+		)
+		var shape: String = ProceduralSpellEffectSprite.shape_for(atom_id)
+		assert_true(
+			["burst", "ring", "cross", "spiral", "chevron", "cloud"].has(shape),
+			"%s must resolve to one of the six documented families, got %s" % [atom_id, shape]
+		)
+
+
+## The specific claim spell_vfx.md's "Real-world grounding" section makes:
+## the burst family is exactly these seven atoms, matching
+## ai_sprite_prompts.md section 8a's independently-authored list. This is
+## the assertion that would catch either doc drifting from the code.
+func test_the_burst_family_is_exactly_the_seven_atoms_the_art_doc_names():
+	var expected := [
+		"fire_damage", "frost_damage", "shock_damage", "ignite",
+		"induce_mutation", "illuminate", "fear",
+	]
+	var actual: Array = []
+	for atom_id in _catalog.known_ids():
+		if ProceduralSpellEffectSprite.shape_for(atom_id) == "burst":
+			actual.append(atom_id)
+	actual.sort()
+	expected.sort()
+	assert_eq(actual, expected)
+
+
+func test_shape_for_falls_back_to_the_generic_shape_for_an_unknown_atom():
+	assert_eq(ProceduralSpellEffectSprite.shape_for("not_a_real_atom"), "burst")

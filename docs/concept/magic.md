@@ -360,6 +360,16 @@ are pure, scene-tree-free math (see `docs/progress.md`'s magic entry). This
 section specifies only what that executor should render once it exists, not
 the executor.
 
+**The executor exists now** (see [spell_runtime.md](spell_runtime.md)), and
+so does the bridge that was still missing the day this section was
+written: [spell_vfx.md](spell_vfx.md) owns the shader technique layer
+(an additive glow halo, every atom; a screen-space impact warp, burst-
+family atoms only) and `IllustratedSpellEffectArt`, the illustrated-or-
+procedural bridge this section's own "Procedural fallback first" paragraph
+promised and nothing had built. All 25 atoms are registered; none has real
+art on disk yet — see that doc's own Status and `ai_sprite_prompts.md`
+section 8 for the ready-to-run prompts.
+
 Open questions:
 
 - Delivery-method visuals (touch/projectile/area/self): no travel-time/
@@ -576,3 +586,16 @@ as a contract because each step is a precondition of the next.
 - 🚧 **The guild has no interior trade UI**; `/learn` is the hand on it, the
   same honest scoping every other station interaction in `player.gd` has
   until an interaction UI exists.
+- ✅ **The shader technique layer and the illustrated bridge are real**
+  (2026-09-24) — see [spell_vfx.md](spell_vfx.md). An additive glow halo
+  now plays on every cast, and a screen-space warp on the seven burst-
+  family atoms; `IllustratedSpellEffectArt` prefers real art over
+  `ProceduralSpellEffectSprite`'s generated shape the moment a file exists
+  at `assets/sprites/<atom_id>/effect/any/default/cast.png`, exactly the
+  bridge this doc's "Procedural fallback first" paragraph always assumed
+  would eventually exist.
+- ⬜ **No atom has that real art yet.** All 25 are registered and every one
+  currently resolves to the procedural fallback — `ai_sprite_prompts.md`
+  section 8 has had ready-to-run prompts for all 25 since 2026-08-28, now
+  with an addendum (8g) on what NOT to paint into them given the shader
+  layer above.

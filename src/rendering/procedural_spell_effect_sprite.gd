@@ -78,6 +78,18 @@ static func color_for(atom_id: String) -> Color:
 	return _ATOM_LOOKS.get(atom_id, _FALLBACK)["color"]
 
 
+## The shape FAMILY (burst/ring/cross/spiral/chevron/cloud) `_ATOM_LOOKS`
+## already carries internally, exposed here as the one authoritative
+## atom -> family map (docs/concept/spell_vfx.md). Any consumer that needs
+## to know an atom's silhouette family -- the impact-distortion shader's
+## burst-only gate, above all -- reads THIS rather than forking a second
+## table, so the shader-gating list and the art-generation family grouping
+## (ai_sprite_prompts.md section 8) cannot drift apart from each other or
+## from this file's own drawing dispatch.
+static func shape_for(atom_id: String) -> String:
+	return _ATOM_LOOKS.get(atom_id, _FALLBACK)["shape"]
+
+
 func generate_texture(atom_id: String) -> ImageTexture:
 	return ImageTexture.create_from_image(generate_image(atom_id))
 
