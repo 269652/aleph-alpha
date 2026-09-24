@@ -6393,6 +6393,45 @@ somewhere to land:
   anywhere. A narrow vertical rule inside a gap is harmless by contrast
   (discarded under `min_frame_width`) — the two look like one problem and
   only one of them is, so both are tests.
+- 🐛 **Two more false claims came out of the same audit, both mine, both
+  caught by validating the probe against sheets that already ship.** A
+  probe that lies is a documented hazard in this repo, and this one lied
+  three times before it was trustworthy:
+  - It measured sheets **without their chroma key**, so `sheep.png` — which
+    ships and works — audited as broken: its magenta counted as drawing, so
+    every "frame" was the whole cell and every row looked like it
+    overflowed. It now applies the key exactly where `_slice_bands` does,
+    and uses the slicer's **own** `content_rect` rather than a
+    reimplementation, since a probe that reimplements the pipeline can
+    disagree with it.
+  - Its backdrop verdict counted the **drawing's own dark fur** as
+    backdrop, firing on `boar_walk.png`. Corner sampling replaced it — then
+    that failed too, because `sheep.png`'s corners are near-white while the
+    backdrop *inside* its cells is magenta. The verdict now comes from what
+    the sheet actually DID (a row slicing to one frame), with the backdrop
+    offered as the diagnosis, plus the modal opaque colour, which does find
+    sheep's magenta.
+  - **"Oversized content overflows the canvas and raises in
+    `Image.set_pixel`" is false**, and it was in `IllustratedAnimalSprite`'s
+    own `CANVAS_SIZE` comment, in `monsters.md` as a hard ~300×290 ceiling,
+    in the probe, and in what was told to the user.
+    `SpriteSheetSlicer.normalize_frames` picks ONE scale for the whole set,
+    `min(canvas.x / widest, baseline_y / tallest)`, and resizes every frame
+    by it, so it cannot overflow. What the shared scale really means is
+    better: the widest frame in a row sets the size **every other frame in
+    it** renders at, so one out-of-scale frame shrinks all its siblings —
+    the mechanical reason a row must be drawn at a consistent size. Both
+    pinned.
+- 🐛 **And the headline recommendation was wrong: a WHITE backdrop needs no
+  chroma key at all.** `boar_walk.png` ships on `rgba(253,254,253)`,
+  declares no key, and slices to its 8 frames — pale and near-neutral is
+  exactly what the divider rule already calls empty. The obvious
+  generalisation from the black case ("no opaque backdrop works") is false,
+  and briefing an artist on it sends them to a key they do not need. The
+  brief now carries both: white for a plain-coloured animal, magenta when
+  the creature has near-white parts, because the same rule that makes white
+  work swallows bone, cream wool and white cloth — which is why sheep is on
+  magenta and boar is not, and why a bone-hung goblin wants magenta too.
 - ⬜ **No `defend` action exists.** It will slice correctly and never be
   asked for until a braced/guarding behaviour is built. The prompt skeleton
   no longer asks artists for one: it was swapped for **EAT**, the same

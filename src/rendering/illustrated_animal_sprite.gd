@@ -37,8 +37,24 @@ const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
 ## caller does today -- between species) without its apparent size/anchor
 ## jumping around. Sized with margin around the largest registered frame
 ## across every species/action (measured 302x293, a deer's alert head-up
-## eat-cycle pose) -- too little margin overflows the canvas outright
-## (Image.set_pixel errors on an out-of-bounds index, not a silent clip).
+## eat-cycle pose).
+##
+## Oversized content does NOT overflow, whatever this comment used to say:
+## SpriteSheetSlicer.normalize_frames picks ONE scale for the whole set,
+## min(canvas.x / widest, baseline_y / tallest), and resizes every frame by
+## it -- so width can never exceed canvas.x nor height baseline_y (pinned
+## by test_content_far_larger_than_the_canvas_is_scaled_down_not_
+## overflowed). The old claim, that too little margin "overflows the canvas
+## outright (Image.set_pixel errors on an out-of-bounds index, not a silent
+## clip)", was carried out of here into docs/concept/monsters.md's art
+## brief as a hard ceiling artists were told to draw under. It is not one.
+##
+## What the margin really buys is RESOLUTION, and the shared scale is why:
+## the widest/tallest frame in a set decides the size every other frame in
+## it renders at. A canvas much smaller than the art would quietly
+## downscale every species at once, and one frame drawn out of scale with
+## its own row shrinks all of its siblings
+## (test_one_oversized_frame_shrinks_every_other_frame_in_its_set).
 const CANVAS_SIZE := Vector2i(340, 330)
 const BASELINE_Y := 310
 
