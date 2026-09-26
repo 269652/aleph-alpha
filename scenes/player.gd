@@ -863,6 +863,19 @@ var _last_facing_direction := Vector2.DOWN
 @onready var _collision_shape: CollisionShape2D = $CollisionShape2D
 @onready var _camera: Camera2D = $Camera2D
 
+const CameraShake = preload("res://src/rendering/camera_shake.gd")
+
+## The reference "full-strength" landed hit for camera shake scaling -- a
+## fully-tuned Fire Bolt (spell_book.gd) is the hardest single cast in the
+## book today, so it reads as the peak shake; anything smaller shakes
+## proportionally less (see CameraShake.offset_at's own severity clamp).
+const CAST_SHAKE_REFERENCE_DAMAGE := 49.0
+
+## Starts "already finished" (>= CameraShake.SECONDS) so _shake_step is a
+## harmless no-op before any cast has ever landed.
+var _shake_elapsed_seconds := CameraShake.SECONDS
+var _shake_severity := 0.0
+
 
 func _ready() -> void:
 	# A player is a person, and a person is what may pull a cart
@@ -2534,6 +2547,7 @@ func _physics_process(delta: float) -> void:
 		_authority_step(delta)
 	else:
 		_proxy_step()
+	_shake_step(delta)
 
 	if _is_local_player_instance() and not is_multiplayer_authority() and multiplayer.has_multiplayer_peer():
 		_submit_input.rpc_id(1, _read_local_input())
@@ -3720,15 +3734,19 @@ func cast_woven() -> bool:
 	# their arrangement mattered and the cast never asked.
 	var reaction := SpellDraft.reaction_multiplier(_woven_draft)
 	var delivery := _spell_executor.delivery_for(rule)
+	var pipeline: Array = rule.get("pipeline", [])
 	var dealt := 0.0
-	for step in rule.get("pipeline", []):
+	for index in pipeline.size():
+		var step: Dictionary = pipeline[index]
 		var scaled: Dictionary = step.duplicate()
 		scaled["params"] = SpellDraft.scaled_params(step.get("params", {}), reaction)
-		dealt += _apply_cast_step(scaled, delivery)
+		dealt += _apply_cast_step(scaled, delivery, index)
 	# Answered AFTER the pipeline, not before it, so the number it carries
 	# is what the weave really took off. It used to answer `{}` up front,
 	# which floated nothing over a spell that had not resolved yet.
 	answer("cast", {"damage": dealt} if dealt > 0.0 else {})
+	if dealt > 0.0:
+		_trigger_shake(dealt)
 	return true
 
 
@@ -3772,15 +3790,17 @@ func cast_spell(spell_id: String) -> bool:
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 
 	var delivery := _spell_executor.delivery_for(rule)
+	var pipeline: Array = rule.get("pipeline", [])
 	var dealt := 0.0
-	for step in rule.get("pipeline", []):
-		dealt += _apply_cast_step(step, delivery)
+	for index in pipeline.size():
+		dealt += _apply_cast_step(pipeline[index], delivery, index)
 	# A swing that lands puts a number on the thing it hit; a cast that
 	# lands must too, or a spell that hit and a spell that whiffed look
 	# identical (docs/concept/feedback.md). The Answerback table has had a
 	# `cast` row since it was written and nothing ever raised it.
 	if dealt > 0.0:
 		answer("cast", {"damage": dealt})
+		_trigger_shake(dealt)
 	return true
 
 
@@ -3791,10 +3811,17 @@ func cast_spell(spell_id: String) -> bool:
 ## visual only, see spell_runtime.md). Everything else routes through
 ## SpellAtomEffects against whatever SpellTargeting resolves for the rule's
 ## delivery method.
+## `chain_index` is this step's own position in the pipeline (0 for a
+## single-atom spell) -- threaded through to _spawn_spell_effect so a
+## multi-atom cast's VFX stagger and escalate into one cascading blow
+## instead of every atom's marker growing in on top of each other in the
+## same frame (see SpellEffectMarker.play's own start_delay/
+## scale_multiplier params).
+##
 ## Returns the health this step actually removed from the world, summed
 ## across everything it touched -- so a cast can answer with a real number
 ## the way a swing does (docs/concept/feedback.md).
-func _apply_cast_step(step: Dictionary, delivery: String) -> float:
+func _apply_cast_step(step: Dictionary, delivery: String, chain_index: int = 0) -> float:
 	var atom_id: String = step.get("atom", "")
 	var params: Dictionary = step.get("params", {})
 
@@ -3811,14 +3838,14 @@ func _apply_cast_step(step: Dictionary, delivery: String) -> float:
 	var dealt := 0.0
 	if target is Array:
 		if target.is_empty():
-			_spawn_spell_effect(atom_id, _cast_aim_point(delivery))
+			_spawn_spell_effect(atom_id, _cast_aim_point(delivery), chain_index)
 		else:
 			for one in target:
-				dealt += _apply_cast_step_to(atom_id, params, one)
+				dealt += _apply_cast_step_to(atom_id, params, one, chain_index)
 	elif target == null:
-		_spawn_spell_effect(atom_id, _cast_aim_point(delivery))
+		_spawn_spell_effect(atom_id, _cast_aim_point(delivery), chain_index)
 	else:
-		dealt += _apply_cast_step_to(atom_id, params, target)
+		dealt += _apply_cast_step_to(atom_id, params, target, chain_index)
 	return dealt
 
 
@@ -3840,17 +3867,38 @@ func _cast_aim_point(delivery: String) -> Vector2:
 			return _spell_targeting.area_center(position, _last_facing_direction, SpellTargeting.TOUCH_RANGE)
 
 
+## Decays and applies the camera's own answer to a blow just landed (see
+## CameraShake) -- purely cosmetic per-viewer state, so it runs every
+## frame regardless of multiplayer authority, same as any other camera
+## property a proxy instance harmlessly keeps in sync but never renders
+## through.
+func _shake_step(delta: float) -> void:
+	_shake_elapsed_seconds += delta
+	_camera.offset = CameraShake.offset_at(_shake_elapsed_seconds, _shake_severity)
+
+
+## A whole cast's worth of shake, once (not once per pipeline atom -- a
+## multi-atom spell already staggers its OWN VFX via _spawn_spell_effect's
+## chain_index; stacking a separate shake per atom on top would read as
+## jitter, not a cascade). `total_damage` is the pipeline's own summed
+## `dealt`, so a bigger combined blow always shakes harder regardless of
+## how many atoms it took to land it.
+func _trigger_shake(total_damage: float) -> void:
+	_shake_elapsed_seconds = 0.0
+	_shake_severity = clampf(total_damage / CAST_SHAKE_REFERENCE_DAMAGE, 0.0, 1.0)
+
+
 ## One atom against one target: the blow, the effect it throws, and -- when
 ## this was the blow that felled it -- the credit. `self` is handed to
 ## SpellAtomEffects so damage goes through `struck_by` and the thing turns
 ## on its caster; see docs/concept/spell_runtime.md, "A spell is a blow".
-func _apply_cast_step_to(atom_id: String, params: Dictionary, one) -> float:
+func _apply_cast_step_to(atom_id: String, params: Dictionary, one, chain_index: int = 0) -> float:
 	var health_before := _damageable_health_of(one)
 	if not _spell_atom_effects.apply_to_target(
 		atom_id, params, one, position, _last_facing_direction, self
 	):
 		return 0.0
-	_spawn_spell_effect(atom_id, one.position if one != null else position)
+	_spawn_spell_effect(atom_id, one.position if one != null else position, chain_index)
 	_credit_kill(one, health_before)
 	return maxf(0.0, health_before - _damageable_health_of(one))
 
@@ -3917,19 +3965,29 @@ func _damageable_health_of(target) -> float:
 	return 0.0
 
 
-## The procedural VFX (see docs/concept/magic.md's atom-effects section) --
-## only spawned when the atom actually landed (apply_to_target returned
-## true), so a whiffed cast doesn't flash an effect over nothing.
+## The illustrated/procedural VFX (see docs/concept/magic.md's atom-effects
+## section) -- spawned for every pipeline step, whether it landed on a real
+## target or (per _apply_cast_step's own miss branch) at a resolved aim
+## point, so a paid cast is always visually acknowledged.
 const SpellEffectMarker = preload("res://src/rendering/spell_effect_marker.gd")
 
+## How much each successive atom in ONE cast's pipeline is delayed/scaled
+## up from the last, so a multi-atom spell (fire_damage |> ignite) reads
+## as one cascading blow building rather than two disconnected pops
+## landing in the same frame.
+const CHAIN_STAGGER_SECONDS := 0.08
+const CHAIN_SCALE_STEP := 0.18
 
-func _spawn_spell_effect(atom_id: String, at_position: Vector2) -> void:
+
+func _spawn_spell_effect(atom_id: String, at_position: Vector2, chain_index: int = 0) -> void:
 	if get_parent() == null:
 		return
 	var marker := SpellEffectMarker.new()
 	marker.position = at_position
 	get_parent().add_child(marker)
-	marker.play(atom_id)
+	marker.play(
+		atom_id, chain_index * CHAIN_STAGGER_SECONDS, 1.0 + chain_index * CHAIN_SCALE_STEP
+	)
 
 
 # -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----

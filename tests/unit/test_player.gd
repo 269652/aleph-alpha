@@ -1820,6 +1820,53 @@ func test_casting_projectile_with_nothing_in_range_still_shows_the_cast_effect()
 	assert_true(_has_spell_effect_marker(), "a whiffed projectile cast should still show its effect")
 
 
+# -- the juice pass (2026-09-26): camera shake + chained atom VFX -----------
+
+## _shake_step is called directly, the same convention this file's own
+## _authority_step tests already use, rather than waiting a real physics
+## frame: _physics_process's own RPC-submission branch reads Input
+## actions ("attack"/"cast"/...) this headless test's InputMap never
+## registers, which GUT treats as an unrelated unexpected-error failure.
+func test_casting_a_spell_that_lands_shakes_the_camera():
+	player.apply_class("mage", {"max_mana": 50.0})
+	_creature_at("herbivore", Vector2(10, 0))
+	assert_true(player.cast_spell("fire_bolt"))
+	player._shake_step(0.001)
+	assert_ne(player._camera.offset, Vector2.ZERO, "a landed cast should shake the camera")
+
+
+func test_casting_a_spell_that_whiffs_does_not_shake_the_camera():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.cast_spell("fire_bolt"))
+	player._shake_step(0.001)
+	assert_eq(player._camera.offset, Vector2.ZERO, "a whiffed cast has nothing to shake the camera about")
+
+
+## fire_damage |> ignite: a multi-atom pipeline used to spawn every atom's
+## marker in the same frame; each pipeline step now gets its own marker
+## regardless (this asserts the COUNT -- SpellEffectMarker's own tests
+## cover the actual stagger/scale timing).
+func test_casting_a_two_atom_spell_spawns_a_marker_per_atom():
+	player.apply_class("mage", {"max_mana": 50.0})
+	_learn_at_a_guild("cinder_lash")
+	# The DELTA, not the absolute count: markers spawned by earlier tests
+	# in this same run are never cleaned up (no after_each removes them,
+	# same gap _has_spell_effect_marker's own boolean checks are immune to
+	# but a count is not), so this must be robust to whatever already sits
+	# there.
+	var before := _count_spell_effect_markers()
+	assert_true(player.cast_spell("cinder_lash"))
+	assert_eq(_count_spell_effect_markers() - before, 2, "one marker per pipeline atom")
+
+
+func _count_spell_effect_markers() -> int:
+	var count := 0
+	for child in get_children():
+		if child is SpellEffectMarker:
+			count += 1
+	return count
+
+
 func _has_spell_effect_marker() -> bool:
 	for child in get_children():
 		if child is SpellEffectMarker:
