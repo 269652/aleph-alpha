@@ -30,6 +30,7 @@ const Knapping = preload("res://src/gameplay/knapping.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const Player = preload("res://scenes/player.gd")
+const SpellEffectMarker = preload("res://src/rendering/spell_effect_marker.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
@@ -1798,6 +1799,32 @@ func test_casting_with_nothing_in_range_still_spends_mana():
 	var mana_before: float = player.mana
 	assert_true(player.cast_spell("fire_bolt"))
 	assert_lt(player.mana, mana_before)
+
+
+## A cast the player paid for and watched their character swing at must
+## show SOMETHING, whether or not anything was standing there to hit --
+## the old behaviour (VFX gated on a landed target) left a whiffed touch/
+## projectile cast completely silent: mana spent, swing played, nothing
+## seen. `_spawn_spell_effect` now fires at a resolved aim point (the
+## caster's own facing, at the delivery method's own range) whenever
+## nothing was there to land on.
+func test_casting_touch_with_nothing_in_range_still_shows_the_cast_effect():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.cast_spell("fire_bolt"))
+	assert_true(_has_spell_effect_marker(), "a whiffed touch cast should still show its effect")
+
+
+func test_casting_projectile_with_nothing_in_range_still_shows_the_cast_effect():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.cast_spell("spark"))
+	assert_true(_has_spell_effect_marker(), "a whiffed projectile cast should still show its effect")
+
+
+func _has_spell_effect_marker() -> bool:
+	for child in get_children():
+		if child is SpellEffectMarker:
+			return true
+	return false
 
 
 # -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----

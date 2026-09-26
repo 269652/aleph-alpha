@@ -3810,11 +3810,34 @@ func _apply_cast_step(step: Dictionary, delivery: String) -> float:
 	var target = _resolve_cast_target(delivery)
 	var dealt := 0.0
 	if target is Array:
-		for one in target:
-			dealt += _apply_cast_step_to(atom_id, params, one)
+		if target.is_empty():
+			_spawn_spell_effect(atom_id, _cast_aim_point(delivery))
+		else:
+			for one in target:
+				dealt += _apply_cast_step_to(atom_id, params, one)
+	elif target == null:
+		_spawn_spell_effect(atom_id, _cast_aim_point(delivery))
 	else:
 		dealt += _apply_cast_step_to(atom_id, params, target)
 	return dealt
+
+
+## Where a whiffed touch/projectile/area cast still shows its effect: the
+## same resolved point `_resolve_cast_target` would have searched around
+## (an area's own center, or a point in front of the caster at the
+## delivery method's own range for touch/projectile) -- reusing
+## SpellTargeting.area_center's exact "a fixed distance along facing,
+## falling back to the caster's own position with no facing" math rather
+## than re-deriving it, since a directed miss and an area's own center are
+## the same question: "where was this actually aimed."
+func _cast_aim_point(delivery: String) -> Vector2:
+	match delivery:
+		"area":
+			return _spell_targeting.area_center(position, _last_facing_direction)
+		"projectile":
+			return _spell_targeting.area_center(position, _last_facing_direction, SpellTargeting.PROJECTILE_RANGE)
+		_:  # touch
+			return _spell_targeting.area_center(position, _last_facing_direction, SpellTargeting.TOUCH_RANGE)
 
 
 ## One atom against one target: the blow, the effect it throws, and -- when
