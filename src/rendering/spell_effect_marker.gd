@@ -35,14 +35,26 @@ static var _illustrated := IllustratedSpellEffectSprite.new()
 
 ## Builds this marker's art for `atom_id` and starts its grow-hold-fade
 ## animation, freeing itself when it finishes.
-func play(atom_id: String) -> void:
+##
+## `start_delay` and `scale_multiplier` exist for a chained multi-atom cast
+## (scenes/player.gd's pipeline loop, e.g. `fire_damage |> ignite`): every
+## atom in one cast used to spawn its own marker in the same frame, all
+## growing in at once -- two disconnected pops rather than one cascading
+## blow. A small increasing `start_delay` per pipeline step staggers them
+## into a real sequence, and a small increasing `scale_multiplier` reads
+## as the blow building rather than repeating. Both default to "no change"
+## so a single-atom cast is unaffected.
+func play(atom_id: String, start_delay: float = 0.0, scale_multiplier: float = 1.0) -> void:
 	var frames := _illustrated.frames_for(atom_id)
 	texture = frames[0] if not frames.is_empty() else _generator.texture_for(atom_id)
 	scale = Vector2.ZERO
 	modulate.a = 1.0
+	var grown_scale := Vector2.ONE * scale_multiplier
 
 	var tween := create_tween()
-	tween.tween_property(self, "scale", Vector2.ONE, GROW_DURATION).set_trans(Tween.TRANS_BACK).set_ease(
+	if start_delay > 0.0:
+		tween.tween_interval(start_delay)
+	tween.tween_property(self, "scale", grown_scale, GROW_DURATION).set_trans(Tween.TRANS_BACK).set_ease(
 		Tween.EASE_OUT
 	)
 	tween.tween_interval(HOLD_DURATION)
@@ -51,6 +63,8 @@ func play(atom_id: String) -> void:
 
 	if frames.size() > 1:
 		var frame_tween := create_tween()
+		if start_delay > 0.0:
+			frame_tween.tween_interval(start_delay)
 		var step := TOTAL_DURATION / float(frames.size())
 		for i in range(1, frames.size()):
 			frame_tween.tween_interval(step)

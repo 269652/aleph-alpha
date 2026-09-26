@@ -55,3 +55,39 @@ func test_play_frees_itself_once_the_animation_completes():
 		SpellEffectMarker.GROW_DURATION + SpellEffectMarker.HOLD_DURATION + SpellEffectMarker.FADE_DURATION + 0.2
 	).timeout
 	assert_false(is_instance_valid(marker), "the marker should have queue_free'd itself by now")
+
+
+# -- start_delay / scale_multiplier (chained-atom "juice pass", 2026-09-26) -
+#
+# A multi-atom cast (fire_damage |> ignite) used to spawn every atom's
+## marker in the same frame, all growing in at once -- two disconnected
+## pops rather than one cascading blow. `play()` now takes an optional
+## per-marker start_delay (stagger) and scale_multiplier (escalation), so
+## scenes/player.gd's pipeline loop can chain them. Still not unit-tested
+## beyond real, waited-out end states, per this file's own doc comment.
+
+func test_play_with_a_start_delay_stays_invisible_until_the_delay_elapses():
+	marker.play("fire_damage", 0.3)
+	await get_tree().create_timer(0.1).timeout
+	assert_almost_eq(marker.scale.x, 0.0, 0.01, "a delayed marker must not have started growing yet")
+
+
+func test_play_with_a_start_delay_eventually_grows_in():
+	marker.play("fire_damage", 0.3)
+	await get_tree().create_timer(0.3 + SpellEffectMarker.GROW_DURATION + 0.1).timeout
+	assert_gt(marker.scale.x, 0.5, "a delayed marker must have grown in once its delay has passed")
+
+
+func test_play_with_a_scale_multiplier_grows_to_that_scale():
+	marker.play("fire_damage", 0.0, 1.5)
+	await get_tree().create_timer(SpellEffectMarker.GROW_DURATION + 0.1).timeout
+	assert_almost_eq(marker.scale.x, 1.5, 0.05)
+	assert_almost_eq(marker.scale.y, 1.5, 0.05)
+
+
+func test_play_with_a_start_delay_still_frees_itself_once_the_animation_completes():
+	marker.play("fire_damage", 0.3)
+	await get_tree().create_timer(
+		0.3 + SpellEffectMarker.GROW_DURATION + SpellEffectMarker.HOLD_DURATION + SpellEffectMarker.FADE_DURATION + 0.2
+	).timeout
+	assert_false(is_instance_valid(marker), "a delayed marker should still queue_free itself when it finishes")
