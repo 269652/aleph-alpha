@@ -6067,7 +6067,16 @@ catalogue, a gold-for-knowledge transaction, and a structure gate on magic
   `evocation`/`focus` skill-web wiring yet), `portal`/`induce_mutation` cost
   mana and play a visual but have no mechanical effect, `cast_time` is
   computed but not enforced as an actual delay, and the "cast" key always
-  casts the same fixed spell (no selection UI).
+  casts the same fixed spell (no selection UI). **2026-09-26:** two live
+  reports fixed. Fire Bolt's magnitude was 8 (a real wolf took ~14 casts to
+  fell) — raised to 49, test-pinned to kill any level of wolf within three
+  casts against `CreatureInfo`'s real health formula; `fire_damage`'s
+  `mag_ref` moved 6.0→16.0 alongside it so the mana cost stays affordable
+  (a raw magnitude bump alone would have cost more than a starting mage's
+  whole pool). Separately, a whiffed touch/projectile/area cast used to
+  show no effect at all (VFX gated on landing a real target) — now spawns
+  at a resolved aim point regardless, so a paid cast is always visually
+  acknowledged.
 
 - **Spell Tuition / the mage guild's trade** (medium) — ✅ Done — see
   `concept/magic.md`'s 2026-09-19 section, which answers that doc's own
