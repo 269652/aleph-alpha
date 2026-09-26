@@ -6076,7 +6076,21 @@ catalogue, a gold-for-knowledge transaction, and a structure gate on magic
   whole pool). Separately, a whiffed touch/projectile/area cast used to
   show no effect at all (VFX gated on landing a real target) — now spawns
   at a resolved aim point regardless, so a paid cast is always visually
-  acknowledged.
+  acknowledged. **A juice pass followed the same day**, reported live as
+  "the animations are pretty poor... impressive/addictive with
+  combinations, cascades": a multi-atom pipeline (`fire_damage |> ignite`)
+  now staggers and escalates its own atoms' effects (`SpellEffectMarker`'s
+  new `start_delay`/`scale_multiplier`) into one cascading blow instead of
+  every atom's marker growing in on top of the others in the same frame,
+  and a cast that lands real damage shakes the camera, scaled by total
+  damage dealt (new `camera_shake.gd`, mirrors `hit_flash.gd`/
+  `hurt_flash.gd`'s exact pure-function split — "you hit something HARD"
+  alongside their "something was hit"/"you were hit"). Deliberately out of
+  this pass: hit-stop (a global `Engine.time_scale` effect, riskier to get
+  right and test-safe) and particle debris (nothing in this codebase uses
+  `GPUParticles2D`/`CPUParticles2D` anywhere — every other impact-adjacent
+  effect is procedural/shader-driven, so this didn't introduce the first
+  exception without being asked).
 
 - **Spell Tuition / the mage guild's trade** (medium) — ✅ Done — see
   `concept/magic.md`'s 2026-09-19 section, which answers that doc's own

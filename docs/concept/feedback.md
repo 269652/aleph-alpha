@@ -431,6 +431,20 @@ the suite goes red before it can ship.
   `mote_found` was neither until now. It is an `UNBOUND_VERB` beside
   `craft`, `level_up` and `hurt`.
 
+- ✅ **A third answer alongside the screen and the creature: the camera**
+  (2026-09-26). `HurtFlash`/`HitFlash` say "you were hit"/"something was
+  hit"; nothing said "you hit something HARD" — reported live as part of a
+  spell-cast juice pass. `CameraShake` (`src/rendering/camera_shake.gd`)
+  is the same pure-function shape (`offset_at(elapsed_seconds, severity)`,
+  decaying to `Vector2.ZERO`, deterministic rather than seeded so a test
+  never has to stub an RNG), applied by `Player._shake_step` every frame
+  to its own `Camera2D.offset` and triggered by `Player._trigger_shake`
+  whenever a cast lands real damage, scaled against a full-strength Fire
+  Bolt. Scoped to spell casts for now, not melee `attack`/`kick`/
+  `destroy` — those already carry `FLASH_HIT` but nobody asked for their
+  own camera reaction yet, and extending it is a small, separate step once
+  someone does.
+
 - ⬜ **The sounds themselves**, still. Every `sound` id but the footsteps
   names a clip that does not exist, `hurt` included. The table is the
   commissioning list.
