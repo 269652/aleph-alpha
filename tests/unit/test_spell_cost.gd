@@ -55,14 +55,20 @@ func test_doubling_magnitude_more_than_doubles_cost():
 
 func test_two_distinct_atoms_cost_less_than_the_same_atom_twice():
 	# Same total magnitude, same base atoms; the repeated-atom spam penalty
-	# makes the varied composition strictly cheaper.
+	# makes the varied composition strictly cheaper. push/pull, not fire/
+	# frost damage: they share an identical base_cost and mag_ref today
+	# (1.5, 10.0), so this stays a fair like-for-like comparison regardless
+	# of any single atom's own price tuning -- fire_damage's mag_ref moved
+	# on 2026-09-26 (see spell_atom_catalog.gd) specifically to make it NOT
+	# match frost_damage's anymore, which used to be this test's pairing
+	# and broke exactly this fairness assumption.
 	var varied := cost.composition_cost([
-		_atom("fire_damage", {"magnitude": 6}),
-		_atom("frost_damage", {"magnitude": 6}),
+		_atom("push", {"magnitude": 10}),
+		_atom("pull", {"magnitude": 10}),
 	])
 	var spam := cost.composition_cost([
-		_atom("fire_damage", {"magnitude": 6}),
-		_atom("fire_damage", {"magnitude": 6}),
+		_atom("push", {"magnitude": 10}),
+		_atom("push", {"magnitude": 10}),
 	])
 	assert_lt(varied, spam)
 

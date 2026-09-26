@@ -31,9 +31,17 @@ const _SOURCES := {
 	# -- pyromancy (fire_damage, ignite) -- no atom in this school runs
 	# deeper than tier 1, so a pyromancer's whole trade is teachable by any
 	# adept of it. Not every tradition has depth to offer.
+	# magnitude 49, not 8 (2026-09-26): test_spell_book.gd's own test_
+	# fire_bolt_kills_any_level_wolf_within_three_casts pins this against
+	# CreatureInfo's real wolf health formula (72.5-145.0 across every
+	# level) -- a real fireball fells a wolf in three casts, the same
+	# reference exchange melee already gets (combat.md). See fire_damage's
+	# own mag_ref in spell_atom_catalog.gd for the other half: raised
+	# alongside this so the mana cost stays something a starting mage can
+	# actually recast, not a spell that drains their whole pool in one hit.
 	"fire_bolt": (
 		'spell "Fire Bolt" { on cast(touch) when wielder.mana >= @cost: '
-		+ "fire_damage(magnitude: 8) }"
+		+ "fire_damage(magnitude: 49) }"
 	),
 	"cinder_lash": (
 		'spell "Cinder Lash" { on cast(projectile) when wielder.mana >= @cost: '

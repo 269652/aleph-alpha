@@ -23,7 +23,16 @@ extends RefCounted
 ##   is 1.0. 0.0 means the atom is instantaneous (no duration dimension).
 const _ATOMS := {
 	# damage -- instantaneous, scales with magnitude
-	"fire_damage": {"category": "damage", "tier": 1, "base_cost": 2.0, "mag_ref": 6.0, "dur_ref": 0.0},
+	# mag_ref raised 6.0 -> 16.0 (2026-09-26) alongside fire_bolt's own
+	# magnitude bump in spell_book.gd (8 -> 49, "kills a wolf in 3 casts" --
+	# see test_spell_book.gd): mag_ref is fire_damage's shared cost anchor
+	# (the magnitude at which the cost multiplier is 1.0), so a real
+	# fireball needing real magnitude means the anchor itself was stale,
+	# not that magnitude should cost 30x more at the old anchor. Cinder
+	# Lash's own smaller fire_damage(magnitude: 6) gets proportionally
+	# cheaper as a direct, accepted consequence -- the same atom, the same
+	# formula, just re-centered on what "normal" fire damage looks like now.
+	"fire_damage": {"category": "damage", "tier": 1, "base_cost": 2.0, "mag_ref": 16.0, "dur_ref": 0.0},
 	"frost_damage": {"category": "damage", "tier": 1, "base_cost": 2.0, "mag_ref": 6.0, "dur_ref": 0.0},
 	"shock_damage": {"category": "damage", "tier": 1, "base_cost": 2.2, "mag_ref": 5.0, "dur_ref": 0.0},
 	"poison_damage": {"category": "damage", "tier": 1, "base_cost": 1.8, "mag_ref": 4.0, "dur_ref": 0.0},

@@ -68,3 +68,54 @@ func test_every_authored_spell_has_a_real_name():
 ## caller that got here has a bug, and a blank slot hides it.
 func test_an_unknown_id_reads_as_itself():
 	assert_eq(SpellBook.new().name_for("not_a_spell"), "not_a_spell")
+
+
+# -- Fire Bolt's damage, measured against a real wolf (2026-09-26) ----------
+#
+# Reported live as too weak: at the original magnitude (8), a wolf took
+# ~14 casts to fell. Measured, not assumed, against CreatureInfo's own
+# health formula across every level a wolf can roll -- a wolf-tuning
+# change elsewhere would otherwise silently drift this claim false with
+# nothing to catch it, the same reasoning CombatPacing.EXCHANGE_HEALTH_
+# SCALE's own test-pinning already uses for melee's "two landed bites"
+# rule.
+
+const CreatureInfo = preload("res://src/world/creature_info.gd")
+const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
+
+
+func _fire_bolt_magnitude() -> float:
+	var executor := SpellExecutor.new()
+	var rule = executor.cast_rule(book.ast_for("fire_bolt"))
+	for step in rule.get("pipeline", []):
+		if step.get("atom", "") == "fire_damage":
+			return float(step.get("params", {}).get("magnitude", 0.0))
+	return 0.0
+
+
+func test_fire_bolt_kills_any_level_wolf_within_three_casts():
+	var magnitude := _fire_bolt_magnitude()
+	assert_gt(magnitude, 0.0, "fire_bolt must actually cast fire_damage")
+	for level_seed in range(CreatureInfo.LEVEL_RANGE):
+		var wolf := CreatureInfo.new("wolf", level_seed)
+		var casts_to_kill := int(ceil(wolf.max_health / magnitude))
+		assert_true(
+			casts_to_kill <= 3,
+			(
+				"a level %d wolf (%.1f hp) should die within 3 Fire Bolts, needs %d"
+				% [wolf.level, wolf.max_health, casts_to_kill]
+			)
+		)
+
+
+## The other half of the same claim: a real fireball must still be
+## something a starting mage can actually cast more than once, not a
+## single-shot nuke that empties their whole pool (spell_cost.gd's
+## magnitude exponent is deliberately superlinear, so a naive damage bump
+## alone would have made this uncastable -- see fire_damage's own mag_ref
+## in spell_atom_catalog.gd).
+func test_fire_bolt_leaves_a_starting_mage_room_to_recast():
+	var executor := SpellExecutor.new()
+	var cost := executor.cost_for(executor.cast_rule(book.ast_for("fire_bolt")))
+	var mage_max_mana: float = ClassArchetype.new().stats_for("mage")["max_mana"]
+	assert_lt(cost, mage_max_mana / 2.0, "Fire Bolt must leave a starting mage room for at least one more cast")
