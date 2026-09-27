@@ -81,12 +81,14 @@ syntax-fixed), plus a same-run batch behind `test_bee_hive_marker` (this
 project's own established order-dependence canary) — `test_answerback`,
 `test_loot_table`, `test_alp`, `test_species_bite`, `test_creature_info`,
 `test_curupira` — **296 passing, zero failures**. `test_earth_chunk_manager`
-(the ~2000-test, 20+-minute suite this environment takes to run; also the
-home of the one test that actually reads both species-pool dicts,
-`test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_
-biome_pool`, run directly and green) run separately in the background: a
-handful of pre-existing failures surfaced in unrelated subsystems this
-change never touches -- ocean/hydrology tile-atlas rendering
+(~2000 tests; also the home of the one test that actually reads both
+species-pool dicts, `test_promoted_creatures_near_berlin_only_use_species_
+from_their_chunks_biome_pool`, run directly on its own and green) run
+separately in the background outran its own 10-minute timeout in this
+environment and was killed before reaching a final tally, so there is no
+complete pass count for it here -- but its progress up to that point
+surfaced only pre-existing failures, all in unrelated subsystems this
+change never touches: ocean/hydrology tile-atlas rendering
 (`test_water_overlay_marks_shore_cells_differently_from_non_touching_
 cells` and its ring-tile sibling) and ambient-flyer population promotion
 (`test_refresh_creatures_promotes_blackbirds_once_population_rises_after_
