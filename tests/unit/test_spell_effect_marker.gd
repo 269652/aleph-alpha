@@ -65,29 +65,56 @@ func test_play_frees_itself_once_the_animation_completes():
 ## per-marker start_delay (stagger) and scale_multiplier (escalation), so
 ## scenes/player.gd's pipeline loop can chain them. Still not unit-tested
 ## beyond real, waited-out end states, per this file's own doc comment.
+##
+## These use "not_a_real_atom" (the procedural fallback) rather than a real
+## illustrated atom deliberately: illustrated art additionally applies its
+## own display_scale (see the dedicated tests below), which would make
+## "does scale_multiplier itself work" and "does display_scale itself
+## work" the same assertion instead of two independent ones.
 
 func test_play_with_a_start_delay_stays_invisible_until_the_delay_elapses():
-	marker.play("fire_damage", 0.3)
+	marker.play("not_a_real_atom", 0.3)
 	await get_tree().create_timer(0.1).timeout
 	assert_almost_eq(marker.scale.x, 0.0, 0.01, "a delayed marker must not have started growing yet")
 
 
 func test_play_with_a_start_delay_eventually_grows_in():
-	marker.play("fire_damage", 0.3)
+	marker.play("not_a_real_atom", 0.3)
 	await get_tree().create_timer(0.3 + SpellEffectMarker.GROW_DURATION + 0.1).timeout
 	assert_gt(marker.scale.x, 0.5, "a delayed marker must have grown in once its delay has passed")
 
 
 func test_play_with_a_scale_multiplier_grows_to_that_scale():
-	marker.play("fire_damage", 0.0, 1.5)
+	marker.play("not_a_real_atom", 0.0, 1.5)
 	await get_tree().create_timer(SpellEffectMarker.GROW_DURATION + 0.1).timeout
 	assert_almost_eq(marker.scale.x, 1.5, 0.05)
 	assert_almost_eq(marker.scale.y, 1.5, 0.05)
 
 
 func test_play_with_a_start_delay_still_frees_itself_once_the_animation_completes():
-	marker.play("fire_damage", 0.3)
+	marker.play("not_a_real_atom", 0.3)
 	await get_tree().create_timer(
 		0.3 + SpellEffectMarker.GROW_DURATION + SpellEffectMarker.HOLD_DURATION + SpellEffectMarker.FADE_DURATION + 0.2
 	).timeout
 	assert_false(is_instance_valid(marker), "a delayed marker should still queue_free itself when it finishes")
+
+
+# -- display_scale compensation (2026-09-26) ---------------------------------
+#
+# Illustrated frames are baked at IllustratedSpellEffectSprite.CANVAS_SIZE
+# (128, for real source detail), far bigger than the procedural fallback's
+# native 32x32 draw -- without compensation, switching from a procedural
+# atom to an illustrated one would make the effect visibly balloon 4x.
+
+func test_illustrated_art_grows_to_the_same_on_screen_size_as_procedural():
+	marker.play("fire_damage")
+	await get_tree().create_timer(SpellEffectMarker.GROW_DURATION + 0.1).timeout
+	var expected := float(IllustratedSpellEffectSprite.DISPLAY_WORLD_SIZE) / float(marker.texture.get_width())
+	assert_almost_eq(marker.scale.x, expected, 0.01)
+	assert_lt(marker.scale.x, 1.0, "illustrated art is baked bigger than its on-screen size, so it must scale down")
+
+
+func test_procedural_art_needs_no_scale_compensation():
+	marker.play("not_a_real_atom")
+	await get_tree().create_timer(SpellEffectMarker.GROW_DURATION + 0.1).timeout
+	assert_almost_eq(marker.scale.x, 1.0, 0.01)

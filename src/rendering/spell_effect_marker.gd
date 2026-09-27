@@ -49,7 +49,15 @@ func play(atom_id: String, start_delay: float = 0.0, scale_multiplier: float = 1
 	texture = frames[0] if not frames.is_empty() else _generator.texture_for(atom_id)
 	scale = Vector2.ZERO
 	modulate.a = 1.0
-	var grown_scale := Vector2.ONE * scale_multiplier
+	# Illustrated frames are baked at IllustratedSpellEffectSprite.CANVAS_SIZE
+	# (128, for real source detail -- see that constant's own doc comment),
+	# far bigger than the procedural fallback's native 32x32 draw. Scaling
+	# by DISPLAY_WORLD_SIZE / this texture's own width lands both art
+	# sources at the same on-screen size regardless: 1.0 for the procedural
+	# texture (already DISPLAY_WORLD_SIZE wide), a real shrink for
+	# illustrated art.
+	var display_scale := float(IllustratedSpellEffectSprite.DISPLAY_WORLD_SIZE) / float(texture.get_width())
+	var grown_scale := Vector2.ONE * scale_multiplier * display_scale
 
 	var tween := create_tween()
 	if start_delay > 0.0:

@@ -36,20 +36,66 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const ProceduralSpellEffectSprite = preload("res://src/rendering/procedural_spell_effect_sprite.gd")
 
-## Matches ProceduralSpellEffectSprite.SIZE -- switching between procedural
-## and illustrated art for different atoms in the same cast must not jump
-## in scale.
-const CANVAS_SIZE := ProceduralSpellEffectSprite.SIZE
+## Resolution a frame is baked at. Deliberately NOT ProceduralSpellEffectSprite.
+## SIZE (32): these are real illustrated sheets with far more source detail
+## per frame (~300-400px) than a 32x32 procedural draw ever has, and baking
+## straight down to 32px measured as destroying exactly the detail that
+## reads as fire vs. lightning vs. ice -- shock_damage's jagged bolt spikes
+## and saturated yellow core blurred into an indistinct pink-orange smear at
+## 32px (a live report: "spark... should have more of a lightning effect"),
+## confirmed by a direct side-by-side bake at 32/64/96/128px before landing
+## this. SpellEffectMarker compensates the ON-SCREEN size (see
+## DISPLAY_WORLD_SIZE) so switching between an atom with illustrated art and
+## the smaller procedural fallback doesn't visibly jump in size.
+const CANVAS_SIZE := 128
+
+## The on-screen size (world pixels, at Sprite2D scale 1.0) every spell
+## effect should read at regardless of its own texture's resolution --
+## SpellEffectMarker scales by DISPLAY_WORLD_SIZE / texture width, so
+## illustrated art (baked at CANVAS_SIZE) and the procedural fallback
+## (drawn natively at its own SIZE) land on the same apparent size.
+const DISPLAY_WORLD_SIZE := ProceduralSpellEffectSprite.SIZE
 
 const FRAMES_PER_ROW := 6
 
-const _MAGENTA := Color(0.98, 0.01, 0.98)
-const _MAGENTA_TOLERANCE := 0.25
+## Shrinks every cell rect (rows and columns alike) by this many pixels on
+## each side before content_rect scans it. Real bug found live: a cell
+## rect that starts even 1-2px from a sheet's own divider line (near-white,
+## ~1-2px wide plus antialiasing) still contains a sliver of that line --
+## content_rect (which bounds ALL non-background pixels, not just the
+## connected burst/ring/etc shape) then stretches to include it, both
+## visibly leaking a thin magenta-tinted line into the baked frame AND
+## shrinking the real art to share canvas space with it. Confirmed by
+## direct pixel sampling (a divider's white core sits literally 1px from
+## one measured column bound) and by a before/after bake. The generation
+## brief's own "generous empty magenta padding around each pose so nothing
+## touches a divider or the canvas edge" means real content is never this
+## close to a boundary, so this margin only ever trims padding.
+const _CELL_INSET_PX := 5
 
-## family_key -> {path, row_bands, atoms}. row_bands[i] is atoms[i]'s own
-## (top_y, bottom_y) band within the sheet at `path`, top to bottom in
-## delivery order -- exactly docs/art/ai_sprite_prompts.md section 8's own
-## per-family atom tables.
+const _MAGENTA := Color(0.98, 0.01, 0.98)
+## 0.25 (this codebase's usual convention, e.g. illustrated_mushroom_sprite.
+## gd) left visible fully-opaque magenta-pink specks in a baked frame,
+## confirmed by direct pixel sampling: the delivered sheets' own magenta
+## backdrop is faintly textured/dithered per-pixel rather than a flat
+## colour, and some of that texture's noise sits up to ~0.32 away from the
+## sampled key on the green channel alone -- invisible at the smaller
+## canvas this class used to bake at (an aggressive downscale blended the
+## stray specks away by accident), a real defect at CANVAS_SIZE's larger
+## one. Real content colours (the art's own oranges/yellows/blues/whites)
+## sit far beyond any tolerance this wide, so widening it only ever
+## reaches further into background noise, never into a real drawing.
+const _MAGENTA_TOLERANCE := 0.4
+
+## family_key -> {path, row_bands, col_bounds, atoms}. row_bands[i] is
+## atoms[i]'s own (top_y, bottom_y) band within the sheet at `path`, top to
+## bottom in delivery order -- exactly docs/art/ai_sprite_prompts.md
+## section 8's own per-family atom tables. col_bounds is the sheet's own 7
+## x-boundaries (6 columns) -- measured per file, not a uniform width/6
+## split: a uniform split was off by up to ~12px from a real divider line
+## on some boundaries (columns are NOT evenly sized -- e.g. fire.png's own
+## widths run 391/347/350/350/350/384), which _CELL_INSET_PX alone could
+## not reliably clear.
 const _FAMILIES := {
 	"burst": {
 		"path": "res://assets/sprites/magic/fire.png",
@@ -58,6 +104,7 @@ const _FAMILIES := {
 			Vector2i(0, 107), Vector2i(107, 208), Vector2i(208, 310), Vector2i(310, 410),
 			Vector2i(410, 512), Vector2i(512, 614), Vector2i(614, 724),
 		],
+		"col_bounds": [0, 390, 737, 1087, 1437, 1787, 2172],
 	},
 	"ring": {
 		"path": "res://assets/sprites/magic/ring.png",
@@ -66,6 +113,7 @@ const _FAMILIES := {
 			Vector2i(0, 116), Vector2i(116, 237), Vector2i(237, 351), Vector2i(351, 470),
 			Vector2i(470, 601), Vector2i(601, 708), Vector2i(708, 853), Vector2i(853, 1024),
 		],
+		"col_bounds": [0, 256, 512, 768, 1023, 1279, 1536],
 	},
 	# cross.png delivers TWO families in one file (see class doc comment):
 	# rows 0-2 are the cross family, rows 3-5 are spiral.
@@ -76,16 +124,19 @@ const _FAMILIES := {
 			Vector2i(15, 157), Vector2i(165, 335), Vector2i(341, 489),
 			Vector2i(527, 672), Vector2i(692, 837), Vector2i(847, 1004),
 		],
+		"col_bounds": [0, 255, 511, 767, 1023, 1279, 1536],
 	},
 	"chevron": {
 		"path": "res://assets/sprites/magic/chevron.png",
 		"atoms": ["push", "pull"],
 		"row_bands": [Vector2i(58, 412), Vector2i(473, 827)],
+		"col_bounds": [0, 273, 542, 886, 1232, 1504, 1774],
 	},
 	"cloud": {
 		"path": "res://assets/sprites/magic/cloud.png",
 		"atoms": ["poison_damage", "blight"],
 		"row_bands": [Vector2i(43, 335), Vector2i(390, 681)],
+		"col_bounds": [0, 362, 724, 1086, 1449, 1812, 2172],
 	},
 }
 
@@ -135,18 +186,20 @@ func _load_family(family_key: String) -> Dictionary:
 	var family: Dictionary = _FAMILIES[family_key]
 	var raw := SpriteSheetLoader.load_image(family["path"])
 	var keyed := SpriteSheetSlicer.chroma_keyed(raw, _MAGENTA, _MAGENTA_TOLERANCE)
-	var width := keyed.get_width()
 	var atoms: Array = family["atoms"]
 	var row_bands: Array = family["row_bands"]
+	var col_bounds: Array = family["col_bounds"]
 
 	var result: Dictionary = {}
 	for i in atoms.size():
 		var band: Vector2i = row_bands[i]
 		var frames: Array[ImageTexture] = []
 		for col in FRAMES_PER_ROW:
-			var x0 := int(round(float(width) * float(col) / float(FRAMES_PER_ROW)))
-			var x1 := int(round(float(width) * float(col + 1) / float(FRAMES_PER_ROW)))
-			var rect := Rect2i(x0, band.x, x1 - x0, band.y - band.x)
+			var x0: int = col_bounds[col] + _CELL_INSET_PX
+			var x1: int = col_bounds[col + 1] - _CELL_INSET_PX
+			var rect := Rect2i(
+				x0, band.x + _CELL_INSET_PX, x1 - x0, (band.y - _CELL_INSET_PX) - (band.x + _CELL_INSET_PX)
+			)
 			frames.append(ImageTexture.create_from_image(_center_frame(keyed, rect)))
 		result[atoms[i]] = frames
 	return result
