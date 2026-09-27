@@ -84,17 +84,19 @@ const CreatureInfo = preload("res://src/world/creature_info.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 
 
-func _fire_bolt_magnitude() -> float:
+## The magnitude a single-atom spell casts `atom_id` at, read from its real
+## parsed AST rather than duplicated as a second, driftable number.
+func _single_atom_magnitude(spell_id: String, atom_id: String) -> float:
 	var executor := SpellExecutor.new()
-	var rule = executor.cast_rule(book.ast_for("fire_bolt"))
+	var rule = executor.cast_rule(book.ast_for(spell_id))
 	for step in rule.get("pipeline", []):
-		if step.get("atom", "") == "fire_damage":
+		if step.get("atom", "") == atom_id:
 			return float(step.get("params", {}).get("magnitude", 0.0))
 	return 0.0
 
 
 func test_fire_bolt_kills_any_level_wolf_within_three_casts():
-	var magnitude := _fire_bolt_magnitude()
+	var magnitude := _single_atom_magnitude("fire_bolt", "fire_damage")
 	assert_gt(magnitude, 0.0, "fire_bolt must actually cast fire_damage")
 	for level_seed in range(CreatureInfo.LEVEL_RANGE):
 		var wolf := CreatureInfo.new("wolf", level_seed)
@@ -106,6 +108,33 @@ func test_fire_bolt_kills_any_level_wolf_within_three_casts():
 				% [wolf.level, wolf.max_health, casts_to_kill]
 			)
 		)
+
+
+# -- Spark's damage, measured the same way (2026-09-26) ---------------------
+#
+# Reported live alongside Fire Bolt: "Spark should also do more damage."
+# Same bar (a wolf dies within 3 casts, any level), same reasoning.
+
+func test_spark_kills_any_level_wolf_within_three_casts():
+	var magnitude := _single_atom_magnitude("spark", "shock_damage")
+	assert_gt(magnitude, 0.0, "spark must actually cast shock_damage")
+	for level_seed in range(CreatureInfo.LEVEL_RANGE):
+		var wolf := CreatureInfo.new("wolf", level_seed)
+		var casts_to_kill := int(ceil(wolf.max_health / magnitude))
+		assert_true(
+			casts_to_kill <= 3,
+			(
+				"a level %d wolf (%.1f hp) should die within 3 Sparks, needs %d"
+				% [wolf.level, wolf.max_health, casts_to_kill]
+			)
+		)
+
+
+func test_spark_leaves_a_starting_mage_room_to_recast():
+	var executor := SpellExecutor.new()
+	var cost := executor.cost_for(executor.cast_rule(book.ast_for("spark")))
+	var mage_max_mana: float = ClassArchetype.new().stats_for("mage")["max_mana"]
+	assert_lt(cost, mage_max_mana / 2.0, "Spark must leave a starting mage room for at least one more cast")
 
 
 ## The other half of the same claim: a real fireball must still be

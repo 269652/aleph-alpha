@@ -60,9 +60,14 @@ const _SOURCES := {
 
 	# -- galvanism (shock_damage, illuminate): the bolt and the lamp are
 	# one trade.
+	# magnitude 49, not 7 (2026-09-26): reported live alongside Fire Bolt
+	# ("Spark should also do more damage"), same bar and same reasoning --
+	# see fire_bolt's own comment above and shock_damage's mag_ref in
+	# spell_atom_catalog.gd (test_spell_book.gd's test_spark_kills_any_
+	# level_wolf_within_three_casts).
 	"spark": (
 		'spell "Spark" { on cast(projectile) when wielder.mana >= @cost: '
-		+ "shock_damage(magnitude: 7) }"
+		+ "shock_damage(magnitude: 49) }"
 	),
 	"lantern_light": (
 		'spell "Lantern Light" { on cast(self) when wielder.mana >= @cost: '

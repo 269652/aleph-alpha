@@ -34,7 +34,9 @@ const _ATOMS := {
 	# formula, just re-centered on what "normal" fire damage looks like now.
 	"fire_damage": {"category": "damage", "tier": 1, "base_cost": 2.0, "mag_ref": 16.0, "dur_ref": 0.0},
 	"frost_damage": {"category": "damage", "tier": 1, "base_cost": 2.0, "mag_ref": 6.0, "dur_ref": 0.0},
-	"shock_damage": {"category": "damage", "tier": 1, "base_cost": 2.2, "mag_ref": 5.0, "dur_ref": 0.0},
+	# mag_ref raised 5.0 -> 18.0 (2026-09-26) alongside spark's own magnitude
+	# bump in spell_book.gd (7 -> 49), same reasoning as fire_damage above.
+	"shock_damage": {"category": "damage", "tier": 1, "base_cost": 2.2, "mag_ref": 18.0, "dur_ref": 0.0},
 	"poison_damage": {"category": "damage", "tier": 1, "base_cost": 1.8, "mag_ref": 4.0, "dur_ref": 0.0},
 	# heal -- instantaneous, scales with magnitude
 	"minor_heal": {"category": "heal", "tier": 1, "base_cost": 2.5, "mag_ref": 6.0, "dur_ref": 0.0},
