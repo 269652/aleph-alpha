@@ -6092,6 +6092,29 @@ catalogue, a gold-for-knowledge transaction, and a structure gate on magic
   effect is procedural/shader-driven, so this didn't introduce the first
   exception without being asked).
 
+  **2026-09-27, two more live reports.** "Spark... should have more of a
+  lightning effect" and "the 3rd spell... it's a light but no effect"
+  traced to a real bug, not missing art: `IllustratedSpellEffectSprite`
+  baked every frame at 32x32 (matching `ProceduralSpellEffectSprite.SIZE`
+  for scale parity), destroying most of the ~300-400px of real source
+  detail per frame — confirmed with a direct 32/64/96/128px bake
+  comparison, shock_damage's own jagged lightning spikes and saturated
+  yellow blurred into an indistinct smear at 32px. Frames now bake at
+  128px (`SpellEffectMarker` compensates the on-screen size so nothing
+  visually jumps in scale), which in turn exposed two more real bugs the
+  aggressive downscale had been hiding: a uniform column split was off by
+  up to ~12px from a sheet's real divider line on some boundaries
+  (replaced with measured per-file column bounds plus a 5px safety inset),
+  and the sheets' own magenta backdrop is faintly textured per-pixel,
+  leaving small fully-opaque stray specks past the old 0.25 chroma-key
+  tolerance (widened to 0.4). Separately, "Spark should also do more
+  damage" — same fix and bar as Fire Bolt: magnitude 7→49, `shock_damage`'s
+  `mag_ref` 5.0→18.0. "Fireball... it's a single atom effect, nothing
+  chained" is expected, not a bug: Fire Bolt casts exactly one atom
+  (`fire_damage`) by design (`spell_book.gd`), so the chained-atom
+  staggering from the juice pass above has nothing to chain — it applies
+  to multi-atom spells like Cinder Lash (`fire_damage |> ignite`).
+
 - **Spell Tuition / the mage guild's trade** (medium) — ✅ Done — see
   `concept/magic.md`'s 2026-09-19 section, which answers that doc's own
   standing open question ("whether compiling needs a station at all"):
