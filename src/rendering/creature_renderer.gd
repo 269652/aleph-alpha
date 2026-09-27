@@ -83,14 +83,61 @@ const PREDATOR_SPECIES_POOL := ["lynx", "lynx", "lynx", "jackal"]
 ## real tree squirrels are a genuine forest/woodland specialist: this is
 ## where the nut trees they depend on (TreeSpecies.is_nut) actually grow
 ## (see docs/concept/flora.md's disperser-vs-predator tension).
+##
+## grassland/forest carry extra "boar" entries beyond their original ratio
+## (docs/concept/ecosystem_dynamics.md, "Steady combat near spawn") -- see
+## SPAWN_REACHABLE_BIOMES and MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION just
+## below. Every real spawn candidate lands in one of these two biomes, and
+## boar is the only herbivore-role species with an aggressive temperament
+## (CreatureInfo.TEMPERAMENT_BY_SPECIES), so it is the one lever that raises
+## how often the single animal a player meets near spawn will fight, without
+## touching the predator trophic pyramid, the difficulty-tier gate, or a
+## single other species' own documented temperament. Appended, never
+## removed, so every species already promotable here still is, at its
+## original relative weight against every OTHER calm filler. Counts (8 more
+## for grassland, 4 more for forest) are the minimum that clears the floor
+## exactly -- test_every_spawn_reachable_biomes_herbivore_pool_is_at_least_
+## half_fight_capable pins both at exactly 9/18 and 7/14.
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["deer", "deer", "deer", "boar", "horse", "mouse", "mouse", "nonvenomous_snake", "sheep", "alpaca"],
-	"forest": ["boar", "boar", "boar", "mouse", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel", "squirrel"],
+	"grassland": [
+		"deer", "deer", "deer", "boar", "horse", "mouse", "mouse", "nonvenomous_snake", "sheep", "alpaca",
+		"boar", "boar", "boar", "boar", "boar", "boar", "boar", "boar",
+	],
+	"forest": [
+		"boar", "boar", "boar", "mouse", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel", "squirrel",
+		"boar", "boar", "boar", "boar",
+	],
 	"desert": ["camel", "camel", "camel", "horse", "mouse", "nonvenomous_snake"],
 	"tundra": ["reindeer", "reindeer", "reindeer", "mouse", "deer"],
 	"rainforest": ["tapir", "tapir", "tapir", "mouse", "mouse", "nonvenomous_snake"],
 	"mountain": ["goat", "goat", "goat", "mouse", "sheep", "sheep", "alpaca"],
 }
+
+## Every real spawn candidate (World._spawn_candidate_acceptable) is a warm,
+## dry-land, non-mountain river bank drawn from RiverCatalog's ten
+## Central-European rivers, all 47-54 deg N -- test_world_spawn_location.gd
+## already pins "warm"/"not ocean or mountain" as a property every candidate
+## has. BiomeClassifier.classify can only resolve that combination to
+## "grassland" or "forest": these latitudes never reach the COLD_TEMPERATURE
+## band tundra needs, and never clear the HOT_TEMPERATURE band desert/
+## rainforest need. So "combat steady from the get go" is a claim about
+## exactly these two biomes -- see docs/concept/ecosystem_dynamics.md,
+## "Steady combat near spawn".
+const SPAWN_REACHABLE_BIOMES: Array[String] = ["grassland", "forest"]
+
+## The least a spawn-reachable biome's herbivore-role pool can be and still
+## call meeting something in it "steady combat": a coin flip. Population
+## near spawn is usually 0 or 1 marker per chunk (PopulationMarkers.
+## count_for), so the pool's own fight-capable fraction IS roughly the odds
+## that the one animal a player meets will fight rather than flee -- below
+## half, a player meets something docile MORE often than not, which is not
+## "steady". Not pushed higher: that would crowd out the calm-grazer variety
+## the pool also exists for, and half is the natural, non-arbitrary
+## inflection point between the two. Applies only to SPAWN_REACHABLE_BIOMES
+## -- see that constant's own doc comment for why the other four biomes are
+## deliberately left alone.
+const MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION := 0.5
+
 ## Wolf joins forest only (real wolves are the classic temperate/boreal
 ## forest apex predator, and this project's own dominant-species-per-biome
 ## pattern -- jackal/desert, arctic_fox/tundra, jaguar/rainforest,

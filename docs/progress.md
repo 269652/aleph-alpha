@@ -23,6 +23,79 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Way more enemies: steady combat from the get go (2026-09-27) — see `concept/ecosystem_dynamics.md`
+
+Asked directly: *"We need way more enemies so that combat action is steady
+and from the get go."*
+
+**Measured before changing anything**, following this project's own
+"trophic pyramid is not the bug" finding (above, 2026-09-21): raising
+`PredatorPopulationModel.PREDATORS_PER_PREY_UNIT` would have been the
+obvious lever and the wrong one — it governs an already-deliberately-sparse,
+real-world-grounded pool, and that finding's own "a second spawn seed drew 0
+predators, and that is the honest shape of it" conclusion is still correct.
+The actual gap was one level up: which SPECIES the abundant (not sparse)
+herbivore-role population draws from.
+
+- ✅ **`SPAWN_REACHABLE_BIOMES` names where "from the get go" even applies**
+  — a real game now spawns on a random bank of one of `RiverCatalog`'s ten
+  Central-European rivers (`SpawnRiverPicker.pick()`), filtered to warm, dry,
+  non-mountain land. Run that through `BiomeClassifier`, and it can only
+  ever be grassland or forest — never desert/tundra/rainforest/mountain, so
+  those four are correctly out of scope for this ask and are provably
+  unreachable rather than assumed so.
+- ✅ **`MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION` (0.5) on
+  `CreatureRenderer`** — boar was the only herbivore-role species with an
+  aggressive temperament in the whole 27-species roster, at 1/10 of
+  grassland's pool and 3/10 of forest's, so nine times out of ten the one
+  animal a player met near a grassland spawn could only flee. Both pools now
+  draw boar exactly half the time (grassland 9/18, forest 7/14), append-only
+  — every species already promotable in either pool still is, at its
+  original relative weight against the others. The predator trophic pool,
+  the HARD-tier gate on bear/lion/venomous snake, and the Hearth's
+  `SENSE_RADIUS`-gated "never initiates" guarantee are all untouched; see
+  `concept/ecosystem_dynamics.md`'s "Steady combat near spawn" for why each
+  of those was deliberately left alone rather than also turned up.
+- ✅ **A dormant syntax bug, found as a blocker rather than by looking for
+  it**: `test_creature_renderer.gd` had a missing comma inside an array
+  literal (`"bear" "alp"`, no separator) that broke the WHOLE file's parse —
+  `git blame` dates it to 2026-09-21 (`f0d6de6`, the Alp's own commit), six
+  days of every test in this file silently not running (GUT logs a warning
+  and skips a script it can't parse; it does not fail the run). Fixed as a
+  one-character prerequisite to getting a red bar for this task's own new
+  tests at all.
+- 🚧 **A probabilistic test flake surfaced by the density change, fixed by
+  raising its own sample count, not by loosening the assertion**: diluting
+  grassland's pool (10 → 18 entries) dropped alpaca's hit rate from 10% to
+  5.6%, and a real run of the existing
+  `test_alpacas_appear_in_grassland_and_mountain_pools` at its old 200-sample
+  count drew zero alpacas in 200 straight (hash-seeded) chunks — measured,
+  not assumed: `hash()` is stable across runs (verified with a standalone
+  probe) but clusters locally same as any other pseudorandom sequence, and
+  this run's specific window just missed residue 9 until chunk 216. Raised
+  to 500 samples, the same margin the file's own existing 200-sample tests
+  already reach for at boar's higher rate.
+
+Tests: `test_creature_renderer.gd` 50 (3 new, 1 sample-count hardened, 1
+syntax-fixed), plus a same-run batch behind `test_bee_hive_marker` (this
+project's own established order-dependence canary) — `test_answerback`,
+`test_loot_table`, `test_alp`, `test_species_bite`, `test_creature_info`,
+`test_curupira` — **296 passing, zero failures**. `test_earth_chunk_manager`
+(the ~2000-test, 20+-minute suite this environment takes to run; also the
+home of the one test that actually reads both species-pool dicts,
+`test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_
+biome_pool`, run directly and green) run separately in the background: a
+handful of pre-existing failures surfaced in unrelated subsystems this
+change never touches -- ocean/hydrology tile-atlas rendering
+(`test_water_overlay_marks_shore_cells_differently_from_non_touching_
+cells` and its ring-tile sibling) and ambient-flyer population promotion
+(`test_refresh_creatures_promotes_blackbirds_once_population_rises_after_
+load`). Confirmed pre-existing rather than assumed: stashed this slice's
+four files and re-ran the water-overlay pair against the unmodified tree
+-- identical failures, same assertions. Left alone as out of scope for
+this task; worth a separate look at why this sandboxed environment's
+dummy renderer disagrees with whatever environment last verified them.
+
 ### Towards a playable fight (2026-09-22) — see `concept/spell_runtime.md`, `concept/combat.md`
 
 Asked directly: *"Flesh out the magic; monsters; spells and fights towards a

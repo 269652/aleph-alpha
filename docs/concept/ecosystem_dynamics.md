@@ -1535,7 +1535,90 @@ spawning. Real country is patchy. What changed is that a predator is now
 everywhere; and since chunks stream continuously as the player walks, the
 encounter rate over a few minutes is what the density says it is.
 
+### Steady combat near spawn: the herbivore pool needs a fighter
+
+**Asked 2026-09-27**, after a direct request: *"we need way more enemies so
+that combat action is steady and from the get go."* The predator work above
+already fixed the ROUNDING bug; this is a different gap underneath it.
+
+**Which biomes "from the get go" even means.** A real game does not spawn at
+a fixed point any more: `SpawnRiverPicker.pick()` puts a new session on a
+random bank of one of `RiverCatalog`'s ten curated rivers (Dreisam, Danube,
+Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar), all 47–54°N, and
+`World._spawn_candidate_acceptable` additionally requires the bank be warm,
+dry land, and not a mountain peak (`test_world_spawn_location.gd` already
+pins "warm"/"not ocean or mountain" as a property every real candidate has).
+Feed that combination through `BiomeClassifier.classify`: these latitudes
+never reach the `COLD_TEMPERATURE` band tundra needs, and never clear the
+`HOT_TEMPERATURE` band desert/rainforest need, and the mountain/ocean cases
+are excluded by the spawn filter itself. **Every real spawn is grassland or
+forest, and never the other four.** "Combat steady from the get go" is
+therefore a claim about exactly those two biomes' herbivore pools
+(`CreatureRenderer.SPAWN_REACHABLE_BIOMES`, test-pinned) — desert, tundra,
+rainforest and mountain are places a player deliberately travels to, not
+places a session can start in, and are untouched by this section.
+
+**The trophic pyramid still is not the bug, and stays exactly as-is** —
+`PREDATORS_PER_PREY_UNIT` is unchanged, `MIN_DIFFICULTY_TIER_BY_SPECIES` is
+unchanged (bear/lion/venomous snake still HARD-only), and the Hearth's own
+promise ("nothing here kills you that you did not walk up to first",
+[journey_rings.md](journey_rings.md)) is unaffected for a completely
+separate reason: it was never a density guarantee to begin with.
+`CreatureMarker.steers_clear_of_players` and the `SENSE_RADIUS`-gated
+closing speed already make a predator's approach asymptote to exactly zero
+at the distance it first perceives a player — "a predator could never
+INITIATE on a player; it only ever fought one who had walked into its
+bubble" (see that function's own doc comment). That guarantee is about
+*behaviour*, not *population*, so it holds at any density.
+
+**What actually was the gap.** Population near spawn draws roughly 0 or 1
+herbivore-role marker per chunk (`PopulationMarkers.count_for`, population
+0.40–1.26). Which SPECIES that one marker is comes from a uniform pick over
+the biome's own pool array (`CreatureRenderer._spawn_species`), and only one
+herbivore-role species in the whole roster has an aggressive temperament
+(`CreatureInfo.TEMPERAMENT_BY_SPECIES`) rather than a calm one: boar. It was
+1 of grassland's 10 pool slots (10%) and 3 of forest's 10 (30%) — so the one
+animal near spawn a player actually met was, nine times out of ten in
+grassland, something that would only ever flee. Raising the trophic ratio
+would not have touched this at all: it governs a DIFFERENT, already-sparse
+pool (true predators), not the abundant one this gap actually lives in.
+
+**The fix: `MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION` (0.5), applied only to
+`SPAWN_REACHABLE_BIOMES`.** Half is a coin flip — the natural, non-arbitrary
+floor for calling an encounter "steady": below it, a player meets something
+docile more often than not; pushed meaningfully above it, the calm-grazer
+variety the pool also exists for starts disappearing. `boar` is the only
+lever that reaches this without cost: it is already ecologically placed in
+both biomes, already the dense (herbivore-population) pool rather than the
+sparse (trophic-pyramid) one, and raising its own count is strictly additive
+— every species already promotable in either pool still is, at its original
+relative weight against every other calm filler. Grassland's pool gained 8
+more `boar` entries (1→9 of 18); forest's gained 4 (3→7 of 14). Both land
+exactly on half.
+`test_every_spawn_reachable_biomes_herbivore_pool_is_at_least_half_fight_capable`
+pins the floor generically (so a future roster change that dilutes either
+pool again fails loudly instead of quietly reopening this gap), and
+`test_exploration_only_biomes_keep_their_pre_fix_fight_capable_fraction`
+pins the other four biomes at their pre-existing zero, so pushing a fighter
+into one of them later is a conscious decision, not silent drift — doing
+that for real would mean either breaking a species' own documented calm
+temperament (tapir, camel, reindeer, goat are each deliberately calm) or
+placing boar somewhere it has no real-world habitat claim, and no session
+can spawn there regardless.
+
 ## Status / mechanisms
+
+- ✅ **Steady combat near spawn** (2026-09-27) — `SPAWN_REACHABLE_BIOMES`
+  (`["grassland", "forest"]`, the only biomes any real spawn candidate can
+  resolve to) and `MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION` (0.5) on
+  `CreatureRenderer`. Grassland's and forest's herbivore pools now draw
+  `boar` at least half the time; the trophic-pyramid predator pool, the
+  difficulty-tier gate, and the Hearth's behavioural no-hunt guarantee are
+  all untouched, and the four exploration-only biomes are deliberately left
+  at zero. A dormant syntax bug in `test_creature_renderer.gd` (a missing
+  comma had silently broken the whole file's parse since 2026-09-21 --
+  `git blame` on the line, not a guess) was found and fixed as a
+  prerequisite to running this suite at all.
 
 - ✅ `region_difficulty.gd` (chunk-distance-from-spawn → tier), wired into
   `CreatureRenderer`'s species-pool selection (`MIN_DIFFICULTY_TIER_BY_SPECIES`)

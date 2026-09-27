@@ -363,7 +363,7 @@ func test_forest_biome_is_boar_and_lynx_dominant():
 	assert_true(predator_species.has("lynx"), "forest should promote lynx")
 	for species in predator_species:
 		assert_true(
-			species in ["lynx", "wolf", "bear" "alp"], "unexpected predator-role species: %s" % species
+			species in ["lynx", "wolf", "bear", "alp"], "unexpected predator-role species: %s" % species
 		)
 
 
@@ -457,8 +457,19 @@ func test_mountain_biome_promotes_goats_and_mountain_lions():
 ## docs/concept/seasonal_behavior.md, "Alpaca as a real, live grazer") --
 ## grassland and mountain, not forest/desert/tundra/rainforest, mirroring
 ## sheep's own real-world-grounded biome membership.
+##
+## grassland sampled at 500, not the default 30: alpaca is now a single,
+## non-dominant entry in grassland's 18-entry pool (see
+## HERBIVORE_SPECIES_POOL_BY_BIOME's "Steady combat near spawn" doc
+## comment), a ~5.6% hit rate per chunk. 200 samples measured flaky in
+## practice (a real run drew zero alpacas in 200 straight chunks -- hash-
+## seeded chunk picks cluster locally same as any other pseudorandom
+## sequence, they don't interleave evenly); 500 pushes the chance of
+## seeing none all the way down (0.944^500 =~ 4e-13), the same margin
+## test_forest_promotes_wolves_alongside_their_sheep_and_deer_prey's own
+## 200 was reaching for at boar's 3/10 (30%) rate.
 func test_alpacas_appear_in_grassland_and_mountain_pools():
-	assert_true(_species_seen_across_chunks(1.0, 0.0, "grassland").has("alpaca"))
+	assert_true(_species_seen_across_chunks(1.0, 0.0, "grassland", 500).has("alpaca"))
 	assert_true(_species_seen_across_chunks(1.0, 0.0, "mountain").has("alpaca"))
 
 
@@ -626,3 +637,71 @@ func test_grassland_promotes_deer_and_jackals_in_place_of_the_placeholders():
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "grassland", 200)
 	assert_true(herbivore_species.has("deer"), "grassland should promote deer")
 	assert_true(predator_species.has("jackal"), "grassland should promote jackals")
+
+
+# -- steady combat near spawn: the herbivore pool needs a fighter -----------
+#
+# docs/concept/ecosystem_dynamics.md, "Steady combat near spawn": every real
+# spawn candidate is a warm, dry-land, non-mountain river bank drawn from
+# RiverCatalog's ten Central-European rivers (47-54 deg N) -- World.
+# _spawn_candidate_acceptable filters out anything else, and
+# test_world_spawn_location.gd already pins "warm"/"not ocean or mountain"
+# as a property every real candidate has. BiomeClassifier can only resolve
+# that combination to "grassland" or "forest" (tundra needs a colder
+# temperature band than these latitudes reach; desert/rainforest need a
+# hotter one). So "combat steady from the get go" is a claim about exactly
+# these two biomes' herbivore pools, never all six.
+
+const CreatureInfo = preload("res://src/world/creature_info.gd")
+
+
+func test_spawn_reachable_biomes_are_named_and_pinned():
+	assert_eq(CreatureRenderer.SPAWN_REACHABLE_BIOMES, (["grassland", "forest"] as Array[String]))
+
+
+## The least a biome's herbivore-role pool can be and still call meeting
+## something in it "steady combat": a coin flip. Population near spawn is
+## usually 0 or 1 marker per chunk (PopulationMarkers.count_for), so the
+## pool's own fight-capable fraction IS roughly the odds that the one
+## animal a player meets will fight rather than flee. Below half, a player
+## meets something docile more often than not -- not "steady". Fails today
+## (red): grassland is 1/10 boar, forest is 3/10.
+func test_every_spawn_reachable_biomes_herbivore_pool_is_at_least_half_fight_capable():
+	for biome_name in CreatureRenderer.SPAWN_REACHABLE_BIOMES:
+		var pool: Array = CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME[biome_name]
+		var fight_capable := 0
+		for species in pool:
+			assert_false(
+				bool(CreatureInfo.PREDATOR_SPECIES.get(species, false)),
+				"%s is a predator, not a herbivore-role filler" % species
+			)
+			if CreatureInfo.TEMPERAMENT_BY_SPECIES.get(species, "calm") == CreatureInfo.AGGRESSIVE:
+				fight_capable += 1
+		assert_true(
+			float(fight_capable) / float(pool.size()) >= CreatureRenderer.MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION,
+			"%s's herbivore pool is only %d/%d fight-capable" % [biome_name, fight_capable, pool.size()]
+		)
+
+
+## Regression/drift guard, not a design claim: pins today's fight-capable
+## fraction for the four exploration-only biomes at exactly what it was
+## before this floor existed (zero). Forcing a fighter into one of these
+## would mean either breaking a species' own documented calm temperament
+## (tapir, camel, reindeer, goat) or placing boar somewhere it has no
+## real-world habitat claim -- and no real session can ever spawn a player
+## there (see SPAWN_REACHABLE_BIOMES). A future change that pushes a
+## fighter into one of them anyway fails this test and has to consciously
+## decide whether that biome now joins SPAWN_REACHABLE_BIOMES, rather than
+## silently drifting.
+func test_exploration_only_biomes_keep_their_pre_fix_fight_capable_fraction():
+	for biome_name in ["desert", "tundra", "rainforest", "mountain"]:
+		assert_false(
+			biome_name in CreatureRenderer.SPAWN_REACHABLE_BIOMES,
+			"%s must not be spawn-reachable" % biome_name
+		)
+		var pool: Array = CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME[biome_name]
+		var fight_capable := 0
+		for species in pool:
+			if CreatureInfo.TEMPERAMENT_BY_SPECIES.get(species, "calm") == CreatureInfo.AGGRESSIVE:
+				fight_capable += 1
+		assert_eq(fight_capable, 0, "%s's herbivore pool should have no fighters yet" % biome_name)
