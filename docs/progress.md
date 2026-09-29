@@ -307,6 +307,8 @@ each other.* Two measurements under it, both taken by driving the real code:
   are retired rather than kept as a second, now-pointless bridge; the two
   shader techniques (glow halo, impact distortion) and `test_spell_effect_
   marker.gd`'s coverage of them survive unchanged, re-pointed at the real
+  bridge instead. See `spell_vfx.md`'s own "Mechanism"/Status for the
+  reconciled, current shape.
 
   **Post-merge regression turned up two real, unrelated breaks, both
   fixed the same day.** `test_a_new_mage_can_cast.gd` called `player.
@@ -330,22 +332,33 @@ each other.* Two measurements under it, both taken by driving the real code:
   Verified directly rather than assumed: the exact functions this merge
   hand-reconciled in `scenes/player.gd` (`_apply_cast_step`, `_cast_aim_
   point`, `_spawn_spell_effect`, `_trigger_shake`) are covered by `test_
-  player.gd`'s own `casting`-named tests (11/11, run in isolation after
-  the full suite's own ~5,300 lines proved too large to fit this
-  environment's background-task time budget in one pass) and by the fixed
-  `test_a_new_mage_can_cast.gd` (62/62) — both green. Combined with the
-  spell-VFX suites above (89/89), the ecosystem/creature suites unaffected
-  by main's changes (246/246, re-confirmed post-merge though main never
-  touched those files), and `test_sprite_sheet_slicer.gd`/`test_creature_
-  renderer.gd` (75/75): **483 tests directly covering everything either
-  side of this merge touched, all green.** `test_player.gd`'s remaining
-  ~240 non-casting tests (fishing, mushrooms, guild tuition, saves — none
-  of it touched by either branch's changes) and `test_earth_chunk_
-  manager.gd` (unmodified by both, already green pre-merge) were queued
-  as lower-priority background confirmation rather than blocking on them
-  further.
-  bridge instead. See `spell_vfx.md`'s own "Mechanism"/Status for the
-  reconciled, current shape.
+  player.gd`'s own `casting`-named tests (11/11 in isolation) and by the
+  fixed `test_a_new_mage_can_cast.gd` (62/62) — both green; this branch's
+  own unique, non-conflicted `player.gd` additions
+  (`active_mushroom_toxin_debuffs`, the `known_spell_ids` floor catch-up)
+  are covered by `test_player.gd`'s own `mushroom`-named tests (8/8) and
+  `test_a_new_mage_can_cast.gd`'s save/reload tests, also green. Combined
+  with the spell-VFX suites above (89/89), the ecosystem/creature suites
+  unaffected by main's changes (246/246, re-confirmed post-merge though
+  main never touched those files), and `test_sprite_sheet_slicer.gd`/
+  `test_creature_renderer.gd` (75/75): **483 tests directly covering
+  everything either side of this merge touched, all green.**
+
+  `test_player.gd`'s full ~5,300-line/~250-test suite could not be run to
+  completion in this environment (killed once past a 580s shell timeout,
+  once by the OOM killer on a second attempt) — an environment resource
+  limit, not evidence of anything wrong, and the specific functions this
+  merge touched are independently confirmed above regardless. One real,
+  pre-existing issue surfaced running a `-gunit_test_name=spell` filtered
+  subset in isolation (4 failures in guild-tuition tests, unrelated to
+  spells-the-verb) — confirmed NOT this merge's doing by checking out the
+  pre-merge `main` commit (`385ec82`) directly and reproducing the
+  identical 4 failures there, unmodified. Left alone as out of scope: a
+  pre-existing defect (most likely order-dependence specific to that name
+  filter's subset, not the suite's natural full-run order) in a subsystem
+  neither branch of this merge touched. `test_earth_chunk_manager.gd`
+  (unmodified by both, already green pre-merge) was not re-run against the
+  merge for the same environment-resource reason.
 
 - ✅ **Nothing kills you in silence** (2026-09-22) — see
   `concept/feedback.md`. Reported from play: *"I constantly die out of
