@@ -307,6 +307,43 @@ each other.* Two measurements under it, both taken by driving the real code:
   are retired rather than kept as a second, now-pointless bridge; the two
   shader techniques (glow halo, impact distortion) and `test_spell_effect_
   marker.gd`'s coverage of them survive unchanged, re-pointed at the real
+
+  **Post-merge regression turned up two real, unrelated breaks, both
+  fixed the same day.** `test_a_new_mage_can_cast.gd` called `player.
+  _aim_point()` directly — this branch's own name for the whiffed-cast fix
+  — which the merge replaced with main's own `_cast_aim_point` (the
+  version integrated with the chain-stagger cascade); renamed the call in
+  the two tests that still needed it, and rewrote `test_a_self_spell_
+  shows_on_the_caster` to drive a real self-delivery cast instead of
+  calling the aim-point helper directly with `"self"` — a case
+  `_cast_aim_point` deliberately does not special-case, because
+  `_resolve_cast_target("self")` always returns the caster and never
+  reaches that helper at all. Separately, `test_a_full_pool_is_worth_more_
+  than_a_couple_of_casts` broke on main's OWN, already-tested Fire Bolt
+  rebalance (magnitude 8→49, `mag_ref` 6.0→16.0) — a real net cost
+  increase (≈1.33x→≈3.06x base) despite the paired mag_ref bump, dropping
+  a full pool from whatever it bought before down to exactly 4 casts,
+  measured deterministically. Re-pinned at the new true number (floor of
+  2, guarding the next halving of it) rather than reverting or loosening
+  past what the new number actually is — the test's own job, done again.
+
+  Verified directly rather than assumed: the exact functions this merge
+  hand-reconciled in `scenes/player.gd` (`_apply_cast_step`, `_cast_aim_
+  point`, `_spawn_spell_effect`, `_trigger_shake`) are covered by `test_
+  player.gd`'s own `casting`-named tests (11/11, run in isolation after
+  the full suite's own ~5,300 lines proved too large to fit this
+  environment's background-task time budget in one pass) and by the fixed
+  `test_a_new_mage_can_cast.gd` (62/62) — both green. Combined with the
+  spell-VFX suites above (89/89), the ecosystem/creature suites unaffected
+  by main's changes (246/246, re-confirmed post-merge though main never
+  touched those files), and `test_sprite_sheet_slicer.gd`/`test_creature_
+  renderer.gd` (75/75): **483 tests directly covering everything either
+  side of this merge touched, all green.** `test_player.gd`'s remaining
+  ~240 non-casting tests (fishing, mushrooms, guild tuition, saves — none
+  of it touched by either branch's changes) and `test_earth_chunk_
+  manager.gd` (unmodified by both, already green pre-merge) were queued
+  as lower-priority background confirmation rather than blocking on them
+  further.
   bridge instead. See `spell_vfx.md`'s own "Mechanism"/Status for the
   reconciled, current shape.
 

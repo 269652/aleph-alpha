@@ -118,11 +118,25 @@ func test_every_filled_slot_casts_from_its_own_key():
 ## A mage's pool must afford a real opening exchange rather than one bolt.
 ## Pinned as a count so a costing change that quietly halves a mage's
 ## opening cannot pass unnoticed.
+##
+## Re-pinned 2026-09-26 (merging into main): Fire Bolt's own magnitude went
+## 8 -> 49 (spell_book.gd, "kills a wolf in three casts, not fourteen") and
+## its mag_ref moved 6.0 -> 16.0 alongside it (spell_atom_catalog.gd) so the
+## mana cost stayed affordable rather than draining a starting mage's whole
+## pool in one hit -- but magnitude/mag_ref still rose net (8/6 -> 49/16,
+## roughly 1.33x -> 3.06x the base cost), a real, intentional, already-
+## tested consequence of that rebalance (test_spell_book.gd,
+## test_spell_cost.gd), not a bug this test should paper over. A full pool
+## now measures exactly 4 casts, deterministically (verified by direct
+## repeated runs) -- still a real opening exchange, not "one bolt." The
+## floor is re-pinned at 2 (must clear a full HALVING of that new number)
+## so this test keeps doing its actual job -- catching the NEXT quiet
+## halving -- against the number that is now true, instead of a stale one.
 func test_a_full_pool_is_worth_more_than_a_couple_of_casts():
 	var casts := 0
 	while player.cast_spell(player.selected_spell_id()) and casts < 100:
 		casts += 1
-	assert_gt(casts, 5, "a full pool that buys fewer than six casts is not a caster's pool")
+	assert_gt(casts, 2, "a full pool that buys two casts or fewer is not a caster's opening exchange")
 
 
 # -- and an older character catches up --------------------------------------
@@ -240,23 +254,44 @@ func test_the_miss_appears_out_in_front_of_the_caster():
 ## A projectile reaches further than a touch spell, and a miss shows that:
 ## watching where your spell falls is how the reach of each delivery
 ## becomes legible without a manual.
+##
+## `_aim_point` (this branch's own fix for the same bug) and `_cast_aim_point`
+## (the equivalent main independently landed, integrated with the chain-
+## stagger cascade) were reconciled in main's favour when this branch merged
+## into it -- see docs/progress.md's "Superseded 2026-09-26" note. Renamed
+## here to match; the delivery-reach behaviour itself is unchanged.
 func test_a_projectile_miss_falls_further_out_than_a_touch_miss():
 	const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
 	player._last_facing_direction = Vector2.RIGHT
 	assert_almost_eq(
-		player._aim_point("projectile").x,
+		player._cast_aim_point("projectile").x,
 		player.position.x + SpellTargeting.PROJECTILE_RANGE, 0.001
 	)
 	assert_almost_eq(
-		player._aim_point("touch").x,
+		player._cast_aim_point("touch").x,
 		player.position.x + SpellTargeting.TOUCH_RANGE, 0.001
 	)
-	assert_gt(player._aim_point("projectile").x, player._aim_point("touch").x)
+	assert_gt(player._cast_aim_point("projectile").x, player._cast_aim_point("touch").x)
 
 
 ## A self-delivered spell shows on the caster, because that is where it
 ## happened -- a heal that appeared twenty pixels away would be a lie about
-## what it did.
+## what it did. Driven through a real cast rather than `_cast_aim_point`
+## directly: `_resolve_cast_target("self")` always returns the caster, never
+## null, so a self-delivered spell never actually reaches the miss-aim-point
+## path `_cast_aim_point` serves -- it shows on the caster because
+## `_apply_cast_step_to` spawns the effect at the target's own position, and
+## the target IS the caster.
 func test_a_self_spell_shows_on_the_caster():
+	var before: Array = _effects_in_the_world()
+
 	player._last_facing_direction = Vector2.RIGHT
-	assert_almost_eq(player._aim_point("self").x, player.position.x, 0.001)
+	assert_true(player.cast_spell("minor_heal"), "precondition: the cast resolved")
+
+	var fresh: Array = []
+	for effect in _effects_in_the_world():
+		if not before.has(effect):
+			fresh.append(effect)
+	assert_false(fresh.is_empty(), "no effect was spawned at all")
+	for effect in fresh:
+		assert_almost_eq(effect.position.x, player.position.x, 0.001, "a self spell must show on the caster")
