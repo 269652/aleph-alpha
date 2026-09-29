@@ -23,6 +23,81 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Way more enemies: steady combat from the get go (2026-09-27) — see `concept/ecosystem_dynamics.md`
+
+Asked directly: *"We need way more enemies so that combat action is steady
+and from the get go."*
+
+**Measured before changing anything**, following this project's own
+"trophic pyramid is not the bug" finding (above, 2026-09-21): raising
+`PredatorPopulationModel.PREDATORS_PER_PREY_UNIT` would have been the
+obvious lever and the wrong one — it governs an already-deliberately-sparse,
+real-world-grounded pool, and that finding's own "a second spawn seed drew 0
+predators, and that is the honest shape of it" conclusion is still correct.
+The actual gap was one level up: which SPECIES the abundant (not sparse)
+herbivore-role population draws from.
+
+- ✅ **`SPAWN_REACHABLE_BIOMES` names where "from the get go" even applies**
+  — a real game now spawns on a random bank of one of `RiverCatalog`'s ten
+  Central-European rivers (`SpawnRiverPicker.pick()`), filtered to warm, dry,
+  non-mountain land. Run that through `BiomeClassifier`, and it can only
+  ever be grassland or forest — never desert/tundra/rainforest/mountain, so
+  those four are correctly out of scope for this ask and are provably
+  unreachable rather than assumed so.
+- ✅ **`MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION` (0.5) on
+  `CreatureRenderer`** — boar was the only herbivore-role species with an
+  aggressive temperament in the whole 27-species roster, at 1/10 of
+  grassland's pool and 3/10 of forest's, so nine times out of ten the one
+  animal a player met near a grassland spawn could only flee. Both pools now
+  draw boar exactly half the time (grassland 9/18, forest 7/14), append-only
+  — every species already promotable in either pool still is, at its
+  original relative weight against the others. The predator trophic pool,
+  the HARD-tier gate on bear/lion/venomous snake, and the Hearth's
+  `SENSE_RADIUS`-gated "never initiates" guarantee are all untouched; see
+  `concept/ecosystem_dynamics.md`'s "Steady combat near spawn" for why each
+  of those was deliberately left alone rather than also turned up.
+- ✅ **A dormant syntax bug, found as a blocker rather than by looking for
+  it**: `test_creature_renderer.gd` had a missing comma inside an array
+  literal (`"bear" "alp"`, no separator) that broke the WHOLE file's parse —
+  `git blame` dates it to 2026-09-21 (`f0d6de6`, the Alp's own commit), six
+  days of every test in this file silently not running (GUT logs a warning
+  and skips a script it can't parse; it does not fail the run). Fixed as a
+  one-character prerequisite to getting a red bar for this task's own new
+  tests at all.
+- 🚧 **A probabilistic test flake surfaced by the density change, fixed by
+  raising its own sample count, not by loosening the assertion**: diluting
+  grassland's pool (10 → 18 entries) dropped alpaca's hit rate from 10% to
+  5.6%, and a real run of the existing
+  `test_alpacas_appear_in_grassland_and_mountain_pools` at its old 200-sample
+  count drew zero alpacas in 200 straight (hash-seeded) chunks — measured,
+  not assumed: `hash()` is stable across runs (verified with a standalone
+  probe) but clusters locally same as any other pseudorandom sequence, and
+  this run's specific window just missed residue 9 until chunk 216. Raised
+  to 500 samples, the same margin the file's own existing 200-sample tests
+  already reach for at boar's higher rate.
+
+Tests: `test_creature_renderer.gd` 50 (3 new, 1 sample-count hardened, 1
+syntax-fixed), plus a same-run batch behind `test_bee_hive_marker` (this
+project's own established order-dependence canary) — `test_answerback`,
+`test_loot_table`, `test_alp`, `test_species_bite`, `test_creature_info`,
+`test_curupira` — **296 passing, zero failures**. `test_earth_chunk_manager`
+(~2000 tests; also the home of the one test that actually reads both
+species-pool dicts, `test_promoted_creatures_near_berlin_only_use_species_
+from_their_chunks_biome_pool`, run directly on its own and green) run
+separately in the background outran its own 10-minute timeout in this
+environment and was killed before reaching a final tally, so there is no
+complete pass count for it here -- but its progress up to that point
+surfaced only pre-existing failures, all in unrelated subsystems this
+change never touches: ocean/hydrology tile-atlas rendering
+(`test_water_overlay_marks_shore_cells_differently_from_non_touching_
+cells` and its ring-tile sibling) and ambient-flyer population promotion
+(`test_refresh_creatures_promotes_blackbirds_once_population_rises_after_
+load`). Confirmed pre-existing rather than assumed: stashed this slice's
+four files and re-ran the water-overlay pair against the unmodified tree
+-- identical failures, same assertions. Left alone as out of scope for
+this task; worth a separate look at why this sandboxed environment's
+dummy renderer disagrees with whatever environment last verified them.
+
 ### Towards a playable fight (2026-09-22) — see `concept/spell_runtime.md`, `concept/combat.md`
 
 Asked directly: *"Flesh out the magic; monsters; spells and fights towards a
@@ -47,6 +122,244 @@ each other.* Two measurements under it, both taken by driving the real code:
    11.3× faster than it kills you, and at level 10 still 3.5×. Harder
    ground is not more dangerous, only chewier — which is precisely the
    danger gradient the journey rings exist to build.
+
+- ✅ **A cast you can see** (2026-09-22) — see `concept/spell_runtime.md`,
+  "A cast is always visible". Asked from play: *"do the spells have
+  visuals?"* and *"spells should be able to be cast without a target"*.
+
+  They do have visuals — `SpellEffectMarker` grows, holds and fades each
+  atom's procedural sprite. It was spawned **only where an atom landed**,
+  and `_resolve_cast_target` returns `null` the moment nothing is in range.
+  Fire Bolt is `cast(touch)` at **24 px**, so unless a creature was
+  practically underfoot, a cast **spent the mana, played the swing, and
+  showed nothing anywhere.** With no sound either (`get("sound")` still has
+  zero consumers), "nothing happens" was the only honest reading available
+  to a player, and it is indistinguishable from a dead key — which is
+  exactly how it was reported, after two other explanations had been
+  checked and ruled out.
+
+  A cast that finds nothing now shows at its **aim point**: `self` on the
+  caster, `area` at the area centre, `projectile` at `PROJECTILE_RANGE`,
+  `touch` at `TOUCH_RANGE`. So a miss reads as a miss rather than a fizzle
+  — and since the fall point is the delivery's real reach, watching your
+  own misses is how the reach of each delivery becomes legible without a
+  manual.
+
+  Casting without a target needed no change: nothing ever gated a cast on
+  having something to hit. The mana is spent, the pipeline resolves, the
+  world is simply not changed by it. That was already true; it is now
+  visibly true.
+
+  Tests: `test_a_new_mage_can_cast.gd` 14 (4 new), plus a 12-suite batch
+  over the magic side — **154 passing, zero failures, zero risky**, on a
+  clean boot.
+
+- ✅ **A new mage can cast, and an old save catches up** (2026-09-22) —
+  see `concept/magic.md`.
+
+  Reported from play, having picked mage at character creation: *"Z tries
+  to sell to a merchant / /arena does not exist / 6,7,8 are empty ... No
+  way to cast anything atm."*
+
+  **Checked before answering, and the code was not at fault.** A new suite
+  drives the whole path `World._spawn_local_singleplayer` drives — class
+  lens, starting hand, the bar, the key — and every part held on `main`: a
+  mage is born with 55 mana, keys 6/7/8 are filled, `cast_held()` produces
+  a spell and spends the pool, and a full pool buys more than five casts.
+  `sell` has been **Y** and `cast` **Z** in *every* revision of
+  `keybindings.gd`, so no shipped default ever put selling on the cast key;
+  and `/arena` has been on `main` since 2026-09-21 (`72b65e0`). The report
+  therefore describes a build older than that commit, plus a
+  `user://keybindings.cfg` carrying a hand-made override.
+
+  **But updating would not have fixed it, and that part WAS a real fault.**
+  `known_spell_ids` is persisted, so a character created while the starting
+  hand was `["fire_bolt"]` restores that narrower list over the wider
+  default — keys 7 and 8 stay empty for ever, the player sees no change
+  after updating, and reasonably concludes the feature does not work. The
+  saved list is now a **floor** rather than the whole truth: a starting
+  spell is one every character is born knowing and none can unlearn, so an
+  older character catches up on load while keeping everything a guild
+  taught them.
+
+  Two guards added from the report's own words rather than from the fix:
+  **no two verbs may share a default key** (asserted across the whole
+  `ACTIONS` table, so a collision fails a suite instead of being found in
+  play), and the bar's first three slots must be non-empty for a fresh
+  character.
+
+  Tests: `test_a_new_mage_can_cast.gd` 10 (new), plus a 12-suite batch —
+  `test_nothing_kills_in_silence`, `test_spell_tuition`,
+  `test_player_spell_slots`, `test_player_persistence`, `test_keybindings`,
+  `test_world_spell_hud`, `test_spell_kill_credit`, `test_battle_loop`,
+  `test_combat_pacing`, `test_level_scaling` — **189 passing, zero
+  failures, zero risky**, on a clean boot.
+
+- ✅ **The spell graphics engine gets a shader layer, and the illustrated
+  bridge it was always missing** (2026-09-24) — see `concept/spell_vfx.md`
+  (new).
+
+  Asked directly: *"flesh out the spell graphics engine using custom
+  shaders for magic effects and instruct me to generate sprite art for all
+  the sprites you need."*
+
+  **Two real gaps, both traceable to the same cause.** Magic's own
+  2026-08-28 spec ("Atom effects render as composite spritemaps")
+  described exactly this system, and neither half had been built:
+
+  1. **No shader touched a spell effect.** This game already has nine
+     other `*_shader.gd` wrappers (`TorchGlow`, `WaterShader`,
+     `SnowSparkleShader`...) all following one convention — a CPU-mirrored
+     tuned curve, GLSL that restates it, a cached material. Spells were the
+     one combat-facing system that never joined it; `SpellEffectMarker`
+     animated a flat sprite with a plain `Tween` and nothing else.
+  2. **The illustrated bridge was never written.** `ai_sprite_prompts.md`
+     section 8 has had complete, ready-to-run prompts for all 25 atoms,
+     grouped into the same six silhouette families the procedural
+     generator uses, since 2026-08-28. Nothing ever called the loader on
+     them — the exact shape of gap `IllustratedItemArt`'s own doc comment
+     named for items, now true of spells too until this entry.
+
+  **Two shaders, grounded in a real optical distinction rather than added
+  for their own sake** (spell_vfx.md's "Real-world grounding"): a real
+  discharge of energy both throws light on what's nearby AND visibly bends
+  the air right where it releases — two different phenomena, so two
+  separate shaders rather than one trying to do both.
+
+  - **`SpellGlowShader`** — an additive halo, every atom, tinted from
+    `ProceduralSpellEffectSprite.color_for` (the one shared colour table,
+    read rather than re-declared). Timed off `SpellEffectMarker`'s own
+    grow/hold/fade beat via a `progress` uniform — the fractions are
+    *derived* from `GROW_DURATION`/`HOLD_DURATION`/`FADE_DURATION` at the
+    call site, never restated as a second set of numbers, so retuning the
+    marker's timing retunes the halo for free.
+  - **`SpellImpactDistortionShader`** — a screen-space radial warp reading
+    `SCREEN_TEXTURE`, gated to exactly the seven burst-family atoms
+    (`fire_damage`, `frost_damage`, `shock_damage`, `ignite`,
+    `induce_mutation`, `illuminate`, `fear`) via a new
+    `ProceduralSpellEffectSprite.shape_for(atom_id)` accessor — the one
+    authoritative atom→family map, shared rather than forked a second
+    time. Pinned by test that this is the *exact* seven-atom list
+    `ai_sprite_prompts.md` section 8a independently arrived at from the art
+    side — the two had never been cross-checked before.
+
+  Both follow the established convention exactly: a fragment shader cannot
+  be asserted headless, so every tuned curve (`alpha_for_progress`,
+  `radial_intensity`/`radial_strength`, `temporal_strength`) exists first
+  as a plain, tested GDScript function, and the GLSL is a restatement of
+  it, never a second untested copy. A real bug was caught in review before
+  it ever ran: the halo's GLSL declared `grow_fraction`/`hold_fraction`
+  defaults that merely *resembled* the real derived values closely enough
+  to look right by accident — fixed to receive the actual derived numbers
+  explicitly, with a regression test naming exactly that trap.
+
+  **`IllustratedSpellEffectArt`** — `IllustratedItemArt`'s exact bridge
+  shape, re-keyed by atom id: registry → resolver (against the real file
+  tree) → loader → texture, illustrated when real art exists, procedural
+  when it does not. All 25 atoms are now registered in the one shared
+  `illustrated_art_registry.gd` every other subject lives in — no second
+  bespoke registry — with the address collapsed to the one axis that
+  actually varies (`assets/sprites/<atom_id>/effect/any/default/cast.png`).
+  `SpellEffectMarker.play()` now draws through this bridge; with no art on
+  disk yet, its output is **byte-identical** to the old direct procedural
+  call, pinned by test rather than assumed.
+
+  **A second real bug, this one in the TEST SUITE, caught the same way**:
+  a marker test that calls `play()` and asserts immediately (without
+  awaiting the full beat) leaves its halo mid-flight when `after_each()`
+  frees the marker — Godot binds a `create_tween()` result to its owning
+  node, so freeing the marker mid-sequence kills the halo's own scheduled
+  `queue_free` before it runs, orphaning it as a stray sibling a LATER
+  test's naive "first `MeshInstance2D`" scan would then wrongly pick up.
+  Fixed by sweeping stray halos in `after_each()` rather than trying to
+  identify "the right" one among several.
+
+  Sprite art instructions: not rewritten (section 8 was already complete
+  and verified — by test — to cover the live 25-atom roster exactly), but
+  a new 8g addendum tells the artist explicitly **not** to paint glow or
+  heat-shimmer into the sprites now that the engine adds both at render
+  time — real, necessary new guidance the shader work created, not busywork.
+
+  Tests: `test_spell_glow_shader.gd` 22 (new), `test_spell_impact_
+  distortion_shader.gd` 21 (new), `test_illustrated_spell_effect_art.gd`
+  12 (new), `test_procedural_spell_effect_sprite.gd` 11 (3 new),
+  `test_spell_effect_marker.gd` 12 (9 new), plus an 18-suite regression
+  batch over the illustrated-art and magic side, run behind the slow
+  `test_bee_hive_marker` — **277 passing, zero failures, zero risky**, on
+  a clean boot.
+
+  Named honestly rather than hidden: **no atom has real illustrated art
+  yet** (that is on the user — see `ai_sprite_prompts.md` section 8, now
+  with its 8g addendum); **the real 6-frame beat is not played back** (the
+  marker still tweens one frame; `frames_for` returns all of them for the
+  day it does); and **only two of six silhouette families have a shader
+  technique** (burst and universal glow) — ring/cross/spiral/chevron/cloud
+  each plausibly wants its own, each deserving the same real-world
+  grounding and CPU-mirror rigor as these two, named rather than shipped as
+  an unannounced first slice of five more to come.
+
+  **Superseded 2026-09-26, merging into `main`**: a concurrent session
+  independently built the real thing `IllustratedSpellEffectArt` above was
+  a placeholder bridge FOR — real delivered art (`illustrated_spell_effect_
+  sprite.gd`, family-grouped sheets, see the "Towards a playable fight"
+  entry below) — while this branch still thought "no atom has real
+  illustrated art yet" was true. `IllustratedSpellEffectArt` and its test
+  are retired rather than kept as a second, now-pointless bridge; the two
+  shader techniques (glow halo, impact distortion) and `test_spell_effect_
+  marker.gd`'s coverage of them survive unchanged, re-pointed at the real
+  bridge instead. See `spell_vfx.md`'s own "Mechanism"/Status for the
+  reconciled, current shape.
+
+- ✅ **Nothing kills you in silence** (2026-09-22) — see
+  `concept/feedback.md`. Reported from play: *"I constantly die out of
+  nowhere."*
+
+  **Traced rather than guessed.** There are exactly **two** doors into the
+  player's health: `take_damage`, which answers with a flash, a number and
+  a screen tint, and `take_tick_damage`, which answers **nothing** on
+  purpose — a receipt every frame is a buzz, not an answer. Starving,
+  dehydration and cold turned out to be movement debuffs rather than health
+  damage; drowning does none; the Alp drains stamina. So every unexplained
+  death had to come through the silent door.
+
+  Two suspects were ruled out before the real one was found, and both are
+  worth recording so the next reader does not re-open them:
+
+  - `CreatureMarker.PREDATION_DAMAGE` is **1000.0**, one-shot-lethal, and
+    `_try_eat` gates only on `has_method("take_damage")` — which `Player`
+    implements. It looks exactly like the culprit. It is not reachable: the
+    hunt wiring fires on the `FLESH` channel, which
+    `_scan_nearby_creatures` populates purely from the creature group,
+    while the player is published on `PLAYER`, which drives the
+    *telegraphed* `attack` instead.
+  - The player's health **is** on the HUD, in the survival column.
+
+  **The real fault**: `Player.active_effects()` gathered venom, spell
+  debuffs, food buffs and the shield — and never
+  `active_mushroom_toxin_debuffs`, although that state is tracked, ticked,
+  and already in the identical `DebuffStack` shape sitting directly beside
+  it. Measured, a Death Cap takes up to **4.5 health a second** (killing a
+  145-health character in 32 s) with **no receipt and no chip**. Nothing on
+  screen named it. `feedback.md`'s own justification for the silence —
+  *"the chip carries the rest"* — was simply not true of it.
+
+  One `append_array`, plus the label the row needed (`Poisoned`, rather
+  than `effect_chip`'s raw-id fallback printing `mushroom_toxin 42s` at a
+  player). The suite pins the **contract** rather than the omission: every
+  continuous harm must name itself, so the next tick source cannot be added
+  without its chip.
+
+  Two sources stay deliberately outside that rule, each for a reason:
+  **bramble thorns** (0.72 health a second, and the thicket is its own chip
+  — you can see what you are standing in) and **the Alp** (stamina, not
+  health, so it cannot kill).
+
+  Tests: `test_nothing_kills_in_silence.gd` 7 (new), plus an 11-suite batch
+  over the feedback and status side — `test_effect_chips`,
+  `test_hud_readouts`, `test_mushroom_toxin`, `test_player_damage_over_time`,
+  `test_venom_model`, `test_debuff_stack`, `test_world_hurt_flash_wiring`,
+  `test_player_answerback`, `test_spell_status_effects` — **159 passing,
+  zero failures, zero risky**, on a clean boot.
 
 - ✅ **A level is a bigger animal — every axis, not just health**
   (2026-09-22) — see `concept/combat.md`, section of that name. Closes the

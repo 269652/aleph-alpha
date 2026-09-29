@@ -360,6 +360,13 @@ are pure, scene-tree-free math (see `docs/progress.md`'s magic entry). This
 section specifies only what that executor should render once it exists, not
 the executor.
 
+**The executor exists now** (see [spell_runtime.md](spell_runtime.md)), and
+so does the bridge that was still missing the day this section was
+written: [spell_vfx.md](spell_vfx.md) owns the shader technique layer (an
+additive glow halo, every atom; a screen-space impact warp, burst-family
+atoms only) that plays on top of whichever sprite an atom is actually
+showing.
+
 **Delivered art: one sheet per shared shape family, not per atom
 (2026-09-24).** This section's own "Per atom, not per spell" above called
 for one hand-drawn sheet per catalog entry. What actually shipped
@@ -374,7 +381,9 @@ above's binding requirement; only the "one file per atom" packaging
 changed, for the same "one kit per shared archetype" reason `ai_sprite_
 prompts.md` already uses for flower/item art elsewhere. All 25 atoms are
 covered — the procedural fallback above now only matters for a future atom
-added to the catalog before its own art exists.
+added to the catalog before its own art exists — and the shader layer above
+runs unchanged over illustrated or procedural art alike, exactly the
+"technique never content" split [spell_vfx.md](spell_vfx.md) specifies.
 
 Open questions:
 
@@ -592,3 +601,12 @@ as a contract because each step is a precondition of the next.
 - 🚧 **The guild has no interior trade UI**; `/learn` is the hand on it, the
   same honest scoping every other station interaction in `player.gd` has
   until an interaction UI exists.
+- ✅ **The shader technique layer and the illustrated art are both real**
+  (2026-09-24/26) — see [spell_vfx.md](spell_vfx.md). An additive glow halo
+  now plays on every cast, and a screen-space warp on the seven burst-
+  family atoms, layered on top of whichever sprite `IllustratedSpellEffectSprite`
+  (real delivered art, all 25 atoms, see "Delivered art" above) or
+  `ProceduralSpellEffectSprite` (the fallback for an atom without art) is
+  showing — exactly the "technique never content" split, and the bridge
+  this doc's "Procedural fallback first" paragraph always assumed would
+  eventually exist.

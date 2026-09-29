@@ -1431,6 +1431,18 @@ func apply_save_dict(data: Dictionary) -> void:
 	# grant this player was already born with.
 	if data.has("known_spell_ids"):
 		_known_spell_ids = Array(data["known_spell_ids"] as Array, TYPE_STRING, "", null)
+	# The saved list is a FLOOR, not the whole truth. A starting spell is one
+	# every character is born knowing and none can unlearn, so a character
+	# saved while the starting hand was narrower catches up to it here.
+	#
+	# Without this, updating the game does not fix the thing the update was
+	# for: a mage created when the hand was ["fire_bolt"] would load with
+	# keys 7 and 8 still empty for ever, see no change, and reasonably
+	# conclude the feature does not work. Reported from play exactly that
+	# way -- "6,7,8 are empty ... No way to cast anything atm".
+	for starting_id in SpellTuition.STARTING_SPELL_IDS:
+		if not _known_spell_ids.has(starting_id):
+			_known_spell_ids.append(starting_id)
 	# The weave and its parts. A save written before spells could be
 	# composed has none of these keys and simply loads a character who has
 	# not woven anything -- which is exactly true of them.
@@ -1996,6 +2008,15 @@ func active_effects() -> Array:
 	var effects: Array = []
 	effects.append_array(active_venom_debuffs)
 	effects.append_array(active_spell_debuffs)
+	# Reported from play as "I constantly die out of nowhere", and this was
+	# the reason. A mushroom toxin takes health every frame through
+	# take_tick_damage, which answers nothing BY DESIGN -- a receipt per
+	# frame is a buzz, not an answer (docs/concept/feedback.md). That design
+	# is only honest because the chip carries what the receipt does not, and
+	# this list was the chip: tracked, ticked, already in the identical
+	# DebuffStack shape as venom beside it, and never gathered. So eating a
+	# Death Cap drained a character with NOTHING on screen naming it.
+	effects.append_array(active_mushroom_toxin_debuffs)
 	# A food buff names its own effect rather than a debuff id, so it is
 	# translated into the shared shape here -- one stack, because eating a
 	# second meal refreshes a buff rather than deepening it.
@@ -3856,7 +3877,9 @@ func _apply_cast_step(step: Dictionary, delivery: String, chain_index: int = 0) 
 ## SpellTargeting.area_center's exact "a fixed distance along facing,
 ## falling back to the caster's own position with no facing" math rather
 ## than re-deriving it, since a directed miss and an area's own center are
-## the same question: "where was this actually aimed."
+## the same question: "where was this actually aimed." No "self" case: a
+## self-delivered atom's target is `self` (see _resolve_cast_target), never
+## null or empty, so this is never reached for one.
 func _cast_aim_point(delivery: String) -> Vector2:
 	match delivery:
 		"area":
