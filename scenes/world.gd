@@ -4844,9 +4844,26 @@ func _unhandled_input(event: InputEvent) -> void:
 ## surface AND re-open settings -- Escape fires both Godot's built-in
 ## `ui_cancel` and this project's runtime-bound `toggle_settings`.
 func _handle_escape() -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 	var action := EscapeAction.action_for(
-		_dev_console.visible, _any_gameplay_window_open(), _settings_overlay.is_open()
+		_dev_console.visible,
+		_any_gameplay_window_open(),
+		_settings_overlay.is_open(),
+		local_player != null and local_player.has_explicit_target()
 	)
+	_apply_escape_action(action, local_player)
+	get_viewport().set_input_as_handled()
+
+
+## _handle_escape's own match, split out so it can be driven directly with
+## an explicit `local_player` -- _handle_escape itself resolves that player
+## via multiplayer.get_unique_id(), which (like ~30 other local-player
+## lookups in this file) needs a live SceneTree and so cannot be driven
+## from a bare World.new() in a unit test; CLOSE_CONSOLE/CLOSE_WINDOWS/
+## CLEAR_TARGET have no such requirement and so are directly testable here
+## (CLOSE_SETTINGS/OPEN_SETTINGS still reach _toggle_settings_menu's
+## get_tree().paused write, so remain untestable the same way).
+func _apply_escape_action(action: String, local_player) -> void:
 	match action:
 		EscapeAction.CLOSE_CONSOLE:
 			# Via toggle(), never `visible = false` -- it also clears
@@ -4857,7 +4874,8 @@ func _handle_escape() -> void:
 		EscapeAction.CLOSE_SETTINGS, EscapeAction.OPEN_SETTINGS:
 			# Via the wrapper, which also syncs the paused state.
 			_toggle_settings_menu()
-	get_viewport().set_input_as_handled()
+		EscapeAction.CLEAR_TARGET:
+			local_player.clear_explicit_target()
 
 
 ## ## The ecology runs at two cadences
@@ -5050,6 +5068,17 @@ func _build_house_panel() -> void:
 func _on_world_clicked(world_position: Vector2, carts: Array = []) -> void:
 	if _any_gameplay_window_open():
 		return
+	# A hostile creature under the cursor wins over everything else
+	# (docs/concept/spell_runtime.md, "Explicit target selection"): a wolf
+	# standing beside a cart or a house should still be targetable, not
+	# shadowed by a click-priority list built for buildings and wagons.
+	# `_players` can be null in a World not fully wired (see
+	# test_world_house_panel_wiring.gd's own before_each, which never sets
+	# it) -- there is simply no local player to target anything for yet.
+	if _players != null:
+		var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if _dispatch_creature_click(world_position, local_player):
+			return
 	# A cart under the cursor wins over the building underneath it
 	# (docs/concept/village_warehouse.md, Mechanism 6): a wagon stands ON a
 	# village's paving and often right beside its store, so a click that read
@@ -5063,6 +5092,25 @@ func _on_world_clicked(world_position: Vector2, carts: Array = []) -> void:
 		return
 	var tile := _tile_for_position(world_position)
 	_house_panel.show_report(_chunk_manager.household_report_at(tile.x, tile.y))
+
+
+## _on_world_clicked's creature-priority check, split out so it can be
+## driven directly with an explicit `local_player` -- _on_world_clicked
+## itself resolves that player via multiplayer.get_unique_id(), which (like
+## ~30 other local-player lookups in this file) needs a live SceneTree and
+## so cannot be driven from a bare World.new() in a unit test; the actual
+## decision below (which creature, if any, a click should target) has no
+## such requirement. True when the click was consumed by targeting (or
+## un-targeting) a creature -- the caller returns without falling through
+## to the cart/building check.
+func _dispatch_creature_click(world_position: Vector2, local_player) -> bool:
+	if local_player == null:
+		return false
+	var creature = local_player.creature_at_click(world_position)
+	if creature == null:
+		return false
+	local_player.toggle_explicit_target(creature)
+	return true
 
 
 ## How close a click has to land to take hold of a cart rather than the

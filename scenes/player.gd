@@ -4179,6 +4179,20 @@ func clear_explicit_target() -> void:
 	_set_explicit_target(null)
 
 
+## The hostile creature a click at `world_position` lands on, among this
+## player's own targetable pool (_nearby_enemy_candidates) -- never a
+## creature that was never a candidate to begin with, however close the
+## click. Null when the click didn't land on any of them. World combines
+## this with toggle_explicit_target for its own click dispatch.
+func creature_at_click(world_position: Vector2) -> Node:
+	var candidates := _nearby_enemy_candidates()
+	var positions: Array = []
+	for creature in candidates:
+		positions.append(creature.position)
+	var index := SpellTargetSelection.index_at_point(world_position, positions)
+	return candidates[index] if index >= 0 else null
+
+
 ## The creature/player group is scanned the same way _perform_attack already
 ## does (get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)) -- PvP
 ## spell targeting is out of scope, matching melee's own scope.

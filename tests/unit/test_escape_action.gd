@@ -44,3 +44,27 @@ func test_never_opens_settings_while_anything_is_open():
 					"escape opened settings while something was already open (%s/%s/%s)"
 						% [console_open, window_open, settings_open]
 				)
+
+
+# -- CLEAR_TARGET: a new tier, after settings and before the final fallback
+# (docs/concept/spell_runtime.md, "Escape joins the existing priority
+# ladder, not a parallel path") -- `has_explicit_target` defaults to false so
+# every call above, written before this tier existed, is unaffected.
+
+func test_clears_the_target_when_nothing_else_is_open_and_a_target_is_set():
+	assert_eq(
+		EscapeAction.action_for(false, false, false, true), EscapeAction.CLEAR_TARGET
+	)
+
+
+## Still "innermost first": a selected target is the outermost thing to
+## close, so anything already open wins over clearing it.
+func test_clearing_the_target_still_loses_to_every_other_open_surface():
+	assert_eq(EscapeAction.action_for(true, false, false, true), EscapeAction.CLOSE_CONSOLE)
+	assert_eq(EscapeAction.action_for(false, true, false, true), EscapeAction.CLOSE_WINDOWS)
+	assert_eq(EscapeAction.action_for(false, false, true, true), EscapeAction.CLOSE_SETTINGS)
+
+
+func test_opening_settings_also_requires_no_target_selected():
+	assert_eq(EscapeAction.action_for(false, false, false, false), EscapeAction.OPEN_SETTINGS)
+	assert_ne(EscapeAction.action_for(false, false, false, true), EscapeAction.OPEN_SETTINGS)

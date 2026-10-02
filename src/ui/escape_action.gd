@@ -16,14 +16,24 @@ extends RefCounted
 const CLOSE_CONSOLE := "close_console"
 const CLOSE_WINDOWS := "close_windows"
 const CLOSE_SETTINGS := "close_settings"
+const CLEAR_TARGET := "clear_target"
 const OPEN_SETTINGS := "open_settings"
 
 
-static func action_for(console_open: bool, any_window_open: bool, settings_open: bool) -> String:
+## `has_explicit_target` (docs/concept/spell_runtime.md, "Explicit target
+## selection") slots in after settings and before the final fallback: with
+## nothing else open, Escape clears a live explicit spell target before it
+## ever opens Settings. Defaults to false so every pre-existing call (none
+## of which knew about a target) is unaffected.
+static func action_for(
+	console_open: bool, any_window_open: bool, settings_open: bool, has_explicit_target: bool = false
+) -> String:
 	if console_open:
 		return CLOSE_CONSOLE
 	if any_window_open:
 		return CLOSE_WINDOWS
 	if settings_open:
 		return CLOSE_SETTINGS
+	if has_explicit_target:
+		return CLEAR_TARGET
 	return OPEN_SETTINGS

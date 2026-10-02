@@ -353,3 +353,31 @@ func test_self_delivery_is_never_redirected_at_an_explicit_target():
 	player.toggle_explicit_target(wolf)
 
 	assert_eq(player._resolve_cast_target("self"), player)
+
+
+# -- creature_at_click(): World's click-to-target lookup ---------------------
+# World combines this with toggle_explicit_target for its own click
+# dispatch (docs/concept/spell_runtime.md: "a click within HOVER_RADIUS_PX
+# of a hostile creature targets it"). index_at_point's own click-tolerance/
+# nearest-of-several math is already covered by
+# test_spell_target_selection.gd; this only has to prove the one thing this
+# method adds on top of it -- which pool it searches.
+
+func test_creature_at_click_hits_a_hostile_creature_within_click_radius():
+	var wolf := _creature_at("wolf", Vector2(20, 0))
+
+	assert_eq(player.creature_at_click(wolf.position), wolf)
+
+
+func test_creature_at_click_misses_empty_ground():
+	_creature_at("wolf", Vector2(20, 0))
+
+	assert_null(player.creature_at_click(player.position + Vector2(1000, 1000)))
+
+
+## The same hostile-only pool Tab-cycling already uses -- a click can never
+## select something that was never a candidate to begin with.
+func test_creature_at_click_never_returns_a_non_hostile_creature():
+	var horse := _creature_at("horse", Vector2(10, 0))
+
+	assert_null(player.creature_at_click(horse.position))
