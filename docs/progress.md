@@ -23,6 +23,101 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Way more enemies, part 2: Goblin, Nachzehrer, and a safe clearing at spawn (2026-10-02) — see `concept/ecosystem_dynamics.md`, `concept/monsters.md`
+
+Continues the 2026-09-27 entry below: that pass made the roster's EXISTING
+fighters (boar, jackal, lynx...) dense and near-spawn; this one adds new
+roster entries and a true "nothing spawns in your face" guarantee, from the
+same direct ask: *"way more enemies e.g. like in path of exile but driven
+by the same mechanics animals are driven by... goblins, scavengers,
+whatsoever must have RPG enemies... initial spawn should be exempt but you
+should not have to walk far to encounter enemies."*
+
+**Goblin and Nachzehrer, `monsters.md` entries 10-11.** Two new real
+species — full `CreatureInfo`/`CreatureMass`/`SpeciesBite` tables, live in
+grassland's and forest's pools (`CreatureRenderer`). Goblin joins the
+dense, fight-capable herbivore-role pool alongside boar (not a predator —
+`PREDATOR_SPECIES` deliberately has no entry for it — but AGGRESSIVE
+tempered, so it fights). Nachzehrer joins the sparse predator-role pool
+like every other named predator. Each gets its own one-line behavioural
+trait, not just a reskin: Goblin's tenacity is `0.0`, the lowest of any
+species in `SpeciesBite.PROFILES` — `flees_at` never returns true while
+it's alive, so it never breaks off a fight. Nachzehrer gets a new pure
+module, `CarrionPreference` (`src/gameplay/carrion_preference.gd`): every
+predator already notices a nearby carcass (`CreatureMarker.
+_scan_carrion_stimuli`, `concept/carrion.md`'s own opportunistic-scavenger
+gap), but for a Nachzehrer a corpse now outranks a live target outright —
+`CreatureMarker._carrion_preference_filter` drops every huntable stimulus
+(PLAYER/FLESH/PREDATOR) from its perceived world the instant a CARRION
+stimulus is present, so the ordinary hungry-seeks-food wiring has only the
+corpse to choose from.
+
+**The roster's first biped body plan.** `AnimalAnatomy` gains a `biped`
+profile field; `ProceduralAnimalSprite._paint_legs` grows a third branch
+(one centred hip-width leg pair instead of a front/back quadruped split)
+alongside a new `_paint_arms`. Caught and fixed in the same pass, not left
+for later: the first implementation passed all 129 of its own geometry
+tests (49 `test_animal_anatomy.gd` + 80 `test_procedural_animal_sprite.
+gd`) but had never actually been rendered and looked at. A real
+photographic render (`tools/probe_biped_species.gd`, the same "code
+tracing alone is not evidence" technique the burst-spell-shader fix
+elsewhere in this log established) showed a body floating over one fused
+leg — not upright, not biped-looking, just broken. Two real bugs, neither
+visible to any geometry test because none of them rendered the actual
+composited image: the two legs' hip offset was scaled from leg thickness
+rather than body width, close enough to touch and fuse into one pillar
+once outlined; and `_paint_arms` was called before the body (and neck/
+head) were painted, so every later layer painted straight over the arm.
+Fixed red-first against two new pixel-level tests
+(`test_a_bipeds_two_legs_are_visually_distinct_not_a_fused_pillar`,
+`test_a_bipeds_arm_is_actually_visible_past_the_torso_not_painted_over`),
+then re-rendered and looked at again: both species now stand on two
+clearly separated legs with a connected body. Still procedural-fallback
+only — no illustrated sheet exists for either (same honest gap
+`monsters.md` already notes for Curupira/Alp).
+
+**A hostile-free clearing at the literal spawn point.** Steady combat near
+spawn (the 2026-09-27 entry below) and `RegionDifficulty`'s tiers both
+answer "how dangerous is the neighbourhood," never "can something hostile
+spawn in the exact chunk I land in" — today's honest answer was yes
+(EASY's own gate only excludes bear/lion/venomous_snake; boar, jackal,
+lynx, wolf and both new fighters could all spawn in the spawn chunk
+itself). A new, much smaller, orthogonal radius: `CreatureRenderer.
+SPAWN_SAFE_RADIUS_CHUNKS` (1, Chebyshev — a 3x3 block, roughly 46-137m of
+walking), one ring only, deliberately far smaller than the Hearth's five
+(`journey_rings.md`'s "not a spawn gate" is respected, not duplicated).
+Threaded through `CreatureRenderer.spawn_creatures`/`_allowed_pool` as a
+`spawn_safe` flag exactly the way `difficulty_tier` already is, and
+through `EarthChunkManager._is_spawn_safe_chunk` (the identical Chebyshev
+math `_difficulty_tier_at` already uses, reused rather than re-derived). A
+spawn-safe chunk drops any hostile species (`is_predator` or `AGGRESSIVE`
+temperament — the same vocabulary the explicit-targeting pool below
+already committed to) from both pools before the usual uniform pick runs;
+a calm grazer is never touched, because there was never anything to
+exempt spawn from. Found and fixed one real crash risk along the way:
+every `PREDATOR_SPECIES_POOL_BY_BIOME` entry is hostile by definition, so
+a spawn-safe chunk empties the predator pool completely — `_spawn_species`
+now returns early on an empty pool rather than divide by zero indexing it
+with a still-nonzero marker count.
+
+**Regression.** 243/243 across a ten-file batch spanning every table and
+behaviour this arc touched (`test_animal_anatomy.gd`, `test_goblin.gd`,
+`test_nachzehrer.gd`, `test_carrion_preference.gd`, `test_loot_table.gd`,
+`test_species_bite.gd`, `test_creature_mass.gd`, `test_curupira.gd`,
+`test_alp.gd`, `test_answerback.gd`), plus 56/56 `test_creature_renderer.
+gd`, 82/82 `test_procedural_animal_sprite.gd`, and targeted passes on
+`test_earth_chunk_manager.gd` (too large to run whole — `-gunit_test_name`
+filtered to the exact lines touched: difficulty-tier 3/3, chunk-load/
+reconcile 4/4, the new spawn-safe tests themselves 10/10).
+
+**Known gaps, stated rather than silently left.** No illustrated art for
+either species (procedural fallback, as above). No pack-spawn clustering —
+Goblin/Nachzehrer spawn exactly as independently as every other pool
+entry, never in a raiding group. No `CaravanRaid` or other scripted-event
+wiring — both are pure wildlife-roster additions, not a quest or world
+event. Arms are a silhouette cue at this resolution, not a combat-art
+system (same honest framing `_paint_arms`'s own doc comment states).
+
 ### Explicit spell target selection: autotarget, Tab-cycle, click, Escape (2026-10-02) — see `concept/spell_runtime.md`
 
 Asked directly: *"spells should autotarget nearby enemies; toggle through
