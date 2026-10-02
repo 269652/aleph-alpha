@@ -1563,13 +1563,28 @@ places a session can start in, and are untouched by this section.
 unchanged (bear/lion/venomous snake still HARD-only), and the Hearth's own
 promise ("nothing here kills you that you did not walk up to first",
 [journey_rings.md](journey_rings.md)) is unaffected for a completely
-separate reason: it was never a density guarantee to begin with.
-`CreatureMarker.steers_clear_of_players` and the `SENSE_RADIUS`-gated
-closing speed already make a predator's approach asymptote to exactly zero
-at the distance it first perceives a player — "a predator could never
-INITIATE on a player; it only ever fought one who had walked into its
-bubble" (see that function's own doc comment). That guarantee is about
-*behaviour*, not *population*, so it holds at any density.
+separate reason: it was never a density guarantee to begin with — it holds
+at any density because it is about *behaviour*, not *population*.
+
+**Correction (2026-10-05):** this paragraph originally credited
+`CreatureMarker.steers_clear_of_players` with making a predator's approach
+"asymptote to exactly zero at the distance it first perceives a player."
+That was already wrong when written: `steers_clear_of_players` was
+deliberately changed on 2026-09-21 (the predator-behaviour fix, see this
+doc's own Status list) so it is now true only for a calm, non-predator,
+non-aggressive individual that FLEES on sight — a predator or an aggressive
+species no longer steers clear of anything, and closes in and fights once
+it perceives a player, exactly as a predator should. The real mechanism the
+Hearth's promise actually rests on is simpler and still holds: nothing in
+this game continuously searches for or beelines toward a player from
+arbitrary range. A creature's AI does nothing about a player at all until
+one enters its own sense radius (`SENSE_RADIUS`, widened to `threat_radius`
+for a predator specifically) — so "you did not walk up to it first" means
+"you did not enter the radius at which it can perceive you at all," not
+"it declines to fight once it has." That distance gate is unrelated to
+`steers_clear_of_players` and was untouched by the 2026-09-21 fix, which is
+why the Hearth's promise survived that fix even though the paragraph
+explaining why did not.
 
 **What actually was the gap.** Population near spawn draws roughly 0 or 1
 herbivore-role marker per chunk (`PopulationMarkers.count_for`, population
@@ -1606,6 +1621,61 @@ temperament (tapir, camel, reindeer, goat are each deliberately calm) or
 placing boar somewhere it has no real-world habitat claim, and no session
 can spawn there regardless.
 
+### A safe clearing at the literal spawn point (2026-10-05)
+
+Asked directly, alongside "way more enemies": *"initial spawn should be
+exempt but you should not have to walk far to encounter enemies."* Steady
+combat near spawn (above) and the region-difficulty gate both answer "how
+dangerous is the neighbourhood" — neither one answers "can something
+hostile spawn in the exact chunk I land in," and the honest answer today is
+yes. EASY's own gate (`MIN_DIFFICULTY_TIER_BY_SPECIES`) only keeps out
+bear/lion/venomous_snake; boar, jackal, lynx, wolf and the new fighters this
+doc adds can all spawn in the spawn chunk itself. That is not "exempt."
+
+**A second, much smaller radius, orthogonal to the difficulty tiers.**
+`RegionDifficulty.EASY_RADIUS_CHUNKS` (15, ≈684 m of walking) answers "is
+this region dangerous at all"; this is a new, separate question — "is this
+specific chunk hostile-free regardless of its tier" — and needs its own,
+far smaller number. `CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS := 1`: a
+3×3 block of chunks (Chebyshev distance ≤ 1, the same convention
+`RegionDifficulty.tier_at` already uses) centred on the spawn chunk, ≈46–
+137 m of walking depending on where in the edge chunk the spawn tile itself
+sits. Small on purpose — this is "get your bearings" ground, a clearing,
+not a safe town; `MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION`'s whole point was
+steady combat starting almost immediately, and swallowing several chunks
+of that into a safe bubble would undo it. One ring, not the Hearth's five
+(0–5): the Hearth is a narrative/difficulty band with its own already-
+published promise (see the correction above), not a spawn gate — building
+a second one here that also calls itself "safe" at a different radius
+would be the exact kind of disagreement [journey_rings.md](journey_rings.md)'s
+own "not a spawn gate" line already warns against creating twice.
+
+**What "hostile" means here is the same vocabulary the targeting system
+already committed to** (`CreatureInfo.is_predator or temperament ==
+AGGRESSIVE` — `SpellTargetSelection`'s own candidate pool, see
+[spell_runtime.md](spell_runtime.md)'s "Explicit target selection"): a
+calm grazer is never excluded by this (there was never anything to exempt
+spawn FROM), only something that could actually fight. Threaded through
+`CreatureRenderer.spawn_creatures`/`_allowed_pool` as one more filter
+alongside the existing difficulty-tier one — `EarthChunkManager` computes
+"is this chunk within `SPAWN_SAFE_RADIUS_CHUNKS` of the spawn chunk" with
+the identical Chebyshev-distance math `RegionDifficulty.tier_at` already
+uses (reused, not re-derived, same as every other distance check in this
+doc), and a chunk inside it drops every hostile entry from both pools
+before the usual uniform pick runs — the exact same shape `_allowed_pool`
+already filters `MIN_DIFFICULTY_TIER_BY_SPECIES` with, one more predicate
+on the same function rather than a parallel gate.
+
+**Outside that one ring, nothing here raises density further.** "Way more
+enemies... you should not have to walk far" is answered by two new
+[monsters.md](monsters.md) roster entries, Goblin and Nachzehrer, joining
+grassland/forest's existing pool mechanism (Goblin in the dense
+herbivore-role pool exactly like boar, Nachzehrer in the sparse
+predator-role pool like every other named predator) — not by a second
+multiplier on top of `PREDATORS_PER_PREY_UNIT` or
+`MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION`, both of which this section leaves
+exactly as this doc has twice already defended.
+
 ## Status / mechanisms
 
 - ✅ **Steady combat near spawn** (2026-09-27) — `SPAWN_REACHABLE_BIOMES`
@@ -1620,6 +1690,13 @@ can spawn there regardless.
   `git blame` on the line, not a guess) was found and fixed as a
   prerequisite to running this suite at all.
 
+- 🚧 **A safe clearing at the literal spawn point** (2026-10-05) —
+  `CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS` (1), filtering any hostile
+  species (`is_predator` or `AGGRESSIVE` temperament) out of both pools
+  within Chebyshev distance 1 of the spawn chunk. Orthogonal to
+  `RegionDifficulty`'s tiers, which are unaffected. Goblin/Nachzehrer (see
+  [monsters.md](monsters.md)) raise density everywhere else via the
+  existing pool mechanism, not a new multiplier.
 - ✅ `region_difficulty.gd` (chunk-distance-from-spawn → tier), wired into
   `CreatureRenderer`'s species-pool selection (`MIN_DIFFICULTY_TIER_BY_SPECIES`)
   and `EarthChunkManager.set_spawn_tile`/`_difficulty_tier_at`.

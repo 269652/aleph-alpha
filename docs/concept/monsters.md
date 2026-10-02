@@ -173,6 +173,49 @@ inheritance; a Wolpertinger is the one legitimate excuse to splice visible
 traits from four species onto one individual and let the genetics system
 actually carry it. Harmless, very rare, and worth a lot to a collector.
 
+### 10. Goblin — the raiding kind (grassland / forest, England / Wales)
+
+**Tier A.** Public-domain English and Welsh folklore — a malicious,
+human-shaped nuisance-turned-threat (the same *coblynau*/goblin lineage the
+Welsh mining tradition already tells as a tale, not a living belief),
+rather than the generic fantasy-trope reading of the word. Real niche: the
+roster's first HUMANOID hostile fauna, filling the exact gap
+[karma_and_luck.md](karma_and_luck.md) names outright — "a wolf and a
+bandit are not distinguished anywhere existing."
+
+**Its one behaviour: it never breaks off.** Every other creature in the
+game flees once its health drops far enough (`SpeciesBite.tenacity`, the
+health fraction at or below which it quits) — a Goblin's tenacity is
+exactly 0.0, so nothing above zero health ever makes it disengage. The
+first creature in the roster that fights to the kill rather than to the
+scare.
+
+Reads as a squat, hunched biped — green-grey skin, bone trophies strung
+from a crude harness (the same "hung with bone fetishes" the art brief
+above already names) — standing upright where every other species in its
+pool walks on four legs or none.
+
+### 11. Nachzehrer — the one who feeds after (grassland / forest, Germanic)
+
+**Tier A.** German folklore: a revenant that does not rise to hunt the
+living so much as return to the dead, gnawing its own shroud and the
+corpses buried near it — public-domain village folk-belief (church-register
+and graveyard-custom territory, not a living faith), the same register
+this roster already draws Krampus/Rubezahl/Nyx/the Alp from, and the same
+47–54°N latitude band every real spawn actually lands in.
+
+**Its one behaviour: it would rather eat than fight.** Every predator
+already notices a nearby carcass ([carrion.md](carrion.md)'s
+opportunistic-scavenging gap) — a Nachzehrer is the first one for which a
+corpse OUTRANKS a living target: with any carcass in sense range, it
+ignores a huntable player entirely and goes to the dead meal instead.
+Mechanically the safest predator in the roster to simply walk past;
+thematically the most unsettling, because its indifference is the whole
+point.
+
+Reads as a gaunt, grave-pale biped in rotted grave-clothes, low to the
+ground, feeding rather than striking.
+
 ## Art brief
 
 ### What the pipeline actually eats
@@ -539,6 +582,18 @@ detail; size the creature in its anatomy profile.
   `_process` for three seconds with the creature sitting on the sleeper's
   chest and asserts health is untouched, the character is still asleep, and
   the stamina really was draining the whole time.
+- 🚧 **Entries 10–11, Goblin and Nachzehrer, asked for directly** (2026-10-05):
+  *"way more enemies... driven by the same mechanics animals are driven
+  by... goblins, scavengers, whatsoever... should not have to walk far."*
+  Spec'd above; not yet built. Both are the roster's first entries with a
+  genuinely upright, two-legged silhouette rather than a recolored
+  quadruped — `AnimalAnatomy`/`ProceduralAnimalSprite` have never needed a
+  biped body plan before, so that is new plumbing, not a reuse. No
+  illustrated sheet exists for either (same honest gap as every other
+  monster here); both render on the procedural fallback once the biped
+  plan lands. See [ecosystem_dynamics.md](ecosystem_dynamics.md)'s new "A
+  safe clearing at the literal spawn point" section for where each lands
+  in the biome pools and why spawn itself stays exempt.
 - ⬜ Entries 1–2, 4 and 6–9 are unimplemented. Entry 9 (the
   Wolpertinger) is by its own entry a harmless easter egg rather than a
   threat. The remaining Tier C entries each still need their binding
