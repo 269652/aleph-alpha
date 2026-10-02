@@ -1566,7 +1566,7 @@ promise ("nothing here kills you that you did not walk up to first",
 separate reason: it was never a density guarantee to begin with — it holds
 at any density because it is about *behaviour*, not *population*.
 
-**Correction (2026-10-05):** this paragraph originally credited
+**Correction (2026-10-02):** this paragraph originally credited
 `CreatureMarker.steers_clear_of_players` with making a predator's approach
 "asymptote to exactly zero at the distance it first perceives a player."
 That was already wrong when written: `steers_clear_of_players` was
@@ -1621,7 +1621,7 @@ temperament (tapir, camel, reindeer, goat are each deliberately calm) or
 placing boar somewhere it has no real-world habitat claim, and no session
 can spawn there regardless.
 
-### A safe clearing at the literal spawn point (2026-10-05)
+### A safe clearing at the literal spawn point (2026-10-02)
 
 Asked directly, alongside "way more enemies": *"initial spawn should be
 exempt but you should not have to walk far to encounter enemies."* Steady
@@ -1690,12 +1690,22 @@ exactly as this doc has twice already defended.
   `git blame` on the line, not a guess) was found and fixed as a
   prerequisite to running this suite at all.
 
-- 🚧 **A safe clearing at the literal spawn point** (2026-10-05) —
-  `CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS` (1), filtering any hostile
-  species (`is_predator` or `AGGRESSIVE` temperament) out of both pools
-  within Chebyshev distance 1 of the spawn chunk. Orthogonal to
-  `RegionDifficulty`'s tiers, which are unaffected. Goblin/Nachzehrer (see
-  [monsters.md](monsters.md)) raise density everywhere else via the
+- ✅ **A safe clearing at the literal spawn point** (2026-10-02) —
+  `CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS` (1, tested), threaded through
+  `spawn_creatures`/`_allowed_pool` as a `spawn_safe` flag exactly like
+  `difficulty_tier` already is, and through `EarthChunkManager`'s own
+  `_is_spawn_safe_chunk` (the identical `JourneyRing.distance_chunks`
+  Chebyshev math `_difficulty_tier_at` already uses). A spawn-safe chunk
+  drops any hostile species (`is_predator` or `AGGRESSIVE` temperament --
+  `CreatureRenderer._is_hostile_species`, the same vocabulary
+  `Player._nearby_enemy_candidates` already committed to) from both pools
+  before the usual uniform pick runs; a calm grazer is never touched.
+  Orthogonal to `RegionDifficulty`'s tiers, which are unaffected. Since
+  every `PREDATOR_SPECIES_POOL_BY_BIOME` entry is hostile by definition, a
+  spawn-safe chunk empties that pool completely -- `_spawn_species` now
+  returns early on an empty pool rather than risk a modulo-by-zero on a
+  population that still rolled a nonzero marker count. Goblin/Nachzehrer
+  (see [monsters.md](monsters.md)) raise density everywhere else via the
   existing pool mechanism, not a new multiplier.
 - ✅ `region_difficulty.gd` (chunk-distance-from-spawn → tier), wired into
   `CreatureRenderer`'s species-pool selection (`MIN_DIFFICULTY_TIER_BY_SPECIES`)

@@ -1726,6 +1726,19 @@ func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
 	return _region_difficulty.tier_at(chunk_coord, _spawn_chunk_coord)
 
 
+## Mirrors _difficulty_tier_at's own shape for a second, smaller, orthogonal
+## radius (docs/concept/ecosystem_dynamics.md's "A safe clearing at the
+## literal spawn point") -- reuses the identical Chebyshev-distance math
+## (JourneyRing.distance_chunks), not re-derived. Not spawn-safe before a
+## spawn is configured: the opposite answer from _difficulty_tier_at's own
+## fails-open HARD default, but the same reasoning -- there is nothing yet
+## to call "near," so nothing should claim to be the safe clearing around it.
+func _is_spawn_safe_chunk(chunk_coord: Vector2i) -> bool:
+	if not _spawn_configured:
+		return false
+	return JourneyRing.distance_chunks(chunk_coord, _spawn_chunk_coord) <= CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS
+
+
 func herbivore_population_at_chunk(chunk_coord: Vector2i) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
 
@@ -14736,7 +14749,8 @@ func _reconcile_chunk_creatures(chunk_coord: Vector2i) -> void:
 				self,
 				_biome_classifier.dominant_biome(chunk.biome),
 				_difficulty_tier_at(chunk_coord),
-				alive.size()
+				alive.size(),
+				_is_spawn_safe_chunk(chunk_coord)
 			)
 		)
 	_loaded_creatures[chunk_coord] = alive
@@ -18929,7 +18943,9 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.predator_population(chunk_coord),
 		self,
 		_biome_classifier.dominant_biome(chunk.biome),
-		_difficulty_tier_at(chunk_coord)
+		_difficulty_tier_at(chunk_coord),
+		0,
+		_is_spawn_safe_chunk(chunk_coord)
 	)
 	_restore_kept_animals(chunk_coord)
 	_restore_growing_juveniles(chunk_coord)

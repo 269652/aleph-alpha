@@ -26,7 +26,9 @@ const SnowTrail = preload("res://src/world/snow_trail.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const CreatureInfo = preload("res://src/world/creature_info.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
 const MeadowSpread = preload("res://src/world/meadow_spread.gd")
@@ -2010,6 +2012,53 @@ func test_a_configured_spawns_own_chunk_is_easy_difficulty():
 	manager.set_spawn_tile(_berlin_tile)
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
 	assert_eq(manager._difficulty_tier_at(center_chunk), RegionDifficulty.Tier.EASY)
+
+
+# -- a safe clearing at the literal spawn point (see
+# docs/concept/ecosystem_dynamics.md's "A safe clearing at the literal spawn
+# point") -- a second, smaller, orthogonal radius: within
+# CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS of the spawn chunk, no hostile
+# species should spawn at all, regardless of difficulty tier.
+
+func test_without_a_configured_spawn_nothing_is_spawn_safe():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_false(manager._is_spawn_safe_chunk(center_chunk))
+
+
+func test_a_configured_spawns_own_chunk_is_spawn_safe():
+	manager.set_spawn_tile(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._is_spawn_safe_chunk(center_chunk))
+
+
+func test_a_chunk_beyond_the_spawn_safe_radius_is_not_spawn_safe():
+	manager.set_spawn_tile(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var far_chunk := center_chunk + Vector2i(CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS + 1, 0)
+	assert_false(manager._is_spawn_safe_chunk(far_chunk))
+
+
+## End-to-end: the actual wiring (not just the helper above) keeps the
+## spawn chunk itself free of hostile species, the same way
+## test_set_spawn_tile_makes_nearby_regions_use_easy_difficulty already
+## proves the difficulty-tier wiring above it -- but filtered to only
+## creatures within the spawn-safe radius, since SPAWN_SAFE_RADIUS_CHUNKS
+## (1) is far smaller than the loaded neighbourhood manager.update streams
+## in, unlike EASY_RADIUS_CHUNKS (15), which covers it entirely.
+func test_set_spawn_tile_makes_the_spawn_safe_chunk_free_of_hostile_species():
+	manager.set_spawn_tile(_berlin_tile)
+	manager.update(_berlin_tile)
+	var spawn_chunk := _chunk_coord_for_tile(_berlin_tile)
+
+	for child in creatures_parent.get_children():
+		if child is CreatureMarker and child.info != null:
+			var marker_chunk: Vector2i = manager._chunk_coord_for_tile(manager._world_tile_for_pixel(child.position))
+			if JourneyRing.distance_chunks(marker_chunk, spawn_chunk) <= CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS:
+				assert_false(
+					child.info.is_predator or child.info.temperament == CreatureInfo.AGGRESSIVE,
+					"%s should not spawn within the spawn-safe radius" % child.info.species
+				)
 
 
 # -- explored-tiles wiring (see docs/concept/wayfinding.md's Map item) ------

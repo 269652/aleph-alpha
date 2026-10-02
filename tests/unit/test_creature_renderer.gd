@@ -707,3 +707,76 @@ func test_exploration_only_biomes_keep_their_pre_fix_fight_capable_fraction():
 			if CreatureInfo.TEMPERAMENT_BY_SPECIES.get(species, "calm") == CreatureInfo.AGGRESSIVE:
 				fight_capable += 1
 		assert_eq(fight_capable, 0, "%s's herbivore pool should have no fighters yet" % biome_name)
+
+
+# -- a safe clearing at the literal spawn point (see
+# docs/concept/ecosystem_dynamics.md's "A safe clearing at the literal spawn
+# point") -- `spawn_safe` drops every HOSTILE species (is_predator or
+# AGGRESSIVE temperament -- the same vocabulary Player._nearby_enemy_
+# candidates already committed to) from both pools, orthogonal to
+# difficulty_tier, which stays untouched.
+
+func test_spawn_safe_radius_chunks_is_one():
+	assert_eq(CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS, 1)
+
+
+func test_allowed_pool_drops_hostile_species_when_spawn_safe_is_true():
+	var allowed := renderer._allowed_pool(["deer", "boar", "goblin"], RegionDifficulty.Tier.HARD, true)
+	assert_eq(allowed, ["deer"], "boar/goblin are both AGGRESSIVE and should be dropped; deer is calm")
+
+
+func test_allowed_pool_keeps_every_species_when_spawn_safe_is_false():
+	var pool := ["deer", "boar", "goblin"]
+	assert_eq(
+		renderer._allowed_pool(pool, RegionDifficulty.Tier.HARD, false), pool,
+		"spawn_safe defaults to false; every pre-existing caller must keep its old pool untouched"
+	)
+
+
+func test_spawn_safe_true_excludes_every_hostile_species_from_both_pools():
+	var herbivore_species := {}
+	var predator_species := {}
+	for coord_x in range(60):
+		var spawned := renderer.spawn_creatures(
+			parent, Vector2i(coord_x, 0), CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 1.0, 1.0, null,
+			"forest", RegionDifficulty.Tier.HARD, 0, true
+		)
+		for creature in spawned:
+			if creature.info.is_predator:
+				predator_species[creature.info.species] = true
+			else:
+				herbivore_species[creature.info.species] = true
+			creature.free()
+	assert_true(predator_species.is_empty(), "every forest predator-role species is hostile by definition")
+	for species in herbivore_species:
+		assert_false(
+			bool(CreatureInfo.PREDATOR_SPECIES.get(species, false))
+			or CreatureInfo.TEMPERAMENT_BY_SPECIES.get(species, "calm") == CreatureInfo.AGGRESSIVE,
+			"%s is hostile and should not spawn in a spawn-safe chunk" % species
+		)
+
+
+func test_spawn_safe_true_still_spawns_calm_herbivores():
+	var herbivore_species := {}
+	for coord_x in range(60):
+		var spawned := renderer.spawn_creatures(
+			parent, Vector2i(coord_x, 0), CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 1.0, 0.0, null,
+			"grassland", RegionDifficulty.Tier.HARD, 0, true
+		)
+		for creature in spawned:
+			herbivore_species[creature.info.species] = true
+			creature.free()
+	assert_true(herbivore_species.has("deer"), "a calm grazer should still spawn in a spawn-safe chunk")
+
+
+## Regression safety net: EVERY entry in PREDATOR_SPECIES_POOL_BY_BIOME is a
+## predator by definition, so spawn_safe empties that pool completely --
+## _spawn_species must not crash indexing an empty pool (a modulo by zero on
+## species_pool.size()) just because PopulationMarkers.count_for still
+## rolled a nonzero count for it.
+func test_spawn_safe_true_with_a_nonzero_predator_population_does_not_crash():
+	var spawned := renderer.spawn_creatures(
+		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 0.0, 5.0, null,
+		"forest", RegionDifficulty.Tier.HARD, 0, true
+	)
+	assert_eq(spawned.size(), 0, "a fully-filtered predator pool should spawn nothing, not crash")

@@ -185,6 +185,15 @@ const MIN_DIFFICULTY_TIER_BY_SPECIES := {
 	"venomous_snake": RegionDifficulty.Tier.HARD,
 }
 
+## A second, much smaller radius than any RegionDifficulty tier -- the
+## literal spawn clearing (docs/concept/ecosystem_dynamics.md's "A safe
+## clearing at the literal spawn point"). A chunk within this many chunks
+## (Chebyshev; see EarthChunkManager._is_spawn_safe_chunk) of the spawn
+## chunk drops every hostile species from both pools via _allowed_pool's
+## spawn_safe flag below -- orthogonal to difficulty_tier, which stays
+## unaffected.
+const SPAWN_SAFE_RADIUS_CHUNKS := 1
+
 const SPECIES_COLORS := {
 	"herbivore": HERBIVORE_COLOR,
 	"boar": BOAR_COLOR,
@@ -227,6 +236,12 @@ var _illustrated := preload("res://src/rendering/illustrated_animal_sprite.gd").
 ## as before) filters out any species whose MIN_DIFFICULTY_TIER_BY_SPECIES
 ## exceeds it -- see docs/concept/ecosystem_dynamics.md's Region difficulty
 ## section.
+## `spawn_safe` (default false, so every pre-existing call site keeps
+## behaving exactly as before) additionally drops every HOSTILE species
+## (is_predator or AGGRESSIVE temperament) from both pools -- see
+## SPAWN_SAFE_RADIUS_CHUNKS above. Orthogonal to difficulty_tier: a chunk
+## can be EASY difficulty and still spawn a hostile boar/jackal outside the
+## much smaller spawn-safe radius.
 ## How many markers one species' aggregate population is drawn as. Shared
 ## with the reconcile pass so "how many should be here" has exactly one
 ## answer -- which is why both callers must pass the SAME chunk and salt, or
@@ -259,13 +274,14 @@ func spawn_creatures(
 	world = null,
 	biome_name: String = "",
 	difficulty_tier: int = RegionDifficulty.Tier.HARD,
-	start_index: int = 0
+	start_index: int = 0,
+	spawn_safe: bool = false
 ) -> Array[Node2D]:
 	var herbivore_pool := _allowed_pool(
-		HERBIVORE_SPECIES_POOL_BY_BIOME.get(biome_name, HERBIVORE_SPECIES_POOL), difficulty_tier
+		HERBIVORE_SPECIES_POOL_BY_BIOME.get(biome_name, HERBIVORE_SPECIES_POOL), difficulty_tier, spawn_safe
 	)
 	var predator_pool := _allowed_pool(
-		PREDATOR_SPECIES_POOL_BY_BIOME.get(biome_name, PREDATOR_SPECIES_POOL), difficulty_tier
+		PREDATOR_SPECIES_POOL_BY_BIOME.get(biome_name, PREDATOR_SPECIES_POOL), difficulty_tier, spawn_safe
 	)
 
 	var spawned: Array[Node2D] = []
@@ -328,15 +344,34 @@ func _slid_clear_of_water(position: Vector2, world, tile_size: int):
 	return null
 
 
+## "Hostile" is the same vocabulary the targeting system already committed
+## to -- Player._nearby_enemy_candidates' own `info.is_predator or
+## info.temperament == CreatureInfo.AGGRESSIVE` -- read here directly from
+## CreatureInfo's own tables by species name (the same shape
+## MIN_DIFFICULTY_TIER_BY_SPECIES.get(species, ...) below already uses)
+## rather than constructing a throwaway CreatureInfo instance per species.
+static func _is_hostile_species(species: String) -> bool:
+	return (
+		bool(CreatureInfo.PREDATOR_SPECIES.get(species, false))
+		or CreatureInfo.TEMPERAMENT_BY_SPECIES.get(species, "calm") == CreatureInfo.AGGRESSIVE
+	)
+
+
 ## Drops any pool entry whose own minimum difficulty tier exceeds the
 ## region's current tier -- e.g. "bear" is filtered out of forest's pool
 ## below Tier.HARD. Species with no MIN_DIFFICULTY_TIER_BY_SPECIES entry
 ## default to Tier.EASY (0), so they're never filtered.
-func _allowed_pool(pool: Array, difficulty_tier: int) -> Array:
+## `spawn_safe` (default false, so every pre-existing call site keeps
+## behaving exactly as before) additionally drops every hostile species --
+## see SPAWN_SAFE_RADIUS_CHUNKS above.
+func _allowed_pool(pool: Array, difficulty_tier: int, spawn_safe: bool = false) -> Array:
 	var allowed: Array = []
 	for species in pool:
-		if MIN_DIFFICULTY_TIER_BY_SPECIES.get(species, RegionDifficulty.Tier.EASY) <= difficulty_tier:
-			allowed.append(species)
+		if MIN_DIFFICULTY_TIER_BY_SPECIES.get(species, RegionDifficulty.Tier.EASY) > difficulty_tier:
+			continue
+		if spawn_safe and _is_hostile_species(species):
+			continue
+		allowed.append(species)
 	return allowed
 
 
@@ -353,6 +388,13 @@ func _spawn_species(
 	start_index: int = 0,
 	difficulty_tier: int = RegionDifficulty.Tier.EASY
 ) -> Array[Node2D]:
+	# Every PREDATOR_SPECIES_POOL_BY_BIOME entry is hostile by definition, so
+	# a spawn-safe chunk's _allowed_pool call empties the predator pool
+	# completely -- marker_count_for can still roll a nonzero count from a
+	# nonzero population regardless of pool size, and species_pool[x %
+	# species_pool.size()] below would divide by zero on an empty pool.
+	if species_pool.is_empty():
+		return []
 	var count := marker_count_for(population, chunk_coord, species_salt)
 	var spawned: Array[Node2D] = []
 	# `start_index` lets a chunk TOP UP rather than rebuild (see

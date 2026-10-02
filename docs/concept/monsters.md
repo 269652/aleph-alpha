@@ -582,18 +582,28 @@ detail; size the creature in its anatomy profile.
   `_process` for three seconds with the creature sitting on the sleeper's
   chest and asserts health is untouched, the character is still asleep, and
   the stamina really was draining the whole time.
-- 🚧 **Entries 10–11, Goblin and Nachzehrer, asked for directly** (2026-10-05):
+- ✅ **Entries 10–11, Goblin and Nachzehrer, asked for directly** (2026-10-02):
   *"way more enemies... driven by the same mechanics animals are driven
   by... goblins, scavengers, whatsoever... should not have to walk far."*
-  Spec'd above; not yet built. Both are the roster's first entries with a
-  genuinely upright, two-legged silhouette rather than a recolored
-  quadruped — `AnimalAnatomy`/`ProceduralAnimalSprite` have never needed a
-  biped body plan before, so that is new plumbing, not a reuse. No
+  Both are real spawnable species (`CreatureInfo`/`CreatureMass`/
+  `SpeciesBite` tables, live in grassland's and forest's pools — Goblin
+  dense in the fight-capable herbivore-role pool alongside boar, Nachzehrer
+  sparse in the predator-role pool like every other named predator) and the
+  roster's first entries with a genuinely upright, two-legged silhouette
+  rather than a recolored quadruped — `AnimalAnatomy`/`ProceduralAnimalSprite`
+  gained a new `biped` body plan for them (one centred leg pair plus static
+  arms, not the usual front/back split) rather than reusing an existing one.
+  Goblin's own trait is tenacity `0.0`, the lowest of any species — it never
+  breaks off and flees, however low its health (`SpeciesBite.flees_at`).
+  Nachzehrer's is `CarrionPreference`: the one species for which a nearby
+  corpse outranks a live target outright, dropping every huntable stimulus
+  the instant carrion is present — every other predator already notices
+  carrion (see [carrion.md](carrion.md)) but still hunts right past it. No
   illustrated sheet exists for either (same honest gap as every other
-  monster here); both render on the procedural fallback once the biped
-  plan lands. See [ecosystem_dynamics.md](ecosystem_dynamics.md)'s new "A
-  safe clearing at the literal spawn point" section for where each lands
-  in the biome pools and why spawn itself stays exempt.
+  monster here); both render on the procedural fallback. See
+  [ecosystem_dynamics.md](ecosystem_dynamics.md)'s "A safe clearing at the
+  literal spawn point" section for where each lands in the biome pools and
+  why spawn itself stays exempt.
 - ⬜ Entries 1–2, 4 and 6–9 are unimplemented. Entry 9 (the
   Wolpertinger) is by its own entry a harmless easter egg rather than a
   threat. The remaining Tier C entries each still need their binding
