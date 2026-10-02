@@ -63,6 +63,7 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const CreatureInfo = preload("res://src/world/creature_info.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
@@ -707,6 +708,7 @@ const SpellBook = preload("res://src/gameplay/spell_book.gd")
 const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const SpellAtomEffects = preload("res://src/gameplay/spell_atom_effects.gd")
 const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
+const SpellTargetSelection = preload("res://src/gameplay/spell_target_selection.gd")
 const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
 const MageMaster = preload("res://src/gameplay/mage_master.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
@@ -3261,11 +3263,24 @@ func _dodge_timers_step(delta: float) -> void:
 	_dodge_cooldown_remaining = float(advanced["cooldown_remaining"])
 
 
+## A bare Tab still dodges, unchanged. Tab's rising edge while `sprint`
+## (Shift, held) is also down cycles the spell target instead
+## (spell_runtime.md: "Tab collides with Dodge, so the cycle rides
+## Shift+Tab instead") -- read off the two EXISTING, already-rebindable
+## actions rather than a hardcoded chord, so the cycle keeps working
+## wherever a player rebinds either one, and mutually exclusive by
+## construction: the two branches share one rising edge, so the same
+## physical press can never both dodge and cycle.
 func _dodge_step() -> void:
 	var pressed := Input.is_action_pressed("dodge") if _controlled_locally() else false
 	var just_pressed := _rising_edge("dodge", pressed, _last_dodge_input_state)
 	_last_dodge_input_state = pressed
-	if just_pressed:
+	if not just_pressed:
+		return
+	var cycling := Input.is_action_pressed("sprint") if _controlled_locally() else false
+	if cycling:
+		_cycle_spell_target()
+	else:
 		dodge()
 
 
@@ -4075,9 +4090,115 @@ func learn_spell(spell_id: String) -> Dictionary:
 	return result
 
 
+## Explicit spell target selection (docs/concept/spell_runtime.md, "Explicit
+## target selection"): a persistent, player-chosen preference layered on top
+## of the per-cast nearest-neighbour fallback below. Holds a creature
+## reference or null, following the exact `_lassoed`/is_instance_valid
+## convention this file already uses for "maybe-freed Node reference, no
+## weakref" (see _lasso_step) rather than inventing a second pattern for it.
+var _explicit_target: Node = null
+
+
+## The live explicit target, or null if none was ever set or the one that
+## was has since died/despawned -- every read re-checks validity, so a freed
+## target silently reads back as unset rather than returning a dangling
+## reference (spell_runtime.md: "cleared automatically only on death/
+## invalidity, never on distance").
+func explicit_target() -> Node:
+	if _explicit_target != null and not is_instance_valid(_explicit_target):
+		_explicit_target = null
+	return _explicit_target
+
+
+func has_explicit_target() -> bool:
+	return explicit_target() != null
+
+
+## The selectable pool for Tab-cycling/clicking: hostile creatures only
+## (CreatureInfo.is_predator or temperament == AGGRESSIVE -- the same
+## vocabulary CreatureMarker.steers_clear_of_players already reads, see
+## spell_runtime.md), out to CreatureMarker.CAUTION_RADIUS
+## (SpellTargetSelection.TARGET_RADIUS), nearest first so index 0 is always
+## "the nearest hostile" for SpellTargetSelection.next_target to start from.
+func _nearby_enemy_candidates() -> Array:
+	var candidates: Array = []
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var info: CreatureInfo = creature.info
+		if info == null:
+			continue
+		if not (info.is_predator or info.temperament == CreatureInfo.AGGRESSIVE):
+			continue
+		if position.distance_to(creature.position) > SpellTargetSelection.TARGET_RADIUS:
+			continue
+		candidates.append(creature)
+	candidates.sort_custom(
+		func(a, b): return position.distance_to(a.position) < position.distance_to(b.position)
+	)
+	return candidates
+
+
+## The one place `_explicit_target` is actually written -- toggles the
+## outgoing and incoming targets' visual ring (CreatureMarker.set_targeted)
+## in the same step so the ring can never show on two creatures, or on one
+## that is no longer the selection.
+func _set_explicit_target(creature) -> void:
+	if _explicit_target != null and is_instance_valid(_explicit_target):
+		_explicit_target.set_targeted(false)
+	_explicit_target = creature
+	if _explicit_target != null:
+		_explicit_target.set_targeted(true)
+
+
+## Tab's own cycling step (see _dodge_step's Shift+Tab branch): nearest
+## hostile first, each call advances, wrapping back to nearest after the
+## last. A current target that walked out of CAUTION_RADIUS since the last
+## press (but was NOT cleared for it -- see explicit_target's own doc
+## comment) is no longer in `candidates`, so SpellTargetSelection.next_target
+## restarts the cycle at the nearest rather than advancing from a position
+## that no longer exists in the list.
+func _cycle_spell_target() -> void:
+	var candidates := _nearby_enemy_candidates()
+	_set_explicit_target(SpellTargetSelection.next_target(candidates, explicit_target()))
+
+
+## World's click-to-target (docs/concept/spell_runtime.md): the same
+## creature clicked again clears the selection, any other creature replaces
+## it. Trusts its caller on which creatures are clickable at all (the same
+## "pure math, caller filters" split SpellTargetSelection itself keeps) --
+## World is expected to only ever pass a creature already found via a
+## hostile-filtered click lookup, not to re-check hostility here.
+func toggle_explicit_target(creature) -> void:
+	if explicit_target() == creature:
+		_set_explicit_target(null)
+	else:
+		_set_explicit_target(creature)
+
+
+## Escape's clear (see EscapeAction's new CLEAR_TARGET tier).
+func clear_explicit_target() -> void:
+	_set_explicit_target(null)
+
+
 ## The creature/player group is scanned the same way _perform_attack already
 ## does (get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)) -- PvP
 ## spell targeting is out of scope, matching melee's own scope.
+##
+## A live explicit target (see explicit_target()) is checked FIRST for
+## touch/projectile/area, before any of the nearest-neighbour scan below --
+## never for self, which is never redirected at an enemy (spell_runtime.md).
+## It is used even if something else is technically closer, or even out of
+## THIS cast's own range: touch/projectile reuse nearest_touch/
+## nearest_in_facing against a single-element `[target.position]` array as a
+## zero-new-code validity probe (index 0 back means "in range", -1 means
+## commit to the miss) rather than ever falling back to whatever else IS in
+## range -- SpellAtomEffects.apply_to_target performs no range check of its
+## own anywhere, so silently redirecting here would be the only place that
+## gap could be exploited for an unlimited-range hit. `area` centers on the
+## explicit target's own position too, but only within PROJECTILE_RANGE of
+## the caster (spell_runtime.md's divergence note): unlike touch/projectile,
+## an "area" cast has no target to miss, so an uncapped recentre on a target
+## nothing ever clears for mere distance would be unlimited-range artillery,
+## not a spell that can whiff.
 func _resolve_cast_target(delivery: String):
 	if delivery == "self":
 		return self
@@ -4085,19 +4206,30 @@ func _resolve_cast_target(delivery: String):
 	var positions: Array = []
 	for candidate in candidates:
 		positions.append(candidate.position)
+	var target := explicit_target()
 
 	match delivery:
 		"area":
-			var center := _spell_targeting.area_center(position, _last_facing_direction)
+			var center := position
+			if target != null and position.distance_to(target.position) <= SpellTargeting.PROJECTILE_RANGE:
+				center = target.position
+			else:
+				center = _spell_targeting.area_center(position, _last_facing_direction)
 			var hit_indices := _spell_targeting.in_area(center, positions)
 			var targets: Array = []
 			for index in hit_indices:
 				targets.append(candidates[index])
 			return targets
 		"projectile":
+			if target != null:
+				var hit := _spell_targeting.nearest_in_facing(position, _last_facing_direction, [target.position])
+				return target if hit == 0 else null
 			var index := _spell_targeting.nearest_in_facing(position, _last_facing_direction, positions)
 			return candidates[index] if index >= 0 else null
 		_:  # touch
+			if target != null:
+				var hit := _spell_targeting.nearest_touch(position, [target.position])
+				return target if hit == 0 else null
 			var index := _spell_targeting.nearest_touch(position, positions)
 			return candidates[index] if index >= 0 else null
 
