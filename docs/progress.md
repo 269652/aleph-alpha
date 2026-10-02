@@ -23,6 +23,80 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Explicit spell target selection: autotarget, Tab-cycle, click, Escape (2026-10-02) — see `concept/spell_runtime.md`
+
+Asked directly: *"spells should autotarget nearby enemies; toggle through
+enemies with tab or click on one to target with mouse... click again or
+press esc to target noone."* The per-cast nearest-neighbour auto-target
+(`_resolve_cast_target`) already existed and stays exactly as specified,
+unchanged, as the fallback — what was missing was a persistent, player-
+chosen preference layered on top of it.
+
+**The pool.** Hostile creatures only (`CreatureInfo.is_predator or
+temperament == AGGRESSIVE` — the same vocabulary `CreatureMarker.
+steers_clear_of_players` already reads), out to `CreatureMarker.
+CAUTION_RADIUS` — read rather than restated, since that radius already
+means "a creature's behaviour changes because it has noticed you."
+
+**Three ways to set it.** Tab cycles nearest-first (fires on Tab's rising
+edge while `sprint`/Shift is also held — Tab alone still dodges, unchanged;
+Tab was already Dodge and this codebase's keybinding system has no spare
+key and no chord concept, so the cycle reads two EXISTING actions rather
+than claiming a new one). A click within the same radius the hover tooltip
+already uses (`HoverTargetFinder.HOVER_RADIUS_PX`) targets a creature
+directly, and wins over carts/buildings at that point. Clicking the current
+target again, or pressing Escape with nothing else open (a new
+`EscapeAction.CLEAR_TARGET` tier, slotting in after Settings and before the
+final open-Settings fallback), clears it.
+
+**A real exploit, found and closed before it shipped.** `SpellAtomEffects.
+apply_to_target` performs no range check of its own anywhere — every
+delivery method's range is enforced solely in `_resolve_cast_target`. A
+first-draft "always use the explicit target once set" would have been an
+unlimited-range cast: `touch`/`projectile` now reuse `nearest_touch`/
+`nearest_in_facing` against a single-element `[target.position]` array as a
+zero-new-code validity probe, missing outright (exactly like any other
+miss) rather than ever redirecting to something actually in range. `area`
+has no target to miss — it always resolves and damages whatever is
+clustered at its center — so centering it on a target nothing ever clears
+for mere distance needed its own cap, at `PROJECTILE_RANGE` from the
+caster, falling back to the ordinary in-front-of-the-caster center beyond
+that. Both are regression-tested directly (`test_player_spell_targeting.gd`).
+
+**Visual feedback.** `CreatureMarker` gets a small toggled ring
+(`set_targeted`/`is_targeted`), the same minimal shape `_hunger_pip`/
+`_sick_pip` already use.
+
+**An honest testing gap, not a new one.** World normally resolves "which
+Player is local" via `multiplayer.get_unique_id()` (~30 call sites in
+`world.gd` already do this), which needs a live `SceneTree` a bare
+`World.new()` doesn't have — confirmed directly, both `_on_world_clicked`
+and `_handle_escape` crash on exactly that line when driven the way this
+codebase's own lightweight "`_wiring.gd`" tests work (a bare `World.new()`,
+never added to the tree, specifically to dodge `_ready()`'s license-gate
+check and ~52s asset-warming cost). None of the other ~30 lookups are
+unit-tested anywhere either, for the same reason. The two NEW call sites
+split their actual decision logic into `_dispatch_creature_click`/
+`_apply_escape_action`, each taking `local_player` as an explicit
+parameter, so the interesting behaviour is still directly tested — only
+the one-line "which player is local" resolution is trusted by inspection,
+the same as its ~30 siblings.
+
+Red-first throughout. Tests: `test_spell_target_selection.gd` 15/15 (new,
+pure cycle/click math), `test_creature_marker.gd` ring tests 4/4 (new),
+`test_player_spell_targeting.gd` 32/32 (new — candidates, explicit-target
+state, Tab/Shift+Tab, the exploit-safe `_resolve_cast_target` override,
+`creature_at_click`), `test_escape_action.gd` 9/9 (6 pre-existing + 3 new),
+`test_world_spell_target_click_wiring.gd` 6/7 + 1 intentional no-assert
+crash-guard (new). Regression: `test_player_dodge.gd` 21/21,
+`test_world_house_panel_wiring.gd` 10/10, `test_player.gd`'s cast-related
+tests 19/20 (the one failure reproduces identically against pristine,
+unmodified `player.gd` via `git stash` — a pre-existing isolation artifact
+of running that suite outside the full run, not caused by this change).
+Docs: `concept/spell_runtime.md`'s "Explicit target selection" section,
+including a divergence note for the `area` range cap found while
+implementing it.
+
 ### A burst spell was a broken square, not a fireball (2026-10-02) — see `concept/spell_vfx.md`
 
 Reported live: *"The spells show no improvement in rendering and now render

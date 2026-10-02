@@ -72,7 +72,7 @@ defers this identically. `projectile`/`area` resolve instantly at cast time,
 exactly like every other instant-AOE in this game (`_perform_attack`'s own
 sweep fires immediately, cosmetic swing aside).
 
-### Explicit target selection (2026-10-05)
+### Explicit target selection (2026-10-02)
 
 Asked directly: *"spells should autotarget nearby enemies; toggle through
 enemies with tab or click on one to target with mouse... click again or
