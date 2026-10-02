@@ -38,6 +38,7 @@ const Taming = preload("res://src/gameplay/taming.gd")
 const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
 const EcologicalGrudge = preload("res://src/gameplay/ecological_grudge.gd")
 const NightMare = preload("res://src/gameplay/night_mare.gd")
+const CarrionPreference = preload("res://src/gameplay/carrion_preference.gd")
 const HitFlash = preload("res://src/rendering/hit_flash.gd")
 const BiteTell = preload("res://src/rendering/bite_tell.gd")
 const Discovery = preload("res://src/gameplay/discovery.gd")
@@ -2312,6 +2313,7 @@ func _decision_context(partner: Node) -> Dictionary:
 	if partner != null:
 		stimuli = _cached_stimuli.duplicate()
 		stimuli.append(_stimulus_for(partner, Ethogram.MATE))
+	stimuli = _carrion_preference_filter(stimuli)
 	return {
 		"position": position,
 		"species": info.species,
@@ -2330,6 +2332,33 @@ func _decision_context(partner: Node) -> Dictionary:
 		"waits_for_its_moment": _waits_for_its_moment(),
 		"stimuli": stimuli,
 	}
+
+
+## A Nachzehrer (docs/concept/monsters.md entry 11, CarrionPreference) would
+## rather eat than fight: with any CARRION stimulus present this tick,
+## every huntable-target channel (PLAYER/FLESH/PREDATOR) is dropped from
+## what it perceives, so the ordinary "hungry -> seek food" wiring has only
+## the corpse to choose from -- never in contention with a live target. A
+## no-op for every other species, and a no-op on a tick with no carrion
+## present, so an ordinary predator's own stimuli (and a context built
+## before this existed) are completely unaffected.
+func _carrion_preference_filter(stimuli: Array) -> Array:
+	if info == null or not CarrionPreference.prefers_carrion(info.species):
+		return stimuli
+	var has_carrion := false
+	for stimulus in stimuli:
+		if stimulus.get("features", {}).has(Ethogram.CARRION):
+			has_carrion = true
+			break
+	if not has_carrion:
+		return stimuli
+	var filtered: Array = []
+	for stimulus in stimuli:
+		var features: Dictionary = stimulus.get("features", {})
+		if features.has(Ethogram.PLAYER) or features.has(Ethogram.FLESH) or features.has(Ethogram.PREDATOR):
+			continue
+		filtered.append(stimulus)
+	return filtered
 
 
 ## A grudge-bearer's aggro, read off the live ecosystem simulation

@@ -85,3 +85,64 @@ func test_it_is_rarer_than_the_biomes_ordinary_predators():
 
 func test_it_has_its_own_bite_rather_than_the_fallback():
 	assert_true(SpeciesBite.has_profile(NACHZEHRER), "a named monster with a generic bite is a reskin")
+
+
+# -- it would rather eat than fight (CarrionPreference) ----------------------
+#
+# Every predator already notices carrion (CreatureMarker._scan_carrion_
+# stimuli, docs/concept/carrion.md's opportunistic-scavenging gap) -- a
+# Nachzehrer is the first one for which it outranks a live target. Driven
+# directly against a bare CreatureMarker's own private filter, the same
+# convention test_curupira.gd's _perceives_threats tests already use
+# (CreatureBehavior.new()._perceives_threats(context)), rather than
+# standing up a full scene + chunk manager for a pure stimulus transform.
+
+const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+func _stimulus(channel: String) -> Dictionary:
+	return {"position": Vector2.ZERO, "features": {channel: 1.0}, "node": null}
+
+
+func test_a_nachzehrer_drops_huntable_stimuli_when_carrion_is_present():
+	var marker := CreatureMarker.new()
+	add_child_autofree(marker)
+	marker.info = CreatureInfo.new(NACHZEHRER, 1)
+	var stimuli := [_stimulus(Ethogram.PLAYER), _stimulus(Ethogram.CARRION)]
+
+	var filtered: Array = marker._carrion_preference_filter(stimuli)
+
+	assert_eq(filtered.size(), 1, "only the carrion stimulus should remain")
+	assert_true(filtered[0]["features"].has(Ethogram.CARRION))
+
+
+func test_a_nachzehrer_with_no_carrion_present_is_unaffected():
+	var marker := CreatureMarker.new()
+	add_child_autofree(marker)
+	marker.info = CreatureInfo.new(NACHZEHRER, 1)
+	var stimuli := [_stimulus(Ethogram.PLAYER), _stimulus(Ethogram.FLESH)]
+
+	var filtered: Array = marker._carrion_preference_filter(stimuli)
+
+	assert_eq(filtered, stimuli, "nothing to prefer carrion over means nothing changes")
+
+
+## Nothing about any OTHER species changes -- an ordinary predator still
+## hunts right past a corpse, exactly as it always has.
+func test_an_ordinary_predator_is_unaffected_even_with_carrion_present():
+	var marker := CreatureMarker.new()
+	add_child_autofree(marker)
+	marker.info = CreatureInfo.new(REFERENCE, 1)
+	var stimuli := [_stimulus(Ethogram.PLAYER), _stimulus(Ethogram.CARRION)]
+
+	var filtered: Array = marker._carrion_preference_filter(stimuli)
+
+	assert_eq(filtered, stimuli, "an ordinary predator's stimuli must be untouched")
+
+
+func test_the_marker_really_uses_the_shared_rule():
+	var source := FileAccess.get_file_as_string("res://src/rendering/creature_marker.gd")
+	assert_true(
+		source.contains("CarrionPreference.prefers_carrion"), "through the shared rule, not a hardcoded species check"
+	)
