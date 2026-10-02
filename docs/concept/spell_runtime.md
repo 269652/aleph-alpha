@@ -72,6 +72,127 @@ defers this identically. `projectile`/`area` resolve instantly at cast time,
 exactly like every other instant-AOE in this game (`_perform_attack`'s own
 sweep fires immediately, cosmetic swing aside).
 
+### Explicit target selection (2026-10-05)
+
+Asked directly: *"spells should autotarget nearby enemies; toggle through
+enemies with tab or click on one to target with mouse... click again or
+press esc to target noone."*
+
+The per-cast resolution above already auto-targets the nearest thing in
+range every time a spell is cast — that half was already true, and stays
+exactly as specified, unchanged, as the fallback. What was missing is a
+**persistent, player-chosen preference** layered on top of it: a way to
+pick WHICH of several nearby hostiles a cast should prefer, so a multi-
+enemy fight is not entirely at the mercy of "whichever one happens to be
+nearest/most-in-front *this instant*."
+
+**The pool: hostile creatures only, out to the same radius the game
+already uses for "this creature is aware of you."** `CreatureInfo.
+is_predator or temperament == AGGRESSIVE` — the exact vocabulary
+`CreatureMarker.steers_clear_of_players` already reads — within
+`CreatureMarker.CAUTION_RADIUS` (160px), read rather than restated: that
+radius already means "a creature's behaviour changes because it has
+noticed you," which is the right-shaped answer to "how far out can I
+select something" and not a new number invented for this feature alone.
+A calm grazer is never a candidate — "enemies" is the word asked for, and
+nothing about healing or utility atoms needs a hostile target anyway
+(`self`-delivery is never affected by any of this — see below).
+
+**Three ways to set it, one rule for what "set" means.** `Player.
+_explicit_target` holds a creature reference or null:
+
+- **Tab cycles.** Candidates ordered by distance, nearest first; each press
+  advances to the next, wrapping back to the nearest after the last. If
+  the current target has died or left the pool since the last press, the
+  cycle restarts at the nearest rather than advancing from a position that
+  no longer exists in the list — jumping to "whoever used to be after it"
+  would be arbitrary once "it" is gone.
+- **Click sets it directly.** A click within `HoverTargetFinder.
+  HOVER_RADIUS_PX` of a hostile creature targets it — the same click
+  tolerance the hover tooltip already uses for every other clickable thing
+  in the world, not a second tuned radius.
+- **Click the current target again, or press Escape, clears it** back to
+  null — at which point casting falls back to the ordinary per-cast
+  nearest-resolution above, exactly as if nothing in this section existed.
+
+**Once set, a cast commits to it rather than silently overriding it.**
+`_resolve_cast_target` checks `_explicit_target` FIRST, before its existing
+nearest-neighbour scan, for `touch`/`projectile`/`area` (never `self` — a
+self-delivered atom is never redirected at an enemy, selected or not). A
+live, valid explicit target is used even if something else is technically
+closer **or even out of this cast's own range** — the cast whiffs at the
+resolved aim point exactly like any other miss (see "A cast is always
+visible" above) rather than quietly redirecting to whatever IS in range.
+Choosing a target is a commitment the game honours, not a suggestion it
+second-guesses every cast. `area` centers its burst on the explicit
+target's own position when one is set (still splashing onto whoever else
+is in the radius around it), rather than the generic point-in-front-of-
+the-caster it falls back to with nothing selected.
+
+**`area`'s own recentre is capped at `SpellTargeting.PROJECTILE_RANGE` from
+the caster, though — a divergence from the paragraph above, found during
+implementation rather than in the original ask.** `SpellAtomEffects.
+apply_to_target` performs no range check of its own anywhere — every
+delivery method's range is enforced here, in `_resolve_cast_target`, and
+nowhere else. `touch`/`projectile` are safe at any distance because a
+target out of their reach simply misses, per the paragraph above. `area`
+has no target to miss: it always resolves, and always damages whatever is
+clustered at its center, regardless of where the caster is standing. Since
+an explicit target is (correctly, per "cleared automatically only on
+death/invalidity, never on distance" below) never cleared for merely
+walking away, an uncapped recentre would let a player select a hostile
+once, walk anywhere else on the map, and still land a full-damage burst
+back at wherever it was last standing — unlimited-range artillery, not a
+spell. Beyond `PROJECTILE_RANGE` the burst falls back to the same generic
+point-in-front-of-the-caster center used with nothing selected, which is
+`area`'s closest equivalent of the whiff `touch`/`projectile` already get.
+
+**Cleared automatically only on death/invalidity, never on distance.**
+Every read re-checks `is_instance_valid`; a target that died or despawned
+reads back as unset with no separate cleanup step. Walking away from a
+selected target does NOT clear it (no "leash range" exists anywhere in
+this codebase to hang that on, and inventing one for this alone would be
+a second, uncoordinated distance rule) — it simply starts missing once it
+is out of the cast's own range, which already reads correctly as "you are
+no longer in reach of what you locked onto."
+
+**Tab collides with Dodge, so the cycle rides Shift+Tab instead.**
+`Keybindings.ACTIONS` has no free key at all — every letter A-Z and every
+practical key is already spoken for (`dodge`'s own doc comment names this
+directly), and Tab specifically is Dodge, placed there for exactly the
+same "needs to be reachable without leaving WASD" reason a tab-cycle key
+would also want. Decided directly, asked rather than assumed: Dodge keeps
+Tab unchanged; the cycle fires when Tab's rising edge arrives while
+`sprint` (Shift, held) is also active — reusing both of those EXISTING,
+already-rebindable actions rather than hardcoding the physical keys, so a
+player who rebinds either one keeps getting a working chord wherever they
+put it. A bare Tab press (sprint not held) still dodges exactly as before;
+nothing about Dodge's own behaviour changes.
+
+**No new verb joins `Keybindings.ACTIONS`.** Click and Escape are read
+directly (`World._on_world_clicked`/`EscapeAction`, both already the
+established dispatch points for exactly this kind of input — see below);
+the cycle is a modifier read on the existing `dodge` action, not a new
+bindable action of its own, because this project's keybinding system
+models one physical key per action and has no chord concept to extend.
+
+**Escape joins the existing priority ladder, not a parallel path.**
+`EscapeAction.action_for` already orders "close whatever is in my way,
+innermost first" (console, then any open window, then the settings
+overlay itself, only opening settings with a clear screen) — a new
+`CLEAR_TARGET` tier slots in after settings and before the final
+fallback: with nothing else open, Escape clears a live explicit target if
+one exists, and only opens Settings once there is truly nothing left to
+close. Pressing Escape with no target selected is unchanged.
+
+**Visual feedback: a toggled indicator, not a new animation.** `Creature
+Marker` gets the same minimal shape `_hunger_pip`/`_sick_pip` already use
+— a small, positioned, visibility-toggled marker — shown only on whichever
+creature currently holds the local player's `_explicit_target`. Nothing
+about targeting is legible without SOME on-screen answer to "what did I
+just select," and a toggled pip is the cheapest honest one already proven
+in this file.
+
 ### Trigger: a new input action, not the hotbar
 
 `HotbarAction._ACTION_BY_KIND` decides EQUIP/USE/PLACE purely from an

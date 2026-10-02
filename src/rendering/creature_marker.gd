@@ -111,6 +111,25 @@ const SICK_PIP_SIZE := 3.0
 ## `modulate`, a duller, sicklier cast of the sprite's normal color.
 const SICK_MODULATE_COLOR := Color(0.72, 0.8, 0.55)
 const HEALTHY_MODULATE_COLOR := Color.WHITE
+
+## The explicit spell-target indicator (docs/concept/spell_runtime.md,
+## "Explicit target selection") -- a ground-level ring, not another pip
+## stacked onto the health-bar cluster above the sprite: it has to frame
+## the whole creature to read as "this one is selected" rather than as one
+## more taming readout. A bright, unambiguous colour no existing readout
+## uses (trust is blue, hunger amber, sick olive).
+const TARGET_RING_COLOR := Color(0.95, 0.25, 0.95)
+const TARGET_RING_WIDTH := 1.5
+const TARGET_RING_RADIUS := 10.0
+const TARGET_RING_SEGMENTS := 16
+## How far below the marker's own origin the ring centres -- creatures are
+## anchored at their feet (see AnimalAnatomy), so a ring at `position`
+## itself would sit on the ground at the FRONT of the feet, not around
+## them. Deliberately a flat guess, not species-derived: unlike the health
+## bar (which must clear a serpent's own body), a ring drawn flat on the
+## ground reads fine at a small, constant offset for every species already
+## in the roster.
+const TARGET_RING_OFFSET_Y := -6.0
 const HEALTH_BAR_HEIGHT := 2.0
 const HEALTH_BAR_OFFSET_Y := -12.0
 const HEALTH_BAR_BG_COLOR := Color(0.1, 0.1, 0.1, 0.85)
@@ -454,6 +473,10 @@ var _trust_bar: ColorRect
 var _hunger_pip: ColorRect
 ## Third readout beside hunger, tamed/kept animals only -- see disease.md.
 var _sick_pip: ColorRect
+## Whether this creature currently holds the local player's explicit spell
+## target (see set_targeted). Not tamed/wild-gated like the pips above --
+## any creature, predator or prey, can be the thing a spell is aimed at.
+var _target_ring: Line2D
 ## The ground-contact shadow CreatureRenderer adds as a child (see
 ## set_shadow) -- null until it does, since bare test markers never get one.
 var _shadow: Node2D = null
@@ -626,6 +649,14 @@ func _ready() -> void:
 	_sick_pip.visible = false
 	add_child(_sick_pip)
 
+	_target_ring = Line2D.new()
+	_target_ring.points = _ring_points(TARGET_RING_RADIUS, TARGET_RING_SEGMENTS)
+	_target_ring.width = TARGET_RING_WIDTH
+	_target_ring.default_color = TARGET_RING_COLOR
+	_target_ring.top_level = true
+	_target_ring.visible = false
+	add_child(_target_ring)
+
 	_health_bar_fill = ColorRect.new()
 	_health_bar_fill.color = HEALTH_BAR_FILL_COLOR
 	_health_bar_fill.size = Vector2(HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT)
@@ -765,6 +796,7 @@ func _sync_grounded_children() -> void:
 			global_position + trust_offset + Vector2(-SICK_PIP_SIZE - 2.0, 0.0)
 		)
 		_update_taming_readouts()
+	_target_ring.global_position = global_position + Vector2(0, TARGET_RING_OFFSET_Y)
 	if _shadow != null:
 		# _shadow_offset was captured in the marker's own UNSCALED texture
 		# pixel space, but the marker itself is drawn at `scale` (species
@@ -1115,6 +1147,31 @@ func _update_taming_readouts() -> void:
 	# hunger already uses -- not shown on every animal in the world, only one
 	# already "in the loop" with the player.
 	_sick_pip.visible = in_the_loop and disease_state == DiseaseModel.State.INFECTED
+
+
+## Whether this creature currently holds the local player's explicit spell
+## target -- set/cleared by whoever owns that selection (Player's Tab-cycle,
+## or World's click handler), never decided by the creature itself. Any
+## creature can be targeted, wild or tame, predator or prey -- unlike the
+## taming readouts above, this is not gated on being "in the loop" with the
+## player at all.
+func set_targeted(value: bool) -> void:
+	_target_ring.visible = value
+
+
+func is_targeted() -> bool:
+	return _target_ring.visible
+
+
+## Points for a flat ring of `radius` around the origin, `segments` long --
+## pure geometry, no state, so _ready() can build it once rather than
+## redrawing a Line2D's points every frame.
+static func _ring_points(radius: float, segments: int) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	for i in segments + 1:
+		var angle := TAU * float(i) / float(segments)
+		points.append(Vector2(cos(angle), sin(angle)) * radius)
+	return points
 
 
 ## How far a tamed animal told to STAY will drift from the spot it was left,

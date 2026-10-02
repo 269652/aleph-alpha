@@ -4903,3 +4903,43 @@ func _let_the_jaws_close(biter) -> void:
 	while biter.is_winding_up() and guard < 600:
 		biter._process(1.0 / 60.0)
 		guard += 1
+
+
+# -- the explicit spell-target indicator (docs/concept/spell_runtime.md,
+# "Explicit target selection") -- a toggled ring, the same minimal shape
+# _hunger_pip/_sick_pip already establish, shown only on whichever creature
+# currently holds the local player's explicit spell target.
+
+func test_a_creature_starts_out_not_targeted():
+	var wolf := _catchable("wolf")
+	assert_false(wolf.is_targeted())
+	assert_false(wolf._target_ring.visible)
+
+
+func test_set_targeted_true_shows_the_ring():
+	var wolf := _catchable("wolf")
+	wolf.set_targeted(true)
+	assert_true(wolf.is_targeted())
+	assert_true(wolf._target_ring.visible)
+
+
+func test_set_targeted_false_hides_the_ring_again():
+	var wolf := _catchable("wolf")
+	wolf.set_targeted(true)
+	wolf.set_targeted(false)
+	assert_false(wolf.is_targeted())
+	assert_false(wolf._target_ring.visible)
+
+
+## top_level (see the health bar's own doc comment for why): positioned by
+## _sync_grounded_children each frame rather than inheriting the marker's
+## transform, so it never tilts with a turning body.
+func test_the_ring_tracks_the_creatures_position():
+	var wolf := _catchable("wolf")
+	wolf.set_targeted(true)
+	wolf.position = Vector2(40, 25)
+	wolf._sync_grounded_children()
+	assert_eq(
+		wolf._target_ring.global_position,
+		wolf.global_position + Vector2(0, CreatureMarker.TARGET_RING_OFFSET_Y)
+	)
