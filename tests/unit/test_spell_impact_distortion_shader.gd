@@ -147,6 +147,30 @@ func test_max_displacement_is_a_small_but_real_fraction_of_the_screen():
 
 # -- the shader source itself ------------------------------------------------
 
+## Reported live: "spells show no improvement in rendering and now render a
+## visible square which looks broken." Root cause: the fragment function
+## wrote `COLOR = texture(screen_texture, SCREEN_UV + offset)` and NEVER
+## read the sprite's own `TEXTURE`/`UV` at all -- so every burst-family cast
+## (fire_damage, shock_damage, the mage's own two starting attacks among
+## them) painted an opaque, barely-warped copy of the background across the
+## effect sprite's ENTIRE rectangular quad, full stop, regardless of the
+## real art's own transparent corners. A canvas_item fragment function that
+## never samples TEXTURE owns the whole pixel and draws nothing of the
+## sprite it is attached to -- the square IS the sprite's own bounding
+## rect, opaque, with no burst shape and no transparency surviving in it.
+func test_shader_captures_its_own_color_before_overwriting_it():
+	# COLOR arrives already equal to texture(TEXTURE, UV) * modulate -- this
+	# codebase's own established convention (see WindSway/TreeMorphShader's
+	# matching doc comments) is to READ it once rather than re-sample
+	# TEXTURE a second time. Named `original_color` so the fix is
+	# unambiguous and greppable, not an accidental side effect of some
+	# other line.
+	assert_string_contains(
+		SpellImpactDistortionShader.SHADER_CODE, "original_color = COLOR",
+		"the shader must capture the sprite's own art before overwriting COLOR"
+	)
+
+
 func test_shader_reads_the_screen_texture():
 	assert_string_contains(SpellImpactDistortionShader.SHADER_CODE, "hint_screen_texture")
 

@@ -23,6 +23,58 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### A burst spell was a broken square, not a fireball (2026-10-02) — see `concept/spell_vfx.md`
+
+Reported live: *"The spells show no improvement in rendering and now render
+a visible square which looks broken."*
+
+**Root cause, confirmed rather than guessed.** `SpellImpactDistortionShader`'s
+fragment function wrote `COLOR = texture(screen_texture, SCREEN_UV + offset)`
+and never read the sprite's own `TEXTURE`/`COLOR`. A canvas_item fragment
+function that never samples its own texture draws nothing of the sprite it
+is attached to — so every burst-family cast (`fire_damage`, `shock_damage`
+among them: Fire Bolt and Spark, the mage's own two starting attacks)
+painted an opaque, barely-warped copy of the background across the effect
+sprite's entire rectangular quad. No burst shape, no transparency, every
+time — which is exactly "no improvement" (the real art never showed) and
+exactly "a visible square" (the sprite's own bounding rect, solid, with
+nothing cut out of it).
+
+**Confirmed photographically, not just read off the code.** This codebase's
+own "code tracing alone is not enough evidence" precedent
+(`tools/probe_render_sparkle.gd`) applies in full to shaders: a fragment
+shader cannot be rendered under `--headless` at all, so none of the
+existing tests — the CPU-mirrored math, the keyword-matching string checks
+— could ever have caught this. Built `tools/probe_spell_distortion_render.gd`
+and ran it under `xvfb-run -a <godot> --rendering-driver opengl3` (a real
+software-GL render, Mesa llvmpipe, over a checkerboard test background so
+"shows the background" and "shows a flat colour" would look visibly
+different). The broken shader's own render: the fire_damage burst
+completely invisible, replaced edge to edge by the checkerboard. Confirmed
+by temporarily stashing the fix and re-rendering, not by inference.
+
+**Fixed** by capturing `COLOR` (already `texture(TEXTURE, UV) * modulate`,
+the canvas_item default — this codebase's own established convention, see
+`wind_sway.gd`/`tree_morph_shader.gd`'s matching doc comments) before
+overwriting it, then compositing: `mix(warped_background, original_color,
+original_color.a)`, forced fully opaque on output since the shader already
+manually re-composites the real background into `COLOR` itself. Re-rendered
+after the fix: the burst shows correctly, the checkerboard around it
+intact and only barely perturbed by the warp, as designed.
+`SpellGlowShader` (the OTHER shader this same slice shipped) was checked
+against the identical failure mode and does not have it — its halo is a
+bare `MeshInstance2D` drawing pure procedural colour with no underlying
+sprite content to discard in the first place.
+
+Red-first: `test_shader_captures_its_own_color_before_overwriting_it`
+added to `test_spell_impact_distortion_shader.gd`, confirmed failing
+against the shipped shader for the exact right reason before the fix
+landed. Tests: `test_spell_impact_distortion_shader.gd` 22/22, plus
+`test_spell_glow_shader.gd`/`test_spell_effect_marker.gd`/
+`test_illustrated_spell_effect_sprite.gd` re-run alongside it — 72/72,
+zero regressions. Docs: `spell_vfx.md`'s "Mechanism" and "Status" sections
+for `SpellImpactDistortionShader` updated with the full story.
+
 ### Way more enemies: steady combat from the get go (2026-09-27) — see `concept/ecosystem_dynamics.md`
 
 Asked directly: *"We need way more enemies so that combat action is steady

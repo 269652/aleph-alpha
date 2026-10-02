@@ -116,6 +116,15 @@ uniform float progress : hint_range(0.0, 1.0) = 0.0;
 uniform float peak_fraction : hint_range(0.0, 1.0) = 0.2;
 
 void fragment() {
+	// COLOR already equals texture(TEXTURE, UV) * modulate (the canvas_item
+	// default) -- captured BEFORE it is overwritten below, the same
+	// convention WindSway/TreeMorphShader already establish, and the one
+	// this shader shipped without: a fragment() that never reads it owns
+	// the whole pixel and draws nothing of the sprite's own art, which is
+	// exactly what made every burst cast paint an opaque, undistinguished
+	// square (reported live) instead of the burst shape it was drawn as.
+	vec4 original_color = COLOR;
+
 	// Same recentring SpellGlowShader's own shader uses: UV is this quad's
 	// local [0,1], recentred to [-1,1] so distance from the middle maps to
 	// a true circle (the quad itself must be square).
@@ -136,6 +145,16 @@ void fragment() {
 	float strength = radial * temporal;
 	vec2 direction = length(centered) > 0.0001 ? normalize(centered) : vec2(0.0);
 	vec2 offset = direction * max_displacement * strength;
-	COLOR = texture(screen_texture, SCREEN_UV + offset);
+	vec4 warped_background = texture(screen_texture, SCREEN_UV + offset);
+
+	// Composited, not replaced: where the sprite's own art is opaque (the
+	// burst shape itself), show it unchanged; where it is transparent (the
+	// canvas around that shape), show the warped background instead of a
+	// flat colour, so the effect reads as heat bending the world around a
+	// visible burst rather than a solid square sitting on top of it.
+	// Forced fully opaque on output -- this shader already manually
+	// composites the real background into COLOR itself, so the engine's own
+	// post-shader alpha blend must not be given a reason to blend it again.
+	COLOR = vec4(mix(warped_background.rgb, original_color.rgb, original_color.a), 1.0);
 }
 """ % [EDGE_SOFTNESS_FRACTION, MAX_DISPLACEMENT_UV]

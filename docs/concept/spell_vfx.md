@@ -138,6 +138,39 @@ second, independent atom list. A slow ring settling into place or a cloud
 drifting onto a target should not visibly warp the world around it; a
 fireball or a shock bolt releasing should.
 
+**A real, shipped bug, found by a live report and fixed 2026-10-02:
+"spells show no improvement in rendering and now render a visible square
+which looks broken."** The fragment function wrote `COLOR = texture(
+screen_texture, SCREEN_UV + offset)` and never read the sprite's own
+`TEXTURE`/`COLOR` at all. A canvas_item fragment function that never
+samples its own texture owns the whole pixel and draws nothing of the
+sprite it is attached to — every burst-family cast (`fire_damage`,
+`shock_damage` among them — Fire Bolt and Spark, the mage's own two
+starting attacks) painted an opaque, barely-warped copy of the background
+across the effect sprite's entire rectangular quad, full stop, with no
+burst shape and no transparency surviving in it. Confirmed photographically
+before fixing (`tools/probe_spell_distortion_render.gd`, a real-GPU render
+via `xvfb-run ... --rendering-driver opengl3`): the burst shape was
+completely invisible, replaced edge to edge by the checkerboard test
+background. Fixed by capturing `COLOR` (already `texture(TEXTURE, UV) *
+modulate`, the canvas_item default — this codebase's own established
+convention, see `wind_sway.gd`/`tree_morph_shader.gd`'s matching doc
+comments) before overwriting it, then compositing —
+`mix(warped_background, original_color, original_color.a)`, forced fully
+opaque on output since the shader already manually re-composites the real
+background itself. Re-rendered after the fix: the burst shows correctly,
+the checkerboard around it is intact (barely perturbed by the warp, as
+designed). The gap this slipped through: every existing test either
+checked the CPU-mirrored math or string-matched keywords in the GLSL
+source — nothing checked that the shader preserves its own sprite's
+content, and a fragment shader cannot be rendered headless, so the defect
+was invisible to every automated check until someone actually looked at a
+live cast. `test_shader_captures_its_own_color_before_overwriting_it`
+closes that gap for this shader; `SpellGlowShader` was checked against the
+same failure mode and does not have it — it never discards an underlying
+sprite in the first place, since its `MeshInstance2D` halo draws pure
+procedural colour with nothing beneath it to preserve.
+
 ### `IllustratedSpellEffectSprite` — the bridge that shipped
 
 Not `IllustratedItemArt`'s per-subject registry/resolver/loader lattice —
@@ -182,9 +215,12 @@ frame-timing before real art existed to play back. It now can, and does.
 - ✅ **The glow halo is real and tested** (2026-09-24) — `SpellGlowShader`,
   additive, per-atom colour, timed off the marker's own beat.
   `test_spell_glow_shader.gd`.
-- ✅ **The impact distortion is real and tested** (2026-09-24) —
+- ✅ **The impact distortion is real and tested** (2026-09-24, a real
+  content-discarding bug fixed 2026-10-02 — see "Mechanism" above) —
   `SpellImpactDistortionShader`, gated to the seven burst-family atoms,
-  screen-space radial warp. `test_spell_impact_distortion_shader.gd`.
+  screen-space radial warp, composited with the sprite's own art rather
+  than replacing it. `test_spell_impact_distortion_shader.gd`, verified
+  photographically via `tools/probe_spell_distortion_render.gd`.
 - ✅ **Real illustrated art exists for every atom, and both shaders play on
   top of it** (2026-09-24/26) — `IllustratedSpellEffectSprite` (family-sheet
   delivery, see "Mechanism" above), `SpellEffectMarker.play()` wired to draw
