@@ -911,6 +911,60 @@ func test_a_bipeds_feet_stand_closer_together_than_a_quadrupeds():
 		)
 
 
+## Caught by a real render (tools/probe_biped_species.gd), not by any
+## geometry test above: the two legs' hip offsets were a multiple of
+## thickness, not of body width, so they sat close enough to touch and read
+## as one fused pillar instead of two legs -- the span check above still
+## passed, since a fused column is just as narrow as two separated ones.
+func _opaque_run_count_in_row(image: Image, y: int) -> int:
+	var runs := 0
+	var was_opaque := false
+	for x in image.get_width():
+		var opaque := image.get_pixel(x, y).a > 0.0
+		if opaque and not was_opaque:
+			runs += 1
+		was_opaque = opaque
+	return runs
+
+
+func test_a_bipeds_two_legs_are_visually_distinct_not_a_fused_pillar():
+	var shaft_row := ProceduralAnimalSprite.HEIGHT - 5
+	for species in BIPED_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(
+			_opaque_run_count_in_row(image, shaft_row), 2,
+			"%s's legs should read as two separate columns at row %d, not one fused pillar" % [species, shaft_row]
+		)
+
+
+## Caught the same way: _paint_arms was called from inside _paint_legs,
+## BEFORE _paint_body painted the torso on top -- every "has arms" claim
+## would have to look past the body overwriting them. Goblin/nachzehrer
+## have no tail (AnimalAnatomy.TAIL_NONE) and face the body's own +x
+## "front" (_HEAD_SIDE), so a whole column strictly behind the torso's -x
+## edge can only ever be painted by an arm reaching back past it -- nothing
+## else in the pipeline ever reaches there.
+func test_a_bipeds_arm_is_actually_visible_past_the_torso_not_painted_over():
+	for species in BIPED_SPECIES:
+		var profile := AnimalAnatomy.profile_for(species)
+		var body_half_x: float = profile.body_length * ProceduralAnimalSprite.WIDTH * 0.5
+		var body_center_x: float = profile.get("body_center_x", 0.46) * ProceduralAnimalSprite.WIDTH
+		var behind_the_torso := int(body_center_x - body_half_x) - 1
+		var image: Image = generator.generate_image(species, 1)
+		var found := false
+		for y in image.get_height():
+			if image.get_pixel(behind_the_torso, y).a > 0.0:
+				found = true
+				break
+		assert_true(
+			found,
+			(
+				"%s's arm should reach past the torso's back edge (x=%d) somewhere, not be painted over by the body"
+				% [species, behind_the_torso]
+			)
+		)
+
+
 ## The walking silhouette must still be a fully connected, outlined animal --
 ## a bent leg must not tear a hole in the body or leave the outline broken.
 func test_a_mid_stride_horse_is_still_a_solid_outlined_silhouette():

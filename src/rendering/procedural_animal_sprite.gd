@@ -432,6 +432,13 @@ func _paint_animal(image: Image, profile: Dictionary, coat: Color, gait_phase: f
 	if profile.has_mane:
 		_paint_mane(image, coat, neck_start, neck_end, profile.neck_thickness * h)
 
+	# Arms LAST, after the body AND the neck/head -- painted any earlier,
+	# either one painted straight over them. A low-carried neck (NECK_LOW,
+	# e.g. Nachzehrer) reaches forward AND down from its attachment point,
+	# directly through where the front arm reaches too (see _paint_arms).
+	if profile.get("biped", false):
+		_paint_arms(image, profile, coat, body_center, body_half)
+
 
 ## Which way the neck points: grazers carry it up, predators level, rooters
 ## low with the head down near the ground.
@@ -552,16 +559,21 @@ func _paint_legs(
 		# into a front/back quadruped stance -- the roster's first upright
 		# silhouette (see AnimalAnatomy's own "biped" field doc comment).
 		# Reuses the exact same articulated-leg primitive every quadruped
-		# leg already does, just the one pair instead of two.
+		# leg already does, just the one pair instead of two. Offset is a
+		# fraction of body_half.x (hip-width), not of leg thickness: a
+		# thickness-scaled offset put the two legs close enough to touch,
+		# which read as one fused pillar instead of two legs in a real
+		# render (tools/probe_biped_species.gd) despite every geometry test
+		# passing -- see test_a_bipeds_two_legs_are_visually_distinct_not_a_
+		# fused_pillar.
 		for pair in [
-			{"offset": -thickness * 0.7, "color": coat.darkened(_FAR_LEG_DARKEN), "side": "left"},
-			{"offset": thickness * 0.7, "color": coat, "side": "right"},
+			{"offset": -body_half.x * 0.55, "color": coat.darkened(_FAR_LEG_DARKEN), "side": "left"},
+			{"offset": body_half.x * 0.55, "color": coat, "side": "right"},
 		]:
 			_paint_articulated_leg(
 				image, Vector2(body_center.x + pair.offset, top), leg_length, thickness, pair.color,
 				"front_%s" % pair.side, gait_phase, hoof_color
 			)
-		_paint_arms(image, profile, coat, body_center, body_half)
 		return
 
 	var shoulder_x := body_center.x + body_half.x * 0.58
@@ -585,18 +597,37 @@ func _paint_legs(
 
 
 ## Simple static arms for a biped profile (see AnimalAnatomy's "biped"
-## field) -- one straight limb per side, hanging from the shoulder, reusing
-## _paint_limb exactly as the neck/antlers/horns/tusks above already do. No
-## elbow joint, no gait pose, and no held-item slot yet -- a silhouette cue
-## that reads as "has arms", not a combat-art system (see docs/concept/
-## monsters.md's own honest status on this gap).
+## field) -- one straight limb per side, reusing _paint_limb exactly as the
+## neck/antlers/horns/tusks above already do. No elbow joint, no gait pose,
+## and no held-item slot yet -- a silhouette cue that reads as "has arms",
+## not a combat-art system (see docs/concept/monsters.md's own honest
+## status on this gap).
+##
+## Called from _paint_animal LAST -- after _paint_body AND the neck/head --
+## not from _paint_legs before any of them: painted earlier, the torso's
+## own superellipse (and, for a low-carried neck like Nachzehrer's, the
+## neck/head reaching forward and down through the same area) painted
+## straight over the whole arm. Every "has arms" geometry test still
+## passed either way, since none of them rendered the actual composited
+## image (caught by tools/probe_biped_species.gd; see
+## test_a_bipeds_arm_is_actually_visible_past_the_torso_not_painted_over).
+## The hand also reaches to 1.2x body_half.x, past the torso's own widest
+## point, so the arm still reads as a limb where it crosses the body --
+## darkened too (see arm_color below), or the stretch crossing the torso
+## was the exact same colour as the torso itself and had no visible edge.
 func _paint_arms(image: Image, profile: Dictionary, coat: Color, body_center: Vector2, body_half: Vector2) -> void:
 	var thickness: float = maxf(profile.leg_thickness * float(HEIGHT) * 0.8, 1.0)
 	var shoulder_y := body_center.y - body_half.y * 0.3
+	# Both arms darkened, not just the far one the way legs do it (far/near
+	# depth doesn't apply the same way here: both arms sit at roughly the
+	# same depth against the torso) -- plain `coat` left the near arm the
+	# exact same colour as the torso it crosses, so it had no visible edge
+	# and vanished into the body's own silhouette despite being painted.
+	var arm_color := coat.darkened(0.15)
 	for side in [-1.0, 1.0]:
 		var shoulder := Vector2(body_center.x + body_half.x * 0.5 * side, shoulder_y)
-		var hand := shoulder + Vector2(body_half.x * 0.15 * side, body_half.y * 1.3)
-		_paint_limb(image, shoulder, hand, thickness, coat.darkened(0.15) if side < 0.0 else coat)
+		var hand := Vector2(body_center.x + body_half.x * 1.2 * side, body_center.y + body_half.y * 0.6)
+		_paint_limb(image, shoulder, hand, thickness, arm_color)
 
 
 ## One leg as two rotating segments (hip->knee->foot) instead of a straight
