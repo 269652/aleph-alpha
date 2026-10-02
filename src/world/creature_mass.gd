@@ -80,6 +80,12 @@ const _REAL_MASS_KG := {
 	# Light enough that its derived bite is the least of anything that
 	# hunts -- a first draft at 14 kg out-bit a jackal, which a test caught.
 	"alp": 7.0,
+	# Goblin (docs/concept/monsters.md, entry 10): squat but solidly built,
+	# a small adult human's weight.
+	"goblin": 45.0,
+	# Nachzehrer (entry 11): gaunt, but a roughly human-sized frame under
+	# the rot.
+	"nachzehrer": 60.0,
 	"reindeer": 150.0,
 	"lion": 180.0,
 	"tapir": 250.0,

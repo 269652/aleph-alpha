@@ -102,10 +102,16 @@ const HERBIVORE_SPECIES_POOL_BY_BIOME := {
 	"grassland": [
 		"deer", "deer", "deer", "boar", "horse", "mouse", "mouse", "nonvenomous_snake", "sheep", "alpaca",
 		"boar", "boar", "boar", "boar", "boar", "boar", "boar", "boar",
+		# Goblin (docs/concept/monsters.md, entry 10): "way more enemies...
+		# you should not have to walk far", answered the same lever boar
+		# already is -- more herbivore-role fighters, not a predator-density
+		# change (see ecosystem_dynamics.md's spawn safe-zone section).
+		"goblin", "goblin", "goblin", "goblin",
 	],
 	"forest": [
 		"boar", "boar", "boar", "mouse", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel", "squirrel",
 		"boar", "boar", "boar", "boar",
+		"goblin", "goblin", "goblin",
 	],
 	"desert": ["camel", "camel", "camel", "horse", "mouse", "nonvenomous_snake"],
 	"tundra": ["reindeer", "reindeer", "reindeer", "mouse", "deer"],
@@ -155,8 +161,12 @@ const MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION := 0.5
 ## "Forest gets its own named predator"), and reversing that would be a
 ## design decision, not a placeholder cleanup.
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["jackal", "jackal", "jackal", "lynx", "lion"],
-	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "bear", "alp"],
+	# Nachzehrer (docs/concept/monsters.md, entry 11) joins grassland and
+	# forest, one slot each -- rare, like Alp's own single forest slot, not
+	# a second common fighter (that job belongs to the herbivore-role pool
+	# above, see Goblin).
+	"grassland": ["jackal", "jackal", "jackal", "lynx", "lion", "nachzehrer"],
+	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "bear", "alp", "nachzehrer"],
 	"desert": ["jackal", "jackal", "jackal", "lion", "venomous_snake"],
 	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "bear"],
 	"rainforest": ["jaguar", "jaguar", "jaguar", "venomous_snake", "curupira"],

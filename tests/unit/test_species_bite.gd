@@ -435,6 +435,11 @@ func test_a_chase_decided_by_a_hair_is_not_an_escape():
 
 ## Pinned as a whole set, so a re-tune that quietly makes the early world
 ## unwalkable (or the late world strollable) fails here.
+## Nachzehrer (docs/concept/monsters.md, entry 11) joins this list on
+## purpose, not as an oversight: it would rather eat than fight (see
+## CarrionPreference), so a shambling 12 km/h -- the same real_top_speed_kmh
+## as the Alp -- is the honest speed for something that is not actually
+## trying to catch you.
 func test_what_can_be_outrun_at_a_walk():
 	var outwalked: Array = []
 	for species in SpeciesBite.species_list():
@@ -444,7 +449,7 @@ func test_what_can_be_outrun_at_a_walk():
 		):
 			outwalked.append(species)
 	outwalked.sort()
-	assert_eq(outwalked, ["alp", "mouse", "nonvenomous_snake", "venomous_snake"])
+	assert_eq(outwalked, ["alp", "mouse", "nachzehrer", "nonvenomous_snake", "venomous_snake"])
 	var easy := _species_available_at(RegionDifficulty.Tier.EASY)
 	var easy_outwalked: Array = []
 	for species in outwalked:

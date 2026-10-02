@@ -338,13 +338,15 @@ func test_grassland_is_deer_and_jackal_dominant():
 	assert_true(herbivore_species.has("boar"))
 	for species in herbivore_species:
 		assert_true(
-			species in ["boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep", "alpaca"],
+			species in ["boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep", "alpaca", "goblin"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("jackal"))
 	assert_true(predator_species.has("lynx"))
 	for species in predator_species:
-		assert_true(species in ["lynx", "jackal", "lion"], "unexpected predator-role species: %s" % species)
+		assert_true(
+			species in ["lynx", "jackal", "lion", "nachzehrer"], "unexpected predator-role species: %s" % species
+		)
 
 
 ## Wolves are forest's own named apex predator (see
@@ -357,13 +359,13 @@ func test_forest_biome_is_boar_and_lynx_dominant():
 	assert_true(herbivore_species.has("boar"), "forest should promote boars")
 	for species in herbivore_species:
 		assert_true(
-			species in ["boar", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel"],
+			species in ["boar", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel", "goblin"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("lynx"), "forest should promote lynx")
 	for species in predator_species:
 		assert_true(
-			species in ["lynx", "wolf", "bear", "alp"], "unexpected predator-role species: %s" % species
+			species in ["lynx", "wolf", "bear", "alp", "nachzehrer"], "unexpected predator-role species: %s" % species
 		)
 
 

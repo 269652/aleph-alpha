@@ -71,6 +71,14 @@ const MAX_HEALTH_BY_SPECIES := {
 	# carnivore. Frail -- it is never meant to be fought, only woken
 	# away from.
 	"alp": 18.0,
+	# The Goblin (docs/concept/monsters.md, entry 10): comparable to a
+	# wolf's own health -- its edge is never breaking off (see SpeciesBite's
+	# tenacity 0.0), not raw toughness.
+	"goblin": 32.0,
+	# The Nachzehrer (docs/concept/monsters.md, entry 11): tougher than an
+	# ordinary wolf, closer to a jaguar -- a genuine predator-tier threat
+	# when it does fight, even though its own behaviour mostly avoids one.
+	"nachzehrer": 38.0,
 	"goat": 20.0,
 	"sheep": 18.0,
 	"alpaca": 20.0,
@@ -139,6 +147,8 @@ const MAX_STAMINA_BY_SPECIES := {
 	"jaguar": 25.0,
 	"curupira": 35.0,
 	"alp": 40.0,
+	"goblin": 30.0,
+	"nachzehrer": 25.0,
 	"goat": 30.0,
 	"sheep": 22.0,
 	"alpaca": 24.0,
@@ -183,6 +193,11 @@ const MAX_MANA_BY_SPECIES := {
 	# The one predator with a real pool: it is a spirit of the forest.
 	"curupira": 30.0,
 	"alp": 45.0,
+	# Mundane raiders, not spirits -- an ordinary predator-tier mana flavor
+	# stat, not the real pool Curupira alone carries as its own distinguishing
+	# trait ("the one predator with a real pool", above).
+	"goblin": 0.0,
+	"nachzehrer": 10.0,
 	"goat": 5.0,
 	"sheep": 5.0,
 	"alpaca": 5.0,
@@ -222,6 +237,8 @@ const DIET_BY_SPECIES := {
 	"jaguar": "Hunter",
 	"curupira": "Guardian",
 	"alp": "Night-mare",
+	"goblin": "Raider",
+	"nachzehrer": "Revenant",
 	"goat": "Grazer",
 	"sheep": "Grazer",
 	"alpaca": "Grazer",
@@ -269,6 +286,8 @@ const TEMPERAMENT_BY_SPECIES := {
 	"jaguar": "aggressive",
 	"curupira": "aggressive",
 	"alp": "aggressive",
+	"goblin": "aggressive",
+	"nachzehrer": "aggressive",
 	"goat": "calm",
 	"sheep": "calm",
 	"alpaca": "calm",
@@ -324,6 +343,7 @@ const PREDATOR_SPECIES := {
 	"jaguar": true,
 	"curupira": true,
 	"alp": true,
+	"nachzehrer": true,
 	"mountain_lion": true,
 	"bear": true,
 	"lion": true,

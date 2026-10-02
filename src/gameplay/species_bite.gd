@@ -218,6 +218,14 @@ const PROFILES := {
 	# caution_radius); and it holds on past the health a hunting animal quits at,
 	# because a grievance is not hunger.
 	"curupira": {"real_top_speed_kmh": 45.0, "windup_seconds": 0.50, "sense_radius_tiles": 10.0, "tenacity": 0.08},
+	# Goblin (docs/concept/monsters.md, entry 10): a scrappy, quick raider --
+	# its edge is never breaking off (tenacity 0.0, lower than anything else
+	# in this table), not raw speed or reach.
+	"goblin": {"real_top_speed_kmh": 22.0, "windup_seconds": 0.35, "sense_radius_tiles": 7.0, "tenacity": 0.0},
+	# Nachzehrer (entry 11): slow and shambling -- it would rather eat than
+	# chase (see CarrionPreference), so its own threat numbers are
+	# unremarkable; a real predator tenacity, nothing more.
+	"nachzehrer": {"real_top_speed_kmh": 12.0, "windup_seconds": 0.70, "sense_radius_tiles": 8.0, "tenacity": 0.20},
 	# The Alp (docs/concept/monsters.md entry 3) does not hunt and does not
 	# bite -- it sits on a sleeper's chest and presses (NightMare). It has
 	# a profile anyway, because test_every_spawnable_species_has_a_profile
