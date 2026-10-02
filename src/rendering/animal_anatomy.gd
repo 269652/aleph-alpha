@@ -52,6 +52,7 @@ const SPECIES := [
 	"lindwurm", "rubezahl", "nyx", "krampus",
 	"squallmaw", "coilnecca", "champ",
 	"kraken",
+	"goblin", "nachzehrer",
 ]
 
 ## Legless species (see the "serpents" profiles below): zero leg_length, so
@@ -316,6 +317,46 @@ const _PROFILES := {
 		"leg_length": 0.30, "leg_thickness": 0.030,
 		"tail": TAIL_NONE, "tail_length": 0.0,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# -- biped body plan (docs/concept/monsters.md entries 10-11) -----------
+	# The roster's first upright, two-legged profiles: body_length < body_
+	# height (a torso reads taller than it is wide, unlike every quadruped
+	# barrel above) and a leg_length/body_height ratio past any quadruped's
+	# (most of an upright silhouette's height IS its legs). "biped" is the
+	# new field ProceduralAnimalSprite._paint_legs reads to draw one
+	# hip-width leg pair instead of a front+back quadruped spread, plus
+	# simple static arms -- see that module's own doc comment.
+	#
+	# Goblin: squat and hunched (a real shoulder_hump, a short neck sunk
+	# between the shoulders), with the oversized pointed ears every goblin
+	# depiction shares. No snout (muzzle 0) -- a flat, forward-facing
+	# humanoid face, not a tapered animal one.
+	"goblin": {
+		"barrel_squareness": 0.3,
+		"world_scale": 0.85,
+		"body_length": 0.22, "body_height": 0.30, "body_y": 0.42, "shoulder_hump": 0.08,
+		"neck_length": 0.06, "neck_thickness": 0.09, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.16, "head_height": 0.17, "muzzle": 0.0, "ear_size": 0.35,
+		"leg_length": 0.40, "leg_thickness": 0.05,
+		"tail": TAIL_NONE, "tail_length": 0.0,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+		"biped": true,
+	},
+	# Nachzehrer: gaunt rather than hunched -- thin limbs and neck, a head
+	# carried low (NECK_LOW, the same feeding-posture carriage boar/bear
+	# use) matching its one behaviour (it would rather eat than fight), and
+	# small ears rather than goblin's oversized ones -- a wasted revenant,
+	# not a fae creature.
+	"nachzehrer": {
+		"barrel_squareness": 0.25,
+		"world_scale": 0.95,
+		"body_length": 0.20, "body_height": 0.32, "body_y": 0.44, "shoulder_hump": 0.03,
+		"neck_length": 0.10, "neck_thickness": 0.07, "neck_carriage": NECK_LOW,
+		"head_length": 0.14, "head_height": 0.14, "muzzle": 0.0, "ear_size": 0.15,
+		"leg_length": 0.42, "leg_thickness": 0.035,
+		"tail": TAIL_NONE, "tail_length": 0.0,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+		"biped": true,
 	},
 	"predator": {
 		"barrel_squareness": 0.3,

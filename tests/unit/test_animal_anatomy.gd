@@ -461,6 +461,64 @@ func test_kraken_does_not_share_a_body_plan_with_any_other_species():
 ## SURVIVE as data-table keys, because profile_for falls back to
 ## _PROFILES["herbivore"] for any id it does not know. This test exists to
 ## stop a later reader "finishing the cleanup" by deleting them.
+# -- Goblin / Nachzehrer: the roster's first biped body plan ----------------
+#
+# docs/concept/monsters.md entries 10-11, asked for directly ("goblins,
+# scavengers... RPG enemies"). Every existing profile is a quadruped
+# (leg_length > 0, drawn as a front+back pair) or legless (SERPENT_SPECIES).
+# Neither reads as an upright humanoid, so a new optional "biped" field
+# tells ProceduralAnimalSprite._paint_legs to draw exactly one hip-width
+# pair instead -- see that module's own test file for the rendering half.
+
+const BIPED_SPECIES := ["goblin", "nachzehrer"]
+
+
+func test_goblin_and_nachzehrer_have_profiles():
+	for species in BIPED_SPECIES:
+		assert_true(AnimalAnatomy.has_profile(species), species)
+		assert_true(AnimalAnatomy.SPECIES.has(species), species)
+
+
+func test_goblin_and_nachzehrer_are_flagged_biped():
+	for species in BIPED_SPECIES:
+		assert_true(AnimalAnatomy.profile_for(species).get("biped", false), species)
+
+
+## Every other existing profile must default to false (an opt-in field, not
+## a new universal one) -- spot-checked against a representative spread
+## rather than every single species.
+func test_no_existing_species_is_accidentally_flagged_biped():
+	for species in ["wolf", "boar", "deer", "bear", "mouse", "nonvenomous_snake", "curupira", "alp"]:
+		assert_false(AnimalAnatomy.profile_for(species).get("biped", false), species)
+
+
+## An upright humanoid reads as taller-than-wide and longer-legged relative
+## to its own body than any existing quadruped -- most of a human-shaped
+## silhouette's height IS its legs, unlike a horizontal quadruped barrel.
+func test_goblin_is_narrower_and_longer_legged_relative_to_its_body_than_a_quadruped():
+	var goblin := AnimalAnatomy.profile_for("goblin")
+	var wolf := AnimalAnatomy.profile_for("wolf")
+	assert_lt(
+		goblin.body_length, goblin.body_height,
+		"an upright body should read as taller than it is wide, unlike a quadruped barrel"
+	)
+	assert_gt(
+		goblin.leg_length / goblin.body_height, wolf.leg_length / wolf.body_height,
+		"an upright stance puts proportionally more of the silhouette in the legs than a quadruped's"
+	)
+
+
+func test_goblin_and_nachzehrer_have_no_headgear_or_tail():
+	for species in BIPED_SPECIES:
+		var profile := AnimalAnatomy.profile_for(species)
+		assert_eq(profile.headgear, AnimalAnatomy.HEADGEAR_NONE, species)
+		assert_eq(profile.tail, AnimalAnatomy.TAIL_NONE, species)
+
+
+func test_goblin_and_nachzehrer_do_not_share_a_body_plan():
+	assert_ne(AnimalAnatomy.profile_for("goblin"), AnimalAnatomy.profile_for("nachzehrer"))
+
+
 func test_the_placeholder_ids_survive_as_data_fallbacks_for_an_unknown_species():
 	assert_true(AnimalAnatomy.has_profile("herbivore"), "the herbivore fallback profile must not be deleted")
 	assert_true(AnimalAnatomy.has_profile("predator"), "the predator fallback profile must not be deleted")

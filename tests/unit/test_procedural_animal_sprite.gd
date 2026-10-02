@@ -812,6 +812,105 @@ func test_kraken_has_a_color_distinct_from_every_other_species():
 		)
 
 
+# -- Goblin / Nachzehrer: the roster's first biped body plan ---------------
+#
+# docs/concept/monsters.md entries 10-11. AnimalAnatomy's "biped" profile
+# field (see test_animal_anatomy.gd) is new; this is the rendering half --
+# _paint_legs drawing one hip-width pair instead of a front+back quadruped
+# spread.
+
+const BIPED_SPECIES := ["goblin", "nachzehrer"]
+
+
+func test_biped_species_generated_images_have_the_expected_size():
+	for species in BIPED_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH, species)
+		assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT, species)
+
+
+func test_biped_species_generated_images_have_transparent_corners():
+	for species in BIPED_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_pixel(0, 0).a, 0.0, species)
+		assert_eq(image.get_pixel(ProceduralAnimalSprite.WIDTH - 1, ProceduralAnimalSprite.HEIGHT - 1).a, 0.0, species)
+
+
+func test_biped_species_generated_images_have_a_substantial_opaque_body():
+	for species in BIPED_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_gt(_opaque_count(image), 60, "%s should have a substantial body" % species)
+
+
+func test_biped_species_generated_images_are_deterministic_per_seed():
+	for species in BIPED_SPECIES:
+		var first: Image = generator.generate_image(species, 42)
+		var second: Image = generator.generate_image(species, 42)
+		assert_eq(_pixel_diff_count(first, second), 0, species)
+
+
+func test_biped_species_do_not_fall_back_to_the_generic_herbivore_shape():
+	var herbivore: Image = generator.generate_image("herbivore", 5)
+	for species in BIPED_SPECIES:
+		var image: Image = generator.generate_image(species, 5)
+		assert_gt(_opacity_diff_count(image, herbivore), 0, species)
+
+
+func test_biped_species_are_ringed_with_the_shared_dark_outline():
+	for species in BIPED_SPECIES:
+		assert_true(_has_pixel(generator.generate_image(species, 1), PixelPalette.OUTLINE), species)
+
+
+func test_goblin_and_nachzehrer_have_colors_distinct_from_each_other_and_every_other_species():
+	var all_species: Array = SPECIES + NEW_SPECIES + [
+		"mouse", "squirrel", "venomous_snake", "nonvenomous_snake",
+		"squallmaw", "coilnecca", "champ", "kraken",
+	]
+	for species in BIPED_SPECIES:
+		var color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[species]
+		for other in all_species + BIPED_SPECIES:
+			if other == species:
+				continue
+			var other_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[other]
+			assert_gt(
+				Vector3(color.r, color.g, color.b).distance_to(Vector3(other_color.r, other_color.g, other_color.b)),
+				0.02,
+				"%s vs %s should be visually distinguishable" % [species, other]
+			)
+
+
+## The actual claim this whole slice rests on: an upright, two-legged
+## silhouette reads differently from a four-legged one. A quadruped's front
+## and back leg pairs splay its footprint wide; a biped's single hip-width
+## pair stands close together. Compared against the bottom few rows of the
+## canvas (feet only, body ends well above) rather than the whole image, so
+## this measures stance width specifically, not overall body size.
+func _opaque_x_span_in_rows(image: Image, y_start: int, y_end: int) -> int:
+	var min_x := image.get_width()
+	var max_x := -1
+	for y in range(y_start, y_end):
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.0:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+	return max_x - min_x if max_x >= 0 else 0
+
+
+func test_a_bipeds_feet_stand_closer_together_than_a_quadrupeds():
+	var foot_rows_start := ProceduralAnimalSprite.HEIGHT - 3
+	for species in BIPED_SPECIES:
+		var biped_span := _opaque_x_span_in_rows(
+			generator.generate_image(species, 1), foot_rows_start, ProceduralAnimalSprite.HEIGHT
+		)
+		var quadruped_span := _opaque_x_span_in_rows(
+			generator.generate_image("wolf", 1), foot_rows_start, ProceduralAnimalSprite.HEIGHT
+		)
+		assert_lt(
+			biped_span, quadruped_span,
+			"%s's two legs should stand closer together than a quadruped's front+back spread" % species
+		)
+
+
 ## The walking silhouette must still be a fully connected, outlined animal --
 ## a bent leg must not tear a hole in the body or leave the outline broken.
 func test_a_mid_stride_horse_is_still_a_solid_outlined_silhouette():

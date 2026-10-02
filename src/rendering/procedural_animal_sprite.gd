@@ -94,6 +94,12 @@ const SPECIES_BASE_COLORS := {
 	# Squallmaw's own storm-blue-green so the doc's two ocean cameos never
 	# read as recolors of each other despite sharing the snake_shape family.
 	"kraken": Color(0.04, 0.09, 0.14),
+	# -- docs/concept/monsters.md entries 10-11, the roster's first biped
+	# creatures -- Goblin a sickly olive-green skin, Nachzehrer a pale,
+	# grave-grey one, distinct from each other and from every warm-coated
+	# mammal above.
+	"goblin": Color(0.38, 0.45, 0.28),
+	"nachzehrer": Color(0.58, 0.60, 0.56),
 }
 
 ## Maps every species name to one of the 4 hand-drawn silhouette families in
@@ -532,10 +538,34 @@ func _paint_legs(
 	if profile.leg_length <= 0.001:
 		return  # legless (snakes) -- no limbs to draw at all
 	var thickness: float = maxf(profile.leg_thickness * float(HEIGHT), 1.5)
-	var shoulder_x := body_center.x + body_half.x * 0.58
-	var hip_x := body_center.x - body_half.x * 0.62
 	var top := body_center.y + body_half.y * 0.35
 	var leg_length := ground - top
+	# has_hooves (default false, see AnimalAnatomy) caps each foot with a
+	# small dark hoof -- a real, visually distinct anatomical feature on
+	# hoofed grazers, not just a leg tapering to the same coat color as the
+	# rest of the body (reported against a reference horse with clearly
+	# darker hooves).
+	var hoof_color = coat.darkened(0.55) if profile.get("has_hooves", false) else null
+
+	if profile.get("biped", false):
+		# One hip-width pair, centered under the body, rather than split
+		# into a front/back quadruped stance -- the roster's first upright
+		# silhouette (see AnimalAnatomy's own "biped" field doc comment).
+		# Reuses the exact same articulated-leg primitive every quadruped
+		# leg already does, just the one pair instead of two.
+		for pair in [
+			{"offset": -thickness * 0.7, "color": coat.darkened(_FAR_LEG_DARKEN), "side": "left"},
+			{"offset": thickness * 0.7, "color": coat, "side": "right"},
+		]:
+			_paint_articulated_leg(
+				image, Vector2(body_center.x + pair.offset, top), leg_length, thickness, pair.color,
+				"front_%s" % pair.side, gait_phase, hoof_color
+			)
+		_paint_arms(image, profile, coat, body_center, body_half)
+		return
+
+	var shoulder_x := body_center.x + body_half.x * 0.58
+	var hip_x := body_center.x - body_half.x * 0.62
 	# The far pair is drawn first and darker, so the body reads as solid.
 	# "far"/"near" (an offset for visual depth, not real anatomy) is what
 	# assigns each of the 4 legs to a QuadrupedGait identity below -- far+
@@ -545,12 +575,6 @@ func _paint_legs(
 		{"offset": -thickness * 0.95, "color": coat.darkened(_FAR_LEG_DARKEN), "side": "left"},
 		{"offset": thickness * 0.6, "color": coat, "side": "right"},
 	]
-	# has_hooves (default false, see AnimalAnatomy) caps each foot with a
-	# small dark hoof -- a real, visually distinct anatomical feature on
-	# hoofed grazers, not just a leg tapering to the same coat color as the
-	# rest of the body (reported against a reference horse with clearly
-	# darker hooves).
-	var hoof_color = coat.darkened(0.55) if profile.get("has_hooves", false) else null
 	for pair in pairs:
 		for leg_pos in [{"x": shoulder_x, "role": "front"}, {"x": hip_x, "role": "back"}]:
 			var x: float = leg_pos.x + pair.offset
@@ -558,6 +582,21 @@ func _paint_legs(
 			_paint_articulated_leg(
 				image, Vector2(x, top), leg_length, thickness, pair.color, leg_id, gait_phase, hoof_color
 			)
+
+
+## Simple static arms for a biped profile (see AnimalAnatomy's "biped"
+## field) -- one straight limb per side, hanging from the shoulder, reusing
+## _paint_limb exactly as the neck/antlers/horns/tusks above already do. No
+## elbow joint, no gait pose, and no held-item slot yet -- a silhouette cue
+## that reads as "has arms", not a combat-art system (see docs/concept/
+## monsters.md's own honest status on this gap).
+func _paint_arms(image: Image, profile: Dictionary, coat: Color, body_center: Vector2, body_half: Vector2) -> void:
+	var thickness: float = maxf(profile.leg_thickness * float(HEIGHT) * 0.8, 1.0)
+	var shoulder_y := body_center.y - body_half.y * 0.3
+	for side in [-1.0, 1.0]:
+		var shoulder := Vector2(body_center.x + body_half.x * 0.5 * side, shoulder_y)
+		var hand := shoulder + Vector2(body_half.x * 0.15 * side, body_half.y * 1.3)
+		_paint_limb(image, shoulder, hand, thickness, coat.darkened(0.15) if side < 0.0 else coat)
 
 
 ## One leg as two rotating segments (hip->knee->foot) instead of a straight
