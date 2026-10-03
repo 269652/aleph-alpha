@@ -780,3 +780,32 @@ func test_spawn_safe_true_with_a_nonzero_predator_population_does_not_crash():
 		"forest", RegionDifficulty.Tier.HARD, 0, true
 	)
 	assert_eq(spawned.size(), 0, "a fully-filtered predator pool should spawn nothing, not crash")
+
+
+# -- more wildlife where you'll actually meet it (see docs/concept/
+# ecosystem_dynamics.md's section of the same name) -- the real bottleneck
+# behind "no encounters while walking" was raw population COUNT, not which
+# species a drawn marker is (MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION above
+# only ever decided the latter). EcosystemSimulation.add_region applies
+# this multiplier to herbivore/predator carrying capacity for
+# SPAWN_REACHABLE_BIOMES chunks -- this file only pins the constant and the
+# reasoning behind its exact value; the wiring itself is
+# test_ecosystem_simulation.gd/test_earth_chunk_manager.gd's job.
+
+func test_spawn_reachable_population_multiplier_is_five():
+	assert_eq(CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER, 5.0)
+
+
+## The actual claim the 5.0 value rests on: PopulationMarkers.count_for's
+## whole-number part is unconditional (no coin flip) once population clears
+## 1.0 -- so the multiplier must clear that threshold with real margin even
+## at the SPARSEST density this doc has measured in real play (0.40
+## herbivores/chunk, population_markers.gd's own cited figure), not just
+## barely scrape past it.
+func test_spawn_reachable_population_multiplier_clears_the_guaranteed_marker_threshold_with_margin():
+	const SPARSEST_MEASURED_HERBIVORE_DENSITY := 0.40
+	var boosted := SPARSEST_MEASURED_HERBIVORE_DENSITY * CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER
+	assert_gte(
+		boosted, 2.0,
+		"the sparsest real chunk should clear 1.0 (the guaranteed-marker threshold) with real margin, not barely"
+	)

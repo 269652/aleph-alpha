@@ -23,6 +23,77 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Way more enemies, part 3: the real bottleneck was population count, not species mix (2026-10-03) — see `concept/ecosystem_dynamics.md`
+
+Real play, after part 2 (below) had already shipped: *"There are still no
+encounters with monsters / enemies when walking for a while... it should
+be more like an rpg where you fight battles most of the time to grind for
+XP."* Investigated before touching anything — the two prior passes had
+both tuned WHICH species a drawn population marker is
+(`MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION`, now ~59%) and never looked at
+whether a marker gets drawn AT ALL.
+
+**Root cause, confirmed both by formula and by a real in-engine
+measurement.** `EcosystemSimulation.add_region` seeds herbivore/predator
+population directly at carrying capacity the instant a chunk loads — not
+grown from zero, so waiting (or `/ecotest`) genuinely cannot help.
+Real measured density (`population_markers.gd`'s own cited figures):
+herbivores 0.40–1.26/chunk, predators 0.03–0.10/chunk. `PopulationMarkers.
+count_for`'s fractional-chance draw means population under 1.0 is a coin
+flip for even a single marker — at the sparse end, well over half of all
+chunks drew nothing at all, of any species. No species-pool fix can rescue
+a chunk the population roll never gave anything to.
+
+**The fix:** `CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER`
+(5.0) — applied to herbivore (and, derived from it, predator) carrying
+capacity in `EcosystemSimulation.add_region`, only for chunks whose
+dominant biome is grassland or forest (`SPAWN_REACHABLE_BIOMES`, the only
+biomes a real spawn candidate resolves to). The four exploration-only
+biomes are completely untouched. `PredatorPopulationModel.
+PREDATORS_PER_PREY_UNIT` (0.08) is itself untouched, so the trophic ratio
+between herbivores and predators is preserved — only the overall scale of
+the local food web changes. Threaded through `EarthChunkManager._load_chunk`
+via a new `_population_multiplier_for(dominant_biome)` policy function,
+mirroring `_difficulty_tier_at`/`_is_spawn_safe_chunk`'s own shape exactly.
+
+**Verified two ways, not just calculated.** 8 new red-first tests across
+`test_ecosystem_simulation.gd` (the multiplier scales herbivore AND
+predator capacity by the identical factor, defaults to unboosted),
+`test_creature_renderer.gd` (the constant's value, and that it clears the
+guaranteed-marker threshold with real margin even at the sparsest measured
+density), and `test_earth_chunk_manager.gd` (the policy function per
+biome, plus an end-to-end check that the real spawn chunk's own population
+is actually boosted through `add_region`). Then a real, throwaway GUT
+probe loaded the actual spawn point's full chunk neighbourhood and counted
+markers directly (the same technique the "Zero sparrow spawns"
+investigation established, since a bare `godot -s` script can't construct
+`EarthChunkManager`): **14/16 chunks outside the small spawn-safe clearing
+(87.5%) now contain at least one fight-capable creature**, against a
+calculated estimate of 83–99.5% — closely matching, confirming the fix
+behaves as designed in the real engine, not just on paper. (A first probe
+run read 69.2% and every herbivore population value came back in the OLD
+0.4–1.26 range, not boosted at all — traced to 235 stale `user://
+chunk_ecology` save files left on this dev container by months of earlier
+test runs, loaded by `_apply_persisted_ecology` over the fresh boosted
+seed. Not a bug in the fix: a save file only exists after a REAL session
+persists a chunk, so a genuinely fresh player's `user://` has none of
+these. Cleared for this container's own verification; the dev-environment
+hygiene gap this exposed — `test_earth_chunk_manager.gd` has no
+`before_each`/`after_each` cleanup of `ECOLOGY_DIR`, so cross-test disk
+contamination is possible for any test asserting exact population numbers
+— is noted here rather than fixed, since touching shared test
+fixtures for every test in a 20,000+ line file is a separately-scoped
+change this pass didn't go looking for.)
+
+**Regression.** 480+ tests green across every file this and the two prior
+passes touched: the full `test_ecosystem_simulation.gd` and
+`test_creature_renderer.gd` suites together (137/137), three targeted
+`test_earth_chunk_manager.gd` passes (difficulty 3/3, spawn-safe 4/4,
+creature-marker spawn/reconcile path 4/4) plus the new multiplier tests
+(3/3) and the end-to-end check (1/1), the 11-file cross-feature batch
+spanning the whole Goblin/Nachzehrer/biped arc (325/325), and
+`test_ecosystem_time_lapse.gd` (6/6).
+
 ### Way more enemies, part 2: Goblin, Nachzehrer, and a safe clearing at spawn (2026-10-02) — see `concept/ecosystem_dynamics.md`, `concept/monsters.md`
 
 Continues the 2026-09-27 entry below: that pass made the roster's EXISTING

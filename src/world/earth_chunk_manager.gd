@@ -1739,6 +1739,19 @@ func _is_spawn_safe_chunk(chunk_coord: Vector2i) -> bool:
 	return JourneyRing.distance_chunks(chunk_coord, _spawn_chunk_coord) <= CreatureRenderer.SPAWN_SAFE_RADIUS_CHUNKS
 
 
+## Which population_multiplier a chunk's EcosystemSimulation.add_region call
+## gets, by its own dominant biome -- CreatureRenderer.SPAWN_REACHABLE_
+## POPULATION_MULTIPLIER inside the two biomes a player can actually reach
+## on foot from spawn (docs/concept/ecosystem_dynamics.md's "More wildlife
+## where you'll actually meet it"), unboosted (1.0) everywhere else, so the
+## four exploration-only biomes keep their real-world-grounded density
+## exactly as it was.
+func _population_multiplier_for(dominant_biome: String) -> float:
+	if dominant_biome in CreatureRenderer.SPAWN_REACHABLE_BIOMES:
+		return CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER
+	return 1.0
+
+
 func herbivore_population_at_chunk(chunk_coord: Vector2i) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
 
@@ -18905,7 +18918,10 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_footprint_fields[chunk_coord] = FootprintField.new()
 	_footprint_mmis[chunk_coord] = _footprint_renderer.build_multimeshes(_ground_decor_parent)
 
-	_ecosystem.add_region(chunk_coord, chunk)
+	# Computed once, here, and reused below at the spawn_creatures call --
+	# both need it, and chunk.biome doesn't change between the two calls.
+	var dominant_biome := _biome_classifier.dominant_biome(chunk.biome)
+	_ecosystem.add_region(chunk_coord, chunk, _population_multiplier_for(dominant_biome))
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
 	# lives in the patch instances just created above, not in Chunk data --
 	# report it in immediately so this chunk's robin/sparrow population
@@ -18942,7 +18958,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.herbivore_population(chunk_coord),
 		_ecosystem.predator_population(chunk_coord),
 		self,
-		_biome_classifier.dominant_biome(chunk.biome),
+		dominant_biome,
 		_difficulty_tier_at(chunk_coord),
 		0,
 		_is_spawn_safe_chunk(chunk_coord)

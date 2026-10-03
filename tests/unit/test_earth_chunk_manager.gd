@@ -2061,6 +2061,63 @@ func test_set_spawn_tile_makes_the_spawn_safe_chunk_free_of_hostile_species():
 				)
 
 
+# -- more wildlife where you'll actually meet it (see docs/concept/
+# ecosystem_dynamics.md's section of the same name) -- raw population
+# COUNT, not species-pool composition, was the real bottleneck behind "no
+# encounters while walking". _population_multiplier_for decides which
+# chunks get CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER applied
+# to their herbivore/predator carrying capacity, threaded into
+# _ecosystem.add_region the same way _is_spawn_safe_chunk/
+# _difficulty_tier_at already thread their own policy decisions in.
+
+func test_population_multiplier_for_grassland_is_the_spawn_reachable_multiplier():
+	assert_eq(manager._population_multiplier_for("grassland"), CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER)
+
+
+func test_population_multiplier_for_forest_is_the_spawn_reachable_multiplier():
+	assert_eq(manager._population_multiplier_for("forest"), CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER)
+
+
+## The four exploration-only biomes keep their real-world-grounded density
+## exactly as it was -- this fix is scoped to the two biomes a player can
+## actually reach on foot from spawn, the same SPAWN_REACHABLE_BIOMES
+## scoping MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION already uses.
+func test_population_multiplier_for_a_non_spawn_reachable_biome_is_unboosted():
+	for biome_name in ["tundra", "desert", "rainforest", "mountain", "ocean", ""]:
+		assert_eq(manager._population_multiplier_for(biome_name), 1.0, biome_name)
+
+
+## End-to-end: the real spawn point's own chunk (grassland or forest -- see
+## test_set_spawn_tile_makes_nearby_regions_use_easy_difficulty's own use of
+## _berlin_tile as "reliably inland... sustain some vegetation/population")
+## actually receives the boosted multiplier through add_region, not just
+## the isolated helper above. 2.0 is the same guaranteed-marker-with-margin
+## threshold test_spawn_reachable_population_multiplier_clears_the_
+## guaranteed_marker_threshold_with_margin pins in test_creature_renderer.gd
+## -- real measured density before this fix topped out at 1.26, so clearing
+## 2.0 here is strong evidence the boost is actually wired through, not
+## just defined.
+func test_the_spawn_chunk_itself_gets_a_boosted_herbivore_population():
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	# A stale user://chunk_ecology save from an EARLIER test in this file
+	# (ecology persistence round-trips are real disk writes with no
+	# before_each/after_each cleanup -- see ECOLOGY_DIR) would otherwise be
+	# loaded by _apply_persisted_ecology and silently overwrite the fresh
+	# boosted seed this test actually wants to check.
+	var ecology_file := manager._ecology_path(center_chunk)
+	if FileAccess.file_exists(ecology_file):
+		DirAccess.remove_absolute(ecology_file)
+
+	manager.update(_berlin_tile)
+	var dominant_biome := _dominant_biome_of_chunk(center_chunk)
+
+	assert_true(
+		dominant_biome in CreatureRenderer.SPAWN_REACHABLE_BIOMES,
+		"precondition: Berlin should resolve to a spawn-reachable biome -- %s" % dominant_biome
+	)
+	assert_gte(manager._ecosystem.herbivore_population(center_chunk), 2.0)
+
+
 # -- explored-tiles wiring (see docs/concept/wayfinding.md's Map item) ------
 # Pure delegation to ExploredTiles -- no chunk loading involved, so these
 # stay cheap: construct a manager the same way every other fast test in

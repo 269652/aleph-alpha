@@ -132,17 +132,34 @@ const HERBIVORE_SPECIES_POOL_BY_BIOME := {
 const SPAWN_REACHABLE_BIOMES: Array[String] = ["grassland", "forest"]
 
 ## The least a spawn-reachable biome's herbivore-role pool can be and still
-## call meeting something in it "steady combat": a coin flip. Population
-## near spawn is usually 0 or 1 marker per chunk (PopulationMarkers.
-## count_for), so the pool's own fight-capable fraction IS roughly the odds
-## that the one animal a player meets will fight rather than flee -- below
-## half, a player meets something docile MORE often than not, which is not
-## "steady". Not pushed higher: that would crowd out the calm-grazer variety
-## the pool also exists for, and half is the natural, non-arbitrary
-## inflection point between the two. Applies only to SPAWN_REACHABLE_BIOMES
-## -- see that constant's own doc comment for why the other four biomes are
-## deliberately left alone.
+## call meeting something in it "steady combat": a coin flip, PER MARKER
+## drawn (PopulationMarkers.count_for) -- below half, more of the markers a
+## chunk draws from this pool are calm than fight-capable. Not pushed
+## higher: that would crowd out the calm-grazer variety the pool also
+## exists for, and half is the natural, non-arbitrary inflection point
+## between the two. Applies only to SPAWN_REACHABLE_BIOMES -- see that
+## constant's own doc comment for why the other four biomes are
+## deliberately left alone. See SPAWN_REACHABLE_POPULATION_MULTIPLIER below
+## for the separate, larger lever controlling how MANY markers a chunk
+## draws in the first place.
 const MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION := 0.5
+
+## The real bottleneck behind "no encounters while walking"
+## (docs/concept/ecosystem_dynamics.md's "More wildlife where you'll
+## actually meet it"): raw population COUNT, not which species a drawn
+## marker is -- the fraction above only ever decided the latter, and can't
+## rescue a chunk the population roll never gave anything to in the first
+## place. Applied to herbivore (and, derived from it, predator) carrying
+## capacity in EcosystemSimulation.add_region, for SPAWN_REACHABLE_BIOMES
+## chunks only. Real measured density before this existed: 0.40-1.26
+## herbivores/chunk (population_markers.gd's own doc comment) -- below
+## PopulationMarkers.count_for's guaranteed-marker threshold (1.0) at the
+## sparse end. 5x pushes that same range to 2.0-6.3, clearing the threshold
+## with real margin even at the sparsest measured chunk (0.40 * 5.0 = 2.0),
+## not just barely. Pinned by
+## test_spawn_reachable_population_multiplier_clears_the_guaranteed_
+## marker_threshold_with_margin.
+const SPAWN_REACHABLE_POPULATION_MULTIPLIER := 5.0
 
 ## Wolf joins forest only (real wolves are the classic temperate/boreal
 ## forest apex predator, and this project's own dominant-species-per-biome

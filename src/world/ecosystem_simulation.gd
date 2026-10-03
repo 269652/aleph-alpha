@@ -90,7 +90,14 @@ var _harvest_accumulator: Dictionary = {}  # Vector2i chunk_coord -> float
 ## the population their local resources can sustain) -- consistent with the
 ## game's existing static tree placement: the world is assumed to already
 ## contain a mature ecosystem, not one growing from nothing on first visit.
-func add_region(chunk_coord: Vector2i, chunk: Chunk) -> void:
+## `population_multiplier` (default 1.0, so every pre-existing call site
+## keeps seeing exactly the same numbers as before this parameter existed)
+## scales herbivore carrying capacity before predator capacity is derived
+## from it, preserving PredatorPopulationModel's own trophic ratio exactly
+## -- see docs/concept/ecosystem_dynamics.md's "More wildlife where you'll
+## actually meet it" and CreatureRenderer.SPAWN_REACHABLE_POPULATION_
+## MULTIPLIER, which is what a real caller passes in.
+func add_region(chunk_coord: Vector2i, chunk: Chunk, population_multiplier: float = 1.0) -> void:
 	_chunks[chunk_coord] = chunk
 
 	var density := PackedFloat32Array()
@@ -111,7 +118,7 @@ func add_region(chunk_coord: Vector2i, chunk: Chunk) -> void:
 
 	var herbivore_capacity := _herbivore_model.carrying_capacity(
 		_average(density), _water_access[chunk_coord]
-	)
+	) * population_multiplier
 	_herbivore_population[chunk_coord] = herbivore_capacity
 	_predator_population[chunk_coord] = _predator_model.carrying_capacity(herbivore_capacity)
 

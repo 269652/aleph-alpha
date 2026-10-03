@@ -47,6 +47,43 @@ func test_add_region_stays_empty_for_an_inhospitable_biome():
 	assert_eq(simulation.predator_population(Vector2i(0, 0)), 0.0)
 
 
+# -- a population_multiplier for spawn-reachable biomes (docs/concept/
+# ecosystem_dynamics.md's "More wildlife where you'll actually meet it") --
+# raises herbivore (and, derived from it, predator) carrying capacity for
+# chunks the caller marks as spawn-reachable. The real complaint was raw
+# population COUNT, not which species got drawn (already fixed once, see
+# CreatureRenderer.MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION) -- a chunk with no
+# marker at all can't be rescued by a better species fraction.
+
+func test_add_region_population_multiplier_defaults_to_unboosted():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 1.0, 1.0))
+
+	# grassland cap 0.6 * growth_rate 1.0 = 0.6 density; * 20.0/unit * 0.3
+	# (no water in this chunk) = 3.6 -- every pre-existing caller that never
+	# passes a 3rd argument must keep seeing exactly this number.
+	assert_almost_eq(simulation.herbivore_population(Vector2i(0, 0)), 3.6, 0.001)
+
+
+func test_add_region_population_multiplier_scales_herbivore_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 1.0, 1.0), 2.0)
+
+	assert_almost_eq(simulation.herbivore_population(Vector2i(0, 0)), 7.2, 0.001)
+
+
+## Predator capacity is DERIVED from herbivore capacity
+## (PredatorPopulationModel.carrying_capacity) -- boosting herbivores must
+## boost predators by the exact same factor, or the trophic RATIO
+## (PREDATORS_PER_PREY_UNIT) this doc has twice defended keeping untouched
+## would silently break instead.
+func test_add_region_population_multiplier_also_scales_predator_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 1.0, 1.0), 2.0)
+
+	# unboosted predator capacity would be 3.6 * 0.08 = 0.288; doubling the
+	# herbivore input must double this too, to 0.576 -- not some other
+	# number, or the ratio between them has drifted.
+	assert_almost_eq(simulation.predator_population(Vector2i(0, 0)), 0.576, 0.001)
+
+
 # -- per-tile density (not just the whole-chunk average) --------------------
 #
 # average_vegetation_density collapses a whole chunk to one number -- no way

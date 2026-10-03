@@ -1676,6 +1676,82 @@ multiplier on top of `PREDATORS_PER_PREY_UNIT` or
 `MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION`, both of which this section leaves
 exactly as this doc has twice already defended.
 
+**Correction (2026-10-03):** the paragraph above was wrong in practice.
+Real play reported *"There are still no encounters with monsters / enemies
+when walking for a while... it should be more like an rpg where you fight
+battles most of the time to grind for XP"* — despite every fix above
+having shipped. The actual bottleneck turned out to be one this section
+never looked at: population COUNT, not pool composition. See "More
+wildlife where you'll actually meet it" below.
+
+### More wildlife where you'll actually meet it (2026-10-03)
+
+Asked again, more pointedly, after the pool-composition and spawn-safe-zone
+work above had already shipped: the quote in the correction note, compared
+explicitly to Path of Exile — a genre where "is anything nearby" is
+basically never in question, about as far as it gets from the
+real-ecosystem density this doc had been defending.
+
+**The bottleneck was never pool composition.** `MIN_FIGHT_CAPABLE_
+HERBIVORE_FRACTION` (now ~59% with Goblin folded into the count) only
+decides WHICH species a drawn marker is — it has nothing to say about
+chunks where NO marker is drawn at all. "Populations become animals you
+can meet" (above) measured herbivore density at 0.40–1.26 per chunk and
+predator density at 0.03–0.10 — both still exactly true today, because the
+ROUNDING bug that section fixed and the carrying-CAPACITY formula
+underneath it are two different things, and only the former was ever
+touched. `PopulationMarkers.count_for`'s own fractional-chance draw means
+population below 1.0 is a coin flip for even a SINGLE marker: at the
+sparse end (0.40), well over half of all chunks (≈58%) draw nothing at
+all, of any species, fight-capable or not. No pool-composition fraction
+can rescue a chunk the population roll never gave anything to in the first
+place.
+
+**What actually moves the number: `CreatureRenderer.SPAWN_REACHABLE_
+POPULATION_MULTIPLIER` (5.0).** Applied in `EcosystemSimulation.add_region`
+to the herbivore carrying capacity BEFORE it's seeded, only for chunks
+whose dominant biome is in `SPAWN_REACHABLE_BIOMES` — the same scoping the
+fight-capable-fraction fix above already uses, so the four exploration-only
+biomes (tundra/desert/rainforest/mountain) are completely unaffected;
+their density stays exactly as real-world-grounded as it was. Predator
+capacity is left to derive from the now-boosted herbivore number exactly
+the way it already does
+(`PredatorPopulationModel.carrying_capacity(herbivore_capacity)`) —
+`PREDATORS_PER_PREY_UNIT` (0.08) itself is untouched, so the trophic RATIO
+between herbivores and predators is preserved; what changes is the overall
+scale of the whole local food web, framed as "this specific region
+supports an unusually rich population," not "predators eat more than they
+should."
+
+At 5x: the measured 0.40–1.26 herbivore range becomes 2.0–6.3 — ABOVE 1.0
+at both ends now, which matters because `count_for`'s whole-number part is
+never probabilistic: once population clears 1.0, a chunk is GUARANTEED at
+least `floor(population)` markers, no coin flip involved. Every
+spawn-reachable chunk now guarantees 2–6 herbivore markers (not 0–1), and
+at ~59% fight-capable, the chance that AT LEAST ONE of 2–6 independent
+draws is fight-capable is `1 − 0.41^n` — 83% at the sparse end, 99.5% at
+the dense end, before predators (now 0.16–0.50/chunk, up from 0.03–0.10)
+are even counted. That is the "most of the time" the report asked for,
+without claiming every single chunk is guaranteed a fight — an occasional
+calm chunk is still real variety, not a bug.
+
+**Why 5x, and why this reverses "nothing here raises density further"
+above.** That line was a real design call, made and defended against
+stacking ANOTHER pool-composition multiplier on top of ones already
+shipped — a different question from "is the raw count itself high enough,"
+which this section is the first to actually measure against the complaint
+rather than assume. The honest correction: it wasn't. 5x is chosen to push
+the SPARSEST measured chunk (0.40) comfortably past the 1.0
+guaranteed-marker threshold with real margin (2.0, not 1.01), rather than
+a minimal nudge that would leave the sparse end still a coin flip.
+
+**Still real mechanics, not scripted spawns.** Every creature a boosted
+chunk draws is the SAME species pool, SAME `CreatureBehavior` AI, SAME
+flee/fight/hunt decision tree every other animal in this doc already
+runs — only the COUNT changed. Nothing here places a monster, spawns a
+pack on a timer, or gives a creature combat stats or behaviour a herd
+elsewhere in the world doesn't already have.
+
 ## Status / mechanisms
 
 - ✅ **Steady combat near spawn** (2026-09-27) — `SPAWN_REACHABLE_BIOMES`
@@ -1707,6 +1783,18 @@ exactly as this doc has twice already defended.
   population that still rolled a nonzero marker count. Goblin/Nachzehrer
   (see [monsters.md](monsters.md)) raise density everywhere else via the
   existing pool mechanism, not a new multiplier.
+- ✅ **More wildlife where you'll actually meet it** (2026-10-03) —
+  `CreatureRenderer.SPAWN_REACHABLE_POPULATION_MULTIPLIER` (5.0, tested),
+  applied to herbivore (and, derived from it, predator) carrying capacity
+  in `EcosystemSimulation.add_region` for `SPAWN_REACHABLE_BIOMES` chunks
+  only. The real bottleneck the two entries above never touched: raw
+  population COUNT, not which species a drawn marker is. Pushes the
+  measured 0.40–1.26 herbivore-per-chunk range to 2.0–6.3 — above the
+  `PopulationMarkers.count_for` guaranteed-marker threshold (1.0) at both
+  ends, versus below it at the sparse end before. `PREDATORS_PER_PREY_UNIT`
+  itself is untouched, so the trophic ratio is preserved; only the whole
+  local food web's scale changes, and only in the two biomes a player can
+  actually reach on foot from spawn.
 - ✅ `region_difficulty.gd` (chunk-distance-from-spawn → tier), wired into
   `CreatureRenderer`'s species-pool selection (`MIN_DIFFICULTY_TIER_BY_SPECIES`)
   and `EarthChunkManager.set_spawn_tile`/`_difficulty_tier_at`.
