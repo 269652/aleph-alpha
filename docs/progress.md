@@ -64,28 +64,91 @@ shader.gd` + 18/18 full `test_spell_effect_marker.gd` green.
 - ✅ A second distortion-shader opacity bug, fixed — see
   `concept/spell_vfx.md`'s "Mechanism" section for the full writeup
 
-### An explicit-targeted spell doesn't home — investigated, not a bug (2026-10-04) — see `concept/spell_runtime.md`
+### A projectile cast truly homes (2026-10-04) — see `concept/spell_runtime.md`
 
 Real play: *"Selecting a threat with tab doesn't make the spells
 homing."* Investigated before assuming the wiring was broken: explicit
 target selection (`concept/spell_runtime.md`'s "Explicit target selection"
-section) is correctly consulted at every delivery branch of
-`_resolve_cast_target` (`scenes/player.gd:4277-4309`) — Tab-selecting a
-creature really does change which one a cast resolves against. What
-doesn't exist, anywhere in the engine, is a projectile that travels: every
-cast is instant hit-scan (`_apply_cast_step_to` applies the effect
-synchronously, same frame, no yield/tween on position ever), confirmed by
-a zero-result grep for "homing" across the whole codebase and by reading
-`SpellEffectMarker.play()`'s own tweens (scale and `modulate:a` only, never
-position). This was a deliberate, already-documented design choice
-(`spell_runtime.md`'s own Open Questions: *"instant-resolve-in-a-cone is a
-deliberate stand-in"* for real projectile flight), not a regression —
-explicit targeting was never going to look like homing because nothing in
-this engine homes. Scoping a real travel/homing system is a bigger design
-decision (straight-line travel-to-target vs. true adaptive tracking of a
-moving target, and what that does to the instant-damage-on-cast
-architecture) than this fix pass covers; not built here, flagged to the
-user for scope before starting.
+section) was already correctly consulted at every delivery branch of
+`_resolve_cast_target` (`scenes/player.gd`) — Tab-selecting a creature
+really did change which one a cast resolved against. What didn't exist,
+anywhere in the engine, was a projectile that travels at all: every cast
+was instant hit-scan, confirmed by a zero-result grep for "homing" across
+the whole codebase and by reading `SpellEffectMarker.play()`'s own tweens
+(scale and `modulate:a` only, never position) — a deliberate, already-
+documented design choice (`spell_runtime.md`'s own Open Questions:
+*"instant-resolve-in-a-cone is a deliberate stand-in"*), not a regression.
+
+Given the real scope fork this implies — a simpler straight-line travel-
+to-target visual vs. true adaptive tracking of a moving target, with
+real consequences for whether damage keeps resolving at cast time or
+moves to arrival — the user was asked directly rather than guessed for.
+**Chose true adaptive homing.** Built:
+
+- `src/gameplay/spell_projectile_flight.gd` (new, pure): `position_after`
+  takes a FRESH aim point every call rather than storing a heading —
+  recomputing from scratch each frame against wherever the target
+  currently is already produces a curving path, no separate steering/
+  turn-rate model needed. `TRAVEL_SPEED_PX_PER_SEC` (500.0) is grounded
+  against two real, tested bounds rather than eyeballed: faster than
+  `SpeciesBite.FASTEST_PURSUIT_TILES_PER_SECOND` (so homing can never lose
+  a fleeing target to raw speed) and crosses `SpellTargeting.
+  PROJECTILE_RANGE` in under half of `Player.ATTACK_COOLDOWN`'s own pace
+  (so it still reads as a melee swing's snap, not a lobbed arc).
+- `src/rendering/spell_projectile_marker.gd` (new): a real Node2D that
+  tracks a target's live position (instance-id re-validated every frame,
+  mirroring `CreatureMarker._windup_target_id`'s own "a target can
+  legitimately be freed before the thing committed to it resolves"
+  pattern) and calls back on arrival. A target that stops existing
+  mid-flight is a miss at its last known position, never a retarget — the
+  same "commits to it" principle Explicit target selection already
+  established, extended to cover the flight itself.
+- `scenes/player.gd`: `_apply_cast_step` now launches a projectile for
+  `projectile` delivery instead of applying its effect synchronously;
+  `_resolve_projectile_arrival` is where the damage/kill-credit/mote-drop/
+  XP and the "cast" answer + camera shake actually happen now, reusing
+  `_apply_cast_step_to`/`_spawn_spell_effect` exactly as every other
+  delivery already does — just later. Mana, cooldown and the cast's own
+  acceptance are entirely unaffected (spent/set synchronously, unchanged).
+  `touch`/`area`/`self` are unchanged; only `projectile` homes.
+- A miss still launches a real bolt aimed at the resolved aim point rather
+  than popping an effect instantly — every projectile cast reads as the
+  same kind of event now, hit or miss.
+
+**Red-first throughout**: the pure flight module (9 tests, including the
+two speed bounds and a direct "recomputing toward a moved aim point bends
+the path" check) and the projectile node (8 behavioural tests, including
+the homing claim end to end and the mid-flight-target-loss rule) each
+confirmed red (class/method did not exist) before implementing; the
+Player-side wiring (4 new integration tests in `test_battle_loop.gd`:
+deferred damage, still-launches-on-a-miss, and homing proven through the
+real `cast_held()` path against a target that moves mid-flight) confirmed
+red (damage landed the same frame, no bolt existed) before wiring it in.
+
+**Regression**: every pre-existing test whose premise was instant-
+resolution for a `projectile`-delivery cast now drives the launched
+bolt(s) to arrival before asserting on their effect, the same way
+`test_creature_marker.gd`'s own windup tests already drive a bite to
+resolution (`test_battle_loop.gd`: 3 fixed; `test_player.gd`: 2 fixed).
+One of those two
+(`test_casting_projectile_with_nothing_in_range_still_shows_the_cast_
+effect`) turned out to be passing only by leftover-`SpellEffectMarker`
+pollution from an earlier test in the same run, not by genuinely proving
+its own claim — caught by actually reading why a test that "should" have
+failed didn't, not left as an accidental green. Checked the full call-
+surface (every test file that calls `cast_spell`/`cast_woven`/
+`cast_held`/`cast_spell_slot`, 7 files) rather than assuming the two fixed
+files were the whole blast radius: `test_player_spell_weaving.gd` (21/21,
+mana/cost-only assertions, unaffected), `test_player_spell_targeting.gd`
+(32/32, tests `_resolve_cast_target` directly and was never touched by
+this change), `test_player_spell_slots.gd`/`test_player_skill_payoff_
+wiring.gd`/`test_spell_kill_credit.gd` (checked directly — either no
+`projectile`-delivery spell cast at all, or only mana/selection/
+acceptance asserted, never synchronous damage) all confirmed unaffected
+rather than assumed safe.
+
+Open Questions bullet resolved for `projectile`; `area` is explicitly
+unchanged (a burst centered on a point was never this gap's target).
 
 
 Real play, same session as part 4 (below): *"the hero needs more mana and
