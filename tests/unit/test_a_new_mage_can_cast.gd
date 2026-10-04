@@ -109,6 +109,13 @@ func test_every_filled_slot_casts_from_its_own_key():
 		if player.spell_in_slot(slot) == "":
 			continue
 		player.mana = player.max_mana
+		# This test is about every slot's own cast reaching the pipeline, one
+		# key at a time -- not about the real-time pacing between them
+		# (docs/concept/spell_runtime.md "A cast has a cooldown"), so the
+		# cooldown the previous slot's cast started is cleared before trying
+		# the next, the same way player._attack_cooldown_remaining is reset
+		# in melee-loop tests elsewhere.
+		player._cast_cooldown_remaining = 0.0
 		assert_true(
 			player.cast_spell_slot(slot),
 			"key %d holds %s and must cast it" % [slot + 6, player.spell_in_slot(slot)]
@@ -136,6 +143,11 @@ func test_a_full_pool_is_worth_more_than_a_couple_of_casts():
 	var casts := 0
 	while player.cast_spell(player.selected_spell_id()) and casts < 100:
 		casts += 1
+		# This test measures the MANA a full pool buys, not the real-time
+		# cadence a cooldown now imposes (docs/concept/spell_runtime.md "A
+		# cast has a cooldown") -- clear it so the loop keeps being mana-
+		# bound, the thing it actually pins.
+		player._cast_cooldown_remaining = 0.0
 	assert_gt(casts, 2, "a full pool that buys two casts or fewer is not a caster's opening exchange")
 
 

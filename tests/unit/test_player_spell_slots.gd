@@ -81,6 +81,10 @@ func test_the_cast_key_repeats_the_selection():
 	player.cast_spell_slot(_slot_of_a_newly_learned("frost_lance"))
 	var before: float = player.mana
 	player.mana = player.max_mana
+	# This test is about the SELECTION the first cast left behind, not about
+	# the real-time gap a cooldown now requires between two casts
+	# (docs/concept/spell_runtime.md "A cast has a cooldown").
+	player._cast_cooldown_remaining = 0.0
 	assert_true(player.cast_held())
 	assert_lt(player.mana, player.max_mana, "it really cast something")
 	assert_eq(player.selected_spell_id(), "frost_lance")

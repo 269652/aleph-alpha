@@ -137,6 +137,10 @@ func test_a_creature_can_actually_be_killed_by_casting():
 	var casts := 0
 	while is_instance_valid(marker) and marker.info.health > 0.0 and casts < 200:
 		player.mana = player.max_mana
+		# A cast now has a cooldown (docs/concept/spell_runtime.md); this
+		# loop is about whether enough casts kill it, not about the real-
+		# time pacing between them.
+		player._cast_cooldown_remaining = 0.0
 		_face_the_creature(marker)
 		player.cast_held()
 		casts += 1

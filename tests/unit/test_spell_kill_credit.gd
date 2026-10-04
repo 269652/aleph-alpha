@@ -89,6 +89,11 @@ func _burn_down(marker) -> int:
 	for i in 200:
 		if marker.info == null or marker._death_has_begun():
 			return i
+		# A cast now has a cooldown (docs/concept/spell_runtime.md); this
+		# helper counts casts against MANA, the thing XP/mote credit tests
+		# below actually pin, so clear it the same way the sword-kill loop
+		# below already clears player._attack_cooldown_remaining.
+		player._cast_cooldown_remaining = 0.0
 		player.cast_spell(STARTER)
 		player.mana = player.max_mana
 	return -1
