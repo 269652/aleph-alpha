@@ -809,3 +809,132 @@ func test_spawn_reachable_population_multiplier_clears_the_guaranteed_marker_thr
 		boosted, 2.0,
 		"the sparsest real chunk should clear 1.0 (the guaranteed-marker threshold) with real margin, not barely"
 	)
+
+
+# -- goblins raiding together (see docs/concept/ecosystem_dynamics.md's
+# section of the same name) -- a rare per-chunk roll that REASSIGNS an
+# already-drawn herbivore-role population to goblin and clusters their
+# positions, rather than drawing any new population on top. The key
+# invariant: marker_count_for/MAX_MARKERS_PER_SPECIES must be completely
+# untouched -- a camp changes WHICH species and WHERE, never HOW MANY.
+
+func test_goblin_camp_chance_is_fifteen_percent():
+	assert_almost_eq(CreatureRenderer.GOBLIN_CAMP_CHANCE, 0.15, 0.001)
+
+
+## Statistical: the roll must actually produce roughly GOBLIN_CAMP_CHANCE's
+## own fraction of hits across many chunks, not just exist as an unused
+## constant. Wide tolerance -- this is a hash-based roll over a few hundred
+## samples, not a precise RNG stream.
+func test_is_goblin_camp_chunk_hits_roughly_its_own_chance_across_many_chunks():
+	var hits := 0
+	var samples := 400
+	for coord_x in samples:
+		if renderer._is_goblin_camp_chunk(Vector2i(coord_x, 0), "grassland"):
+			hits += 1
+	var observed := float(hits) / float(samples)
+	assert_almost_eq(observed, CreatureRenderer.GOBLIN_CAMP_CHANCE, 0.08)
+
+
+func test_is_goblin_camp_chunk_is_always_false_outside_spawn_reachable_biomes():
+	for biome_name in ["tundra", "desert", "rainforest", "mountain", "ocean", ""]:
+		for coord_x in 50:
+			assert_false(
+				renderer._is_goblin_camp_chunk(Vector2i(coord_x, 0), biome_name),
+				"%s should never roll a goblin camp" % biome_name
+			)
+
+
+## Bounded search for a REAL chunk_coord that rolls true -- the roll is a
+## deterministic hash, so this is reproducible, not flaky. 200 tries against
+## a 0.15 chance leaves essentially no realistic chance of exhausting the
+## loop (0.85^200 is astronomically small); the failure message is there
+## only to turn a true regression (the roll itself broken) into a clear
+## failure instead of a silent Vector2i.ZERO.
+func _find_a_camp_chunk(biome_name: String, row: int) -> Vector2i:
+	for coord_x in 200:
+		var coord := Vector2i(coord_x, row)
+		if renderer._is_goblin_camp_chunk(coord, biome_name):
+			return coord
+	assert_true(false, "no goblin camp chunk found in 200 tries -- GOBLIN_CAMP_CHANCE or the roll may be broken")
+	return Vector2i.ZERO
+
+
+func _find_a_non_camp_chunk(biome_name: String, row: int) -> Vector2i:
+	for coord_x in 200:
+		var coord := Vector2i(coord_x, row)
+		if not renderer._is_goblin_camp_chunk(coord, biome_name):
+			return coord
+	assert_true(false, "every one of 200 chunks rolled a camp -- GOBLIN_CAMP_CHANCE may be miscalibrated")
+	return Vector2i.ZERO
+
+
+func test_a_camp_chunks_herbivore_role_markers_are_all_goblin():
+	var camp_chunk := _find_a_camp_chunk("forest", 701)
+	var spawned := renderer.spawn_creatures(
+		parent, camp_chunk, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 4.0, 0.0, null, "forest"
+	)
+	assert_gt(spawned.size(), 0, "precondition: the camp chunk should draw at least one herbivore-role marker")
+	for creature in spawned:
+		assert_eq(creature.info.species, "goblin", "every herbivore-role marker in a camp chunk should be goblin")
+
+
+func test_a_camp_chunks_goblins_stand_close_together():
+	var camp_chunk := _find_a_camp_chunk("forest", 702)
+	var spawned := renderer.spawn_creatures(
+		parent, camp_chunk, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 4.0, 0.0, null, "forest"
+	)
+	assert_gte(spawned.size(), 2, "precondition: need at least 2 goblins to check clustering")
+	var first_position: Vector2 = spawned[0].position
+	for creature in spawned:
+		assert_lt(
+			creature.position.distance_to(first_position),
+			CreatureRenderer.CAMP_CLUSTER_RADIUS_TILES * 3.0 * TILE_SIZE,
+			"camp goblins should stand close together, not scattered across the whole chunk"
+		)
+
+
+func test_a_non_camp_chunk_still_draws_a_mixed_herbivore_pool():
+	var species_seen := {}
+	for coord_x in range(200, 260):
+		var coord := Vector2i(coord_x, 703)
+		if renderer._is_goblin_camp_chunk(coord, "grassland"):
+			continue
+		var spawned := renderer.spawn_creatures(
+			parent, coord, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 1.0, 0.0, null, "grassland"
+		)
+		for creature in spawned:
+			species_seen[creature.info.species] = true
+			creature.free()
+	assert_true(species_seen.has("deer"), "non-camp chunks should still draw the ordinary mixed pool")
+
+
+func test_a_spawn_safe_chunk_never_forces_a_goblin_camp():
+	var camp_chunk := _find_a_camp_chunk("forest", 704)
+	var spawned := renderer.spawn_creatures(
+		parent, camp_chunk, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 4.0, 0.0, null, "forest",
+		RegionDifficulty.Tier.HARD, 0, true
+	)
+	for creature in spawned:
+		assert_ne(creature.info.species, "goblin", "a spawn-safe chunk should never force a goblin camp")
+
+
+func test_a_camp_chunk_does_not_affect_the_predator_role_draw():
+	var camp_chunk := _find_a_camp_chunk("forest", 705)
+	var spawned := renderer.spawn_creatures(
+		parent, camp_chunk, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 0.0, 3.0, null, "forest"
+	)
+	for creature in spawned:
+		assert_ne(
+			creature.info.species, "goblin", "goblin is herbivore-role; a camp must never force the predator draw"
+		)
+
+
+## The invariant the whole mechanic rests on: a camp REASSIGNS, never ADDS.
+func test_a_camp_chunk_draws_the_same_marker_count_as_marker_count_for_decides():
+	var camp_chunk := _find_a_camp_chunk("forest", 706)
+	var camp_spawned := renderer.spawn_creatures(
+		parent, camp_chunk, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 4.0, 0.0, null, "forest"
+	).size()
+	var expected := renderer.marker_count_for(4.0, camp_chunk, 1)
+	assert_eq(camp_spawned, expected, "a camp must draw exactly the same count marker_count_for already decides")

@@ -1752,6 +1752,71 @@ runs — only the COUNT changed. Nothing here places a monster, spawns a
 pack on a timer, or gives a creature combat stats or behaviour a herd
 elsewhere in the world doesn't already have.
 
+### Goblins raiding together (2026-10-04)
+
+Asked again: *"I still don't encounter any goblin settlements or groups of
+monsters."* Fair — every density/pool-composition fix above still draws
+each individual marker INDEPENDENTLY (`CreatureRenderer._spawn_species`
+picks each index's species via its own uniform hash over the pool, scatters
+its position via its own separate hash over the whole chunk). Goblin was
+only ever one entry among many in that per-index draw — at today's density
+it averages roughly 0.4–1.4 goblins per chunk, scattered, indistinguishable
+from meeting a deer or a boar one at a time. Nothing anywhere in this file,
+or in `CreatureBehavior`'s priority ladder, ever pulled same-species
+individuals toward each other once spawned — grouping has to happen at
+spawn time, not as a post-spawn behaviour.
+
+**No existing structure to hang this on, confirmed by direct search.**
+Unlike a village (`VillageLayout`, a genuine site-planning algorithm —
+frontage search, collision checks, road spurs — built for PERSISTENT
+buildings grown one at a time by `VillageAssembly`) there is no camp, ruin,
+or dungeon structure-placement system anywhere in this codebase to place a
+goblin warband around. "Ruin" here is purely an `Event`-log abstraction
+(a former settlement/path/institution's decline, see
+`EarthChunkManager.record_ruin_from_*`) with no sprite or spawned node of
+its own. So this is a pure CREATURE-clustering mechanic — no new visual
+landmark — and it has to earn that the same way everything else in this
+doc does: a real, deterministic mechanism, not a hand-placed camp.
+
+**The right-sized precedent: `AntColony`/`BeeColony`'s one-shot anchor
+roll**, not `VillageLayout` (far too heavy — no terrain-collision search or
+incremental growth is needed for a transient creature cluster) and not
+those classes themselves (porting them would pull Goblin out of the
+ordinary `CreatureMarker` pool machinery it already fully participates in —
+combat, AI, difficulty gating, disease — into a parallel population system,
+a far bigger change than "they stand near each other"). The shape worth
+reusing: a rare, seeded, per-region chance check, fixed for the region's
+life, nothing dispatched on a timer.
+
+**`CreatureRenderer.GOBLIN_CAMP_CHANCE` (0.15).** A deterministic per-CHUNK
+roll (one hash of `chunk_coord`, unlike `MOUND_CHANCE`/`HIVE_CHANCE`'s
+per-CELL roll — a camp is a property of the whole chunk, not a scatter of
+many small anchors within it), scoped to `SPAWN_REACHABLE_BIOMES` the same
+way every other Goblin-density lever already is, and gated off entirely on
+a `spawn_safe` chunk (the literal spawn clearing stays exactly as hostile-
+free as it already promises). ≈16 non-safe spawn-reachable chunks sit in a
+player's loaded neighbourhood today (measured directly, see "More wildlife
+where you'll actually meet it" above) — at 0.15, that's an expected ~2.4
+camps typically within reach: findable without hunting for one, not tripped
+over on every excursion.
+
+**On a camp chunk: redistribution, not addition.** The key structural fact
+that makes this safe: `_spawn_species` already computes species and
+position as two INDEPENDENT hashes of the same index — nothing links "which
+species index `i` is" to "where index `i` stands." A camp chunk exploits
+exactly that separation and nothing else: every herbivore-role index reads
+`"goblin"` instead of its usual pool draw, and its position comes from a
+camp-anchor-relative offset (within `CAMP_CLUSTER_RADIUS_TILES`, one
+deterministic anchor point per chunk) instead of the ordinary whole-chunk
+scatter. `marker_count_for`, `_allowed_pool`, `MAX_MARKERS_PER_SPECIES`, and
+`_reconcile_chunk_creatures`'s own "same chunk+salt ⇒ same count" invariant
+are completely untouched — a camp never spawns EXTRA creatures on top of
+the existing population roll, it reassigns which species and where the
+SAME count already drawn lands. A dense chunk's existing 2–6 herbivore-role
+markers becoming 2–6 goblins standing together IS the raiding party; no new
+population number needed. Predator-role draws are entirely unaffected — a
+camp is goblins specifically, not a mixed warband with Nachzehrer.
+
 ## Status / mechanisms
 
 - ✅ **Steady combat near spawn** (2026-09-27) — `SPAWN_REACHABLE_BIOMES`
@@ -1795,6 +1860,16 @@ elsewhere in the world doesn't already have.
   itself is untouched, so the trophic ratio is preserved; only the whole
   local food web's scale changes, and only in the two biomes a player can
   actually reach on foot from spawn.
+- ✅ **Goblins raiding together** (2026-10-04) —
+  `CreatureRenderer.GOBLIN_CAMP_CHANCE` (0.15, tested), a per-chunk
+  deterministic roll scoped to `SPAWN_REACHABLE_BIOMES` and gated off on
+  spawn-safe chunks. A camp chunk reassigns its ALREADY-drawn
+  herbivore-role markers to goblin and clusters their positions near one
+  shared anchor (`_camp_cluster_position`, `CAMP_CLUSTER_RADIUS_TILES = 3`)
+  instead of the ordinary whole-chunk scatter — `marker_count_for`/
+  `MAX_MARKERS_PER_SPECIES`/the reconcile-pass invariant are completely
+  untouched. No new structure or sprite (none exists to reuse); a pure
+  creature-clustering mechanic.
 - ✅ `region_difficulty.gd` (chunk-distance-from-spawn → tier), wired into
   `CreatureRenderer`'s species-pool selection (`MIN_DIFFICULTY_TIER_BY_SPECIES`)
   and `EarthChunkManager.set_spawn_tile`/`_difficulty_tier_at`.

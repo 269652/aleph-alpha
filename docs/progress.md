@@ -23,6 +23,48 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Way more enemies, part 4: goblins raiding together (2026-10-04) — see `concept/ecosystem_dynamics.md`
+
+*"I still don't encounter any goblin settlements or groups of monsters."*
+Fair — every density/pool-composition fix in parts 1-3 (below) still drew
+each individual marker INDEPENDENTLY; Goblin was just one more entry in a
+per-index uniform draw, never a readable group (averaging ~0.4-1.4 goblins
+per chunk, scattered). Confirmed by direct search: no camp/ruin/dungeon
+structure-placement system exists anywhere in this codebase to hang a
+"settlement" on (`VillageLayout` is a genuine site-planning algorithm built
+for persistent collision-checked buildings — far too heavy for a transient
+creature cluster; "ruin" here is purely an `Event`-log abstraction with no
+sprite or node of its own). So this is a pure creature-clustering
+mechanic, modelled on `AntColony`/`BeeColony`'s one-shot per-region anchor
+roll rather than on `VillageLayout` or on porting those classes wholesale
+(which would pull Goblin out of the ordinary `CreatureMarker` machinery it
+already fully participates in).
+
+**`CreatureRenderer.GOBLIN_CAMP_CHANCE` (0.15).** The key structural fact
+that makes this safe: `_spawn_species` already computes each index's
+species and position as two INDEPENDENT hashes — nothing links "which
+species index `i` is" to "where index `i` stands." A camp chunk (a
+deterministic per-chunk roll, scoped to `SPAWN_REACHABLE_BIOMES`, gated off
+on spawn-safe chunks) exploits exactly that separation: every
+herbivore-role index reads `"goblin"` instead of its usual pool draw, and
+its position comes from a shared camp anchor (`_camp_cluster_position`,
+`CAMP_CLUSTER_RADIUS_TILES = 3`) instead of the whole-chunk scatter.
+**Redistribution, not addition** — `marker_count_for`,
+`MAX_MARKERS_PER_SPECIES`, and `_reconcile_chunk_creatures`'s own "same
+chunk+salt ⇒ same count" invariant are completely untouched; a camp never
+draws extra population, it reassigns the SAME count already rolled. A
+dense chunk's existing 2-6 herbivore-role markers becoming 2-6 goblins
+standing together near one point IS the raiding party.
+
+9 new red-first tests: the constant's pinned value, a statistical check
+that the roll actually hits ~15% across 400 sampled chunks, the biome
+scoping, that a camp chunk's markers are ALL goblin and stand close
+together, that a non-camp chunk still draws the ordinary mixed pool, that
+a spawn-safe chunk never forces a camp, that the predator-role draw is
+untouched, and that a camp draws exactly the count `marker_count_for`
+already decided. 67/67 across the full `test_creature_renderer.gd` suite,
+plus a 22-test cross-feature sanity check.
+
 ### Way more enemies, part 3: the real bottleneck was population count, not species mix (2026-10-03) — see `concept/ecosystem_dynamics.md`
 
 Real play, after part 2 (below) had already shipped: *"There are still no

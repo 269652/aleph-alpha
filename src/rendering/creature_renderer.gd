@@ -161,6 +161,27 @@ const MIN_FIGHT_CAPABLE_HERBIVORE_FRACTION := 0.5
 ## marker_threshold_with_margin.
 const SPAWN_REACHABLE_POPULATION_MULTIPLIER := 5.0
 
+## "I still don't encounter any goblin settlements or groups of monsters"
+## (docs/concept/ecosystem_dynamics.md's "Goblins raiding together"):
+## every density fix above still draws each marker INDEPENDENTLY, so Goblin
+## was just one more entry in the per-index pool draw -- never a readable
+## group. A deterministic per-CHUNK roll (one hash of chunk_coord, unlike
+## MOUND_CHANCE/HIVE_CHANCE's per-cell roll -- a camp is a property of the
+## whole chunk), scoped to SPAWN_REACHABLE_BIOMES and gated off on
+## spawn-safe chunks by _is_goblin_camp_chunk below. ~16 non-safe
+## spawn-reachable chunks sit in a loaded neighbourhood (measured directly)
+## -- 0.15 means an expected ~2.4 camps typically within reach: findable,
+## not tripped over on every excursion. Pinned by
+## test_goblin_camp_chance_is_fifteen_percent and its own statistical
+## verification test.
+const GOBLIN_CAMP_CHANCE := 0.15
+
+## How far (in tiles) a camp's goblins scatter from their shared anchor
+## point -- close enough to read as "together," never on the exact same
+## tile. 3 tiles (48px at TILE_SIZE=16) keeps a camp tight and readable
+## on screen without every goblin standing on the same pixel.
+const CAMP_CLUSTER_RADIUS_TILES := 3
+
 ## Wolf joins forest only (real wolves are the classic temperate/boreal
 ## forest apex predator, and this project's own dominant-species-per-biome
 ## pattern -- jackal/desert, arctic_fox/tundra, jaguar/rainforest,
@@ -300,12 +321,17 @@ func spawn_creatures(
 	var predator_pool := _allowed_pool(
 		PREDATOR_SPECIES_POOL_BY_BIOME.get(biome_name, PREDATOR_SPECIES_POOL), difficulty_tier, spawn_safe
 	)
+	# Goblins raiding together (docs/concept/ecosystem_dynamics.md): never
+	# computed when spawn_safe, so a camp can never land in the literal
+	# spawn clearing -- the same guarantee _allowed_pool's own spawn_safe
+	# filtering already makes for every other hostile species.
+	var is_camp := not spawn_safe and _is_goblin_camp_chunk(chunk_coord, biome_name)
 
 	var spawned: Array[Node2D] = []
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			herbivore_population, herbivore_pool, 1, world, start_index, difficulty_tier
+			herbivore_population, herbivore_pool, 1, world, start_index, difficulty_tier, is_camp
 		)
 	)
 	spawned.append_array(
@@ -392,6 +418,19 @@ func _allowed_pool(pool: Array, difficulty_tier: int, spawn_safe: bool = false) 
 	return allowed
 
 
+## Whether this chunk should read as a goblin camp (see GOBLIN_CAMP_CHANCE
+## above) -- a deterministic, seeded, per-chunk coin flip, exactly the
+## shape AntColony.MOUND_CHANCE/BeeColony.HIVE_CHANCE already use for
+## "fixed for the chunk's life, nothing placed by hand or on a timer",
+## scoped to SPAWN_REACHABLE_BIOMES the same way every other Goblin-density
+## lever already is.
+func _is_goblin_camp_chunk(chunk_coord: Vector2i, biome_name: String) -> bool:
+	if not (biome_name in SPAWN_REACHABLE_BIOMES):
+		return false
+	var roll := float(absi(hash("%d_%d_goblin_camp" % [chunk_coord.x, chunk_coord.y])) % 10000) / 10000.0
+	return roll < GOBLIN_CAMP_CHANCE
+
+
 func _spawn_species(
 	parent: Node2D,
 	chunk_coord: Vector2i,
@@ -403,7 +442,8 @@ func _spawn_species(
 	species_salt: int,
 	world,
 	start_index: int = 0,
-	difficulty_tier: int = RegionDifficulty.Tier.EASY
+	difficulty_tier: int = RegionDifficulty.Tier.EASY,
+	is_camp: bool = false
 ) -> Array[Node2D]:
 	# Every PREDATOR_SPECIES_POOL_BY_BIOME entry is hostile by definition, so
 	# a spawn-safe chunk's _allowed_pool call empties the predator pool
@@ -412,6 +452,11 @@ func _spawn_species(
 	# species_pool.size()] below would divide by zero on an empty pool.
 	if species_pool.is_empty():
 		return []
+	# A camp REASSIGNS the already-drawn count to goblin rather than ever
+	# changing it -- defensive, since spawn_creatures already never computes
+	# is_camp=true for a spawn_safe chunk (goblin is AGGRESSIVE-tempered, so
+	# _allowed_pool would have stripped it from species_pool there anyway).
+	var camp_active := is_camp and species_pool.has("goblin")
 	var count := marker_count_for(population, chunk_coord, species_salt)
 	var spawned: Array[Node2D] = []
 	# `start_index` lets a chunk TOP UP rather than rebuild (see
@@ -420,11 +465,17 @@ func _spawn_species(
 	# rather than landing on top of an animal already standing there.
 	for i in range(start_index, count):
 		var wander_seed := hash("%d_%d_%d_%d_wander" % [chunk_coord.x, chunk_coord.y, species_salt, i])
-		var species_seed := absi(hash("%d_%d_%d_%d_species" % [chunk_coord.x, chunk_coord.y, species_salt, i]))
-		var species_name: String = species_pool[species_seed % species_pool.size()]
-		var position := _deterministic_position(
-			chunk_coord, chunk_origin_tiles, chunk_size, tile_size, species_salt, i
-		)
+		var species_name: String
+		var position: Vector2
+		if camp_active:
+			species_name = "goblin"
+			position = _camp_cluster_position(chunk_coord, chunk_origin_tiles, chunk_size, tile_size, i)
+		else:
+			var species_seed := absi(hash("%d_%d_%d_%d_species" % [chunk_coord.x, chunk_coord.y, species_salt, i]))
+			species_name = species_pool[species_seed % species_pool.size()]
+			position = _deterministic_position(
+				chunk_coord, chunk_origin_tiles, chunk_size, tile_size, species_salt, i
+			)
 		# A land animal does not stand on open water. The deterministic
 		# point takes no account of it, so an all-water chunk was given a
 		# full land population standing on the lake (reported live with a
@@ -552,6 +603,36 @@ func _deterministic_position(
 	var seed_value := hash("%d_%d_%d_%d" % [chunk_coord.x, chunk_coord.y, species_salt, index])
 	var local_x := seed_value % chunk_size
 	var local_y := (seed_value / chunk_size) % chunk_size
+	return Vector2(
+		(chunk_origin_tiles.x + local_x + 0.5) * tile_size,
+		(chunk_origin_tiles.y + local_y + 0.5) * tile_size
+	)
+
+
+## Where a camp's goblins stand (see GOBLIN_CAMP_CHANCE/_is_goblin_camp_chunk
+## above): one shared ANCHOR point, seeded from chunk_coord alone so every
+## index in the camp agrees on it, then a small per-index offset (seeded
+## from chunk_coord + index, bounded to CAMP_CLUSTER_RADIUS_TILES) so
+## individuals don't stack on the exact same tile. The same shape
+## _deterministic_position already uses, with one extra shared anchor step.
+func _camp_cluster_position(
+	chunk_coord: Vector2i,
+	chunk_origin_tiles: Vector2i,
+	chunk_size: int,
+	tile_size: int,
+	index: int
+) -> Vector2:
+	var anchor_seed := hash("%d_%d_goblin_camp_anchor" % [chunk_coord.x, chunk_coord.y])
+	var anchor_x := anchor_seed % chunk_size
+	var anchor_y := (anchor_seed / chunk_size) % chunk_size
+
+	var span := CAMP_CLUSTER_RADIUS_TILES * 2 + 1
+	var offset_seed := hash("%d_%d_goblin_camp_offset_%d" % [chunk_coord.x, chunk_coord.y, index])
+	var offset_x := (offset_seed % span) - CAMP_CLUSTER_RADIUS_TILES
+	var offset_y := ((offset_seed / span) % span) - CAMP_CLUSTER_RADIUS_TILES
+
+	var local_x := clampi(anchor_x + offset_x, 0, chunk_size - 1)
+	var local_y := clampi(anchor_y + offset_y, 0, chunk_size - 1)
 	return Vector2(
 		(chunk_origin_tiles.x + local_x + 0.5) * tile_size,
 		(chunk_origin_tiles.y + local_y + 0.5) * tile_size
