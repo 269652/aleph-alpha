@@ -66,15 +66,43 @@ new lines, re-running, then restoring them — `cast_spell`'s gate alone
 does not cover `cast_woven`, so this is a real, independently-driven test,
 not a shared false green.
 
-Found and fixed in passing: two pre-existing, unrelated test failures
-(`test_a_catalogue_spell_you_have_not_learned_is_not_castable`,
-`test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana`)
-both used `"minor_heal"` as a "spell you have not learned" example, but it
-is one of `SpellTuition.STARTING_SPELL_IDS` — every fresh player already
-knows it. Swapped to `"farsight"` (confirmed not a starting spell) in both.
+Found and fixed in passing, two rounds of the same pre-existing, unrelated
+bug: `"minor_heal"` is one of `SpellTuition.STARTING_SPELL_IDS` (predates
+this session by weeks — `spell_tuition.gd` landed 2026-09-19), so every
+test across this file that used it as a *"spell you have not learned yet"*
+example was exercising the wrong branch. First round, found while verifying
+the mana buff: `test_a_catalogue_spell_you_have_not_learned_is_not_castable`
+and `test_being_refused_a_spell_you_do_not_know_says_so_rather_than_
+blaming_mana`, both swapped to `"farsight"`. Second round, found during this
+feature's full-suite regression sweep: the mage-guild tuition block (lines
+~2115–2340) used `"minor_heal"` throughout as its teachable-but-unknown
+example, so `learn_spell("minor_heal")` hit `ALREADY_KNOWN` instead of the
+refusal/success path each test actually meant to exercise. 5 tests were
+ACTIVELY FAILING this way (`test_learning_out_in_a_field_is_refused_and_
+costs_nothing`, `test_a_guild_nobody_has_moved_into_yet_teaches_nothing`,
+`test_learning_inside_a_guild_charges_the_tuition_and_teaches_the_spell`,
+`test_learning_without_the_gold_is_refused_and_names_the_shortfall`,
+`test_a_guild_will_not_charge_twice_for_one_spell`); a 6th
+(`test_learned_spells_survive_a_save_and_reload`) was passing *vacuously* —
+`"minor_heal"` surviving a reload proved nothing, since it would have
+survived as a starting spell whether or not the guild lesson itself worked.
+All 6 swapped to `"farsight"`, confirmed via `_a_guild_seed_teaching`/
+`_learn_at_a_guild` being fully spell-agnostic test helpers (they search for
+a seed/master that teaches whichever id they're given). The remaining
+`"minor_heal"` uses in this file are left exactly as they are: some
+(`test_a_guild_quotes_a_real_price_for_a_spell_it_can_teach`, several guild-
+occupancy tests) never depended on known/unknown status at all; two
+(`test_casting_a_self_delivery_spell_heals_the_caster`, and this file's own
+documented fix for the ORIGINAL two) deliberately rely on `minor_heal`
+being castable from the start. **Known remaining gap**: `test_a_spell_
+learned_at_a_guild_is_really_castable` still passes vacuously the same way
+the save/reload test did — it wants a non-starting *healing* spell to
+replace `minor_heal` with, and no other self-delivery heal exists in the
+catalogue today (confirmed by search); fixing it needs either a new heal
+spell or a different assertion, out of scope for this pass.
 
-26/26 cast-filtered + 21/21 full `test_player_spell_weaving.gd` + 12/12
-`test_class_archetype.gd` green.
+13/13 guild-filtered + 13/13 learn-filtered + 26/26 cast-filtered + 21/21
+full `test_player_spell_weaving.gd` + 12/12 `test_class_archetype.gd` green.
 
 **A cap on simultaneous attackers** — the measured dominant cause of losing
 to 3 boars at once (see `concept/combat.md`'s "Three at once was never the

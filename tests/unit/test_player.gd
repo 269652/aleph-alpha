@@ -2117,15 +2117,22 @@ func test_a_guild_quotes_a_real_price_for_a_spell_it_can_teach():
 	assert_gt(player.tuition_for("minor_heal"), 0)
 
 
+## Pre-existing bug fixed in passing (unrelated to the combat-balance work
+## this file is otherwise touching, same root cause as the cast_spell fix
+## above): this whole guild/tuition block used "minor_heal" as its "a spell
+## not yet known" example, but it is a STARTING spell -- a fresh player
+## already knows it, so `learn_spell("minor_heal")` refuses ALREADY_KNOWN
+## before it ever reaches the check each test actually means to exercise.
+## "farsight" is a real catalogue spell no starting class knows.
 func test_learning_out_in_a_field_is_refused_and_costs_nothing():
 	player.wallet.add(100000)
 
-	var result: Dictionary = player.learn_spell("minor_heal")
+	var result: Dictionary = player.learn_spell("farsight")
 
 	assert_false(result["ok"])
 	assert_eq(result["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
 	assert_eq(player.wallet.balance, 100000, "a refusal must never move gold")
-	assert_false(player.known_spell_ids().has("minor_heal"))
+	assert_false(player.known_spell_ids().has("farsight"))
 
 
 func test_standing_right_beside_a_guild_is_still_standing_outside_it():
@@ -2150,10 +2157,10 @@ func test_being_inside_some_other_building_is_not_being_inside_a_guild():
 
 func test_a_guild_nobody_has_moved_into_yet_teaches_nothing():
 	# Pillar 1: the building is not the teacher.
-	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), 0)
+	_enter_a_guild(_a_guild_seed_teaching("farsight"), 0)
 	player.wallet.add(100000)
 
-	var result: Dictionary = player.learn_spell("minor_heal")
+	var result: Dictionary = player.learn_spell("farsight")
 
 	assert_false(result["ok"])
 	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_MASTER)
@@ -2162,17 +2169,17 @@ func test_a_guild_nobody_has_moved_into_yet_teaches_nothing():
 
 
 func test_learning_inside_a_guild_charges_the_tuition_and_teaches_the_spell():
-	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
-	var price: int = player.tuition_for("minor_heal")
+	_enter_a_guild(_a_guild_seed_teaching("farsight"), MageGuildRoster.CAPACITY)
+	var price: int = player.tuition_for("farsight")
 	player.wallet.add(price + 5)
 
-	var result: Dictionary = player.learn_spell("minor_heal")
+	var result: Dictionary = player.learn_spell("farsight")
 
 	assert_true(result["ok"])
 	assert_eq(result["gold"], price)
 	assert_eq(player.wallet.balance, 5)
-	assert_true(player.known_spell_ids().has("minor_heal"))
-	assert_true(MageMaster.teaches(_book, "minor_heal", int(result["teacher"])),
+	assert_true(player.known_spell_ids().has("farsight"))
+	assert_true(MageMaster.teaches(_book, "farsight", int(result["teacher"])),
 		"the lesson was credited to somebody who does not teach it")
 
 
@@ -2300,11 +2307,11 @@ func test_a_spell_learned_at_a_guild_is_really_castable():
 
 
 func test_learning_without_the_gold_is_refused_and_names_the_shortfall():
-	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
-	var price: int = player.tuition_for("minor_heal")
+	_enter_a_guild(_a_guild_seed_teaching("farsight"), MageGuildRoster.CAPACITY)
+	var price: int = player.tuition_for("farsight")
 	player.wallet.add(price - 10)
 
-	var result: Dictionary = player.learn_spell("minor_heal")
+	var result: Dictionary = player.learn_spell("farsight")
 
 	assert_false(result["ok"])
 	assert_eq(result["refusal"].get("reason", ""), SpellTuition.CANNOT_AFFORD)
@@ -2313,10 +2320,10 @@ func test_learning_without_the_gold_is_refused_and_names_the_shortfall():
 
 
 func test_a_guild_will_not_charge_twice_for_one_spell():
-	_learn_at_a_guild("minor_heal")
+	_learn_at_a_guild("farsight")
 	player.wallet.add(100000)
 
-	var result: Dictionary = player.learn_spell("minor_heal")
+	var result: Dictionary = player.learn_spell("farsight")
 
 	assert_false(result["ok"])
 	assert_eq(result["refusal"].get("reason", ""), SpellTuition.ALREADY_KNOWN)
@@ -2325,15 +2332,19 @@ func test_a_guild_will_not_charge_twice_for_one_spell():
 
 func test_learned_spells_survive_a_save_and_reload():
 	# A permanent capability bought with real gold must not evaporate on
-	# reload, the same as karma or a spent life.
-	_learn_at_a_guild("minor_heal")
+	# reload, the same as karma or a spent life. "farsight" rather than
+	# "minor_heal" (a starting spell every fresh player already has, which
+	# made this pass whether or not the guild lesson itself worked) -- this
+	# must prove the LEARNED spell specifically survived, not just the
+	# starting kit.
+	_learn_at_a_guild("farsight")
 	var save_data := player.to_save_dict()
 
 	var reloaded := PlayerScene.instantiate()
 	add_child(reloaded)
 	reloaded.apply_save_dict(save_data)
 
-	assert_true(reloaded.known_spell_ids().has("minor_heal"))
+	assert_true(reloaded.known_spell_ids().has("farsight"))
 	remove_child(reloaded)
 	reloaded.free()
 
