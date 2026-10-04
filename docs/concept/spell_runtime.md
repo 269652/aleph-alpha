@@ -193,6 +193,97 @@ about targeting is legible without SOME on-screen answer to "what did I
 just select," and a toggled pip is the cheapest honest one already proven
 in this file.
 
+### Projectile flight: a cast that truly homes (2026-10-04)
+
+Asked directly, after Explicit target selection (above) shipped: *"selecting
+a threat with tab doesn't make the spells homing."* Investigated before
+assuming the wiring was broken — it wasn't. `_resolve_cast_target` already
+checks `_explicit_target` first, exactly as specified above; Tab-selecting a
+creature really does change which one a cast resolves against. What the
+report actually named is the gap this doc's own Open Questions already
+owned up to: *"No real projectile flight exists for `projectile`/`area`
+delivery... instant-resolve-in-a-cone is a deliberate stand-in."* Explicit
+targeting was never going to look like homing, because nothing in this
+engine homes. This section builds the real thing, scoped to `projectile`
+only — `touch` is point-blank contact with nothing to travel, `area` is a
+burst centered on a point rather than a single pursued target, and `self`
+has no target at all; none of the three change here.
+
+**Resolution still happens once, at cast time — only the DELIVERY of its
+effect moves.** `_resolve_cast_target("projectile")` is unchanged: it still
+runs synchronously when the cast is thrown, using the exact explicit-
+target-aware, whiff-rather-than-redirect logic specified above, and still
+decides once and for all whether this cast has a target and which creature
+it is. What changes is what happens with that answer. Before: the resolved
+target (or a miss) was applied instantly, same frame, like every other
+delivery. Now: a real `SpellProjectileMarker` (`src/rendering/`) spawns at
+the caster's position and tracks the resolved target's LIVE position every
+frame, moving toward it at a fixed speed — the damage, kill credit, mote
+drop, XP, "cast" answer and camera shake all move with it, firing on
+arrival rather than at cast time. A multi-atom projectile pipeline launches
+one projectile per atom (mirroring the chain-stagger cascade already
+specified for `_spawn_spell_effect` — each atom's bolt leaves a beat after
+the last) rather than inventing a second multi-target bundling concept;
+each resolves, and answers, independently of the others.
+
+**True homing, the simple and correct form of it: full accuracy, no turn
+rate.** Every frame, the projectile reads its target's CURRENT position (not
+the position it had at launch) and takes one step directly toward it at
+`SpellProjectileFlight.TRAVEL_SPEED_PX_PER_SEC`. No steering/turn-rate model
+exists or is needed — recomputing the heading from scratch each frame
+already produces a path that visibly curves to follow a moving target,
+which is the whole ask. A limited turn rate (so a target could out-maneuver
+a shot by juking) is a real, separate design a future pass could add; this
+one does not, because nothing asked for it and the simpler model already
+delivers "the spell homes."
+
+**Speed: faster than anything in the game could ever need it to catch, by
+a wide, tested margin — not a hand-picked number.**
+`SpeciesBite.FASTEST_PURSUIT_TILES_PER_SECOND` (5.5 tiles/s — the fastest
+any creature in this roster can move, already itself derived from, and
+pinned faster than, the player's own sprint speed) is the real ceiling on
+"how fast could the thing this bolt is chasing be going." `TRAVEL_SPEED_PX_
+PER_SEC` is **500.0** (31.25 tiles/s at `TILE_SIZE=16`) — comfortably faster
+than that ceiling (pinned by test, not just asserted in prose), so a bolt
+can never lose a fleeing target to raw speed; homing is actually
+inevitable, not merely visual. The same number also keeps the shot feeling
+like a melee swing's own snap rather than a lobbed arc: crossing the full
+`SpellTargeting.PROJECTILE_RANGE` (120px, the rare maximum-range case) takes
+0.24s — under half of `ATTACK_COOLDOWN` (0.5s) — while a typical close-range
+cast (most of this codebase's own test setups stand well under 50px away)
+arrives in a couple of physics frames, close enough to instant that it
+reads as a snappy zap rather than a travel delay.
+
+**A miss still flies — it just flies at empty air.** Before this, a whiffed
+projectile cast popped its effect into existence instantly at the resolved
+aim point (`_cast_aim_point`). Now it launches the exact same way a hit
+does, aimed at that same point instead of a creature, and resolves (shows
+its whiff VFX, deals nothing) on arrival there — so every projectile cast
+reads as the same kind of event, something visibly leaving the caster,
+whether or not anything was in range to catch it.
+
+**A target that stops existing mid-flight is a miss at its last known
+position, never a retarget.** The projectile holds the target's instance id
+(`instance_from_id`/`is_instance_valid` re-checked every frame, the exact
+pattern `CreatureMarker._windup_target_id` already establishes for "a
+target can legitimately be freed before the thing committed to it
+resolves") and remembers its last live position. The moment validity is
+lost — the creature died, despawned, or was captured mid-flight — the bolt
+keeps its current heading toward that last known point rather than
+reacquiring anything else, and resolves there as a whiff once it arrives.
+This is the same "commits to it rather than silently overriding" principle
+Explicit target selection already established for the LAUNCH decision,
+extended to cover the flight itself: a shot that was thrown at something
+real does not quietly become a shot at whatever else happens to be nearby
+just because its original target stopped being available.
+
+**Mana, cooldown and the cast's own acceptance are entirely unaffected.**
+They are spent/set at cast time, synchronously, exactly as before — a
+`projectile` cast that whiffs still costs what it always cost, and
+`cast_spell`/`cast_woven` still return `true` the instant the cast is
+accepted, not once whatever it threw has landed. Only the EFFECT (and the
+feedback that announces it) now arrives when the projectile does.
+
 ### Trigger: a new input action, not the hotbar
 
 `HotbarAction._ACTION_BY_KIND` decides EQUIP/USE/PLACE purely from an
@@ -383,9 +474,12 @@ tested pure generation, matching this codebase's established boundary.
 
 ### Open questions
 
-- No real projectile flight exists for `projectile`/`area` delivery (nor
-  for anything else in the engine) — instant-resolve-in-a-cone is a
-  deliberate stand-in, not a final design.
+- ~~No real projectile flight exists for `projectile`/`area` delivery...
+  instant-resolve-in-a-cone is a deliberate stand-in~~ — resolved for
+  `projectile` 2026-10-04, see "Projectile flight: a cast that truly homes"
+  above. `area` is unchanged and still resolves instantly at a point — a
+  burst centered somewhere is not a single pursued target, so it was never
+  this gap's target in the first place.
 - `governing_stat`/`haste_stat` default to 0.0 — wiring real
   `evocation`/`focus` skill-web contributions is a named follow-up.
 - Elemental interactions (fire+frost→steam, per magic.md's own open

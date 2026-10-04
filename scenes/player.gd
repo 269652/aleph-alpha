@@ -3931,6 +3931,17 @@ func _apply_cast_step(step: Dictionary, delivery: String, chain_index: int = 0) 
 	if atom_id == "portal" or atom_id == "induce_mutation":
 		return 0.0
 
+	# docs/concept/spell_runtime.md "Projectile flight: a cast that truly
+	# homes" -- resolution still happens here, synchronously, exactly as
+	# every other delivery; only the EFFECT moves, deferred to whenever the
+	# launched bolt actually arrives. Returns 0.0 unconditionally: this
+	# atom's real damage (if any) is not known yet, and fires its own
+	# "cast" answer/shake independently on arrival rather than trying to
+	# fold into this pipeline's synchronous total.
+	if delivery == "projectile":
+		_launch_projectile(atom_id, params, _resolve_cast_target(delivery), chain_index)
+		return 0.0
+
 	var target = _resolve_cast_target(delivery)
 	var dealt := 0.0
 	if target is Array:
@@ -4087,6 +4098,54 @@ func _spawn_spell_effect(atom_id: String, at_position: Vector2, chain_index: int
 	marker.play(
 		atom_id, chain_index * CHAIN_STAGGER_SECONDS, 1.0 + chain_index * CHAIN_SCALE_STEP
 	)
+
+
+## docs/concept/spell_runtime.md "Projectile flight: a cast that truly
+## homes" -- `target` is `_resolve_cast_target("projectile")`'s own answer,
+## already decided synchronously (a single Node, or null for a miss that
+## still throws something real); this only launches what carries that
+## decision to wherever it actually lands. `start_delay` mirrors
+## `_spawn_spell_effect`'s own chain-stagger, so a multi-atom pipeline's
+## later bolts still leave a beat after the earlier ones.
+const SpellProjectileMarker = preload("res://src/rendering/spell_projectile_marker.gd")
+
+
+func _launch_projectile(atom_id: String, params: Dictionary, target, chain_index: int) -> void:
+	if get_parent() == null:
+		return
+	var projectile := SpellProjectileMarker.new()
+	projectile.position = position
+	if target != null and is_instance_valid(target):
+		projectile.aim_at_target(target)
+	else:
+		projectile.aim_at_point(_cast_aim_point("projectile"))
+	get_parent().add_child(projectile)
+	projectile.launch(
+		Callable(self, "_resolve_projectile_arrival").bind(atom_id, params, chain_index),
+		chain_index * CHAIN_STAGGER_SECONDS
+	)
+
+
+## The bolt `_launch_projectile` threw has arrived -- `live_target` is null
+## for a miss (nothing was ever in range, or whatever it was homing on
+## stopped existing mid-flight; either way the concept doc's own rule is
+## "a whiff at the resolved aim point, never a retarget"). This is where
+## the damage/kill-credit/mote-drop/XP and the "cast" answer + camera shake
+## actually happen for a projectile atom -- all deferred from cast time to
+## right here, reusing `_apply_cast_step_to`/`_spawn_spell_effect` exactly
+## as every other delivery already does, so a projectile atom's eventual
+## effect is resolved through the same one door, just later.
+func _resolve_projectile_arrival(
+	live_target, arrival_position: Vector2, atom_id: String, params: Dictionary, chain_index: int
+) -> void:
+	var dealt := 0.0
+	if live_target != null and is_instance_valid(live_target):
+		dealt = _apply_cast_step_to(atom_id, params, live_target, chain_index)
+	else:
+		_spawn_spell_effect(atom_id, arrival_position, chain_index)
+	if dealt > 0.0:
+		answer("cast", {"damage": dealt})
+		_trigger_shake(dealt)
 
 
 # -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----

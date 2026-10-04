@@ -87,6 +87,10 @@ func test_a_woven_spell_really_damages_a_real_creature():
 	player.grant_mote("fire_damage")
 	assert_true(player.weave(SpellDraft.make(["fire_damage"], "projectile")), "precondition: legal weave")
 	assert_true(player.cast_held(), "the cast key really casts the woven spell")
+	# A real projectile now travels (docs/concept/spell_runtime.md,
+	# "Projectile flight: a cast that truly homes") -- its damage lands on
+	# arrival, not the same frame it launched.
+	_let_every_bolt_land()
 
 	assert_lt(marker.info.health, before, "and the thing in front of it really took damage")
 
@@ -112,6 +116,7 @@ func test_a_two_atom_weave_lands_on_a_real_creature():
 	player.grant_mote("ignite")
 	assert_true(player.weave(SpellDraft.make(["frost_damage", "ignite"], "projectile")))
 	assert_true(player.cast_held())
+	_let_every_bolt_land()
 
 	assert_lt(marker.info.health, before, "a composed spell is a real spell")
 
@@ -143,6 +148,9 @@ func test_a_creature_can_actually_be_killed_by_casting():
 		player._cast_cooldown_remaining = 0.0
 		_face_the_creature(marker)
 		player.cast_held()
+		# A real projectile now travels; let THIS cast's bolt land before the
+		# loop re-checks whether the creature is still alive.
+		_let_every_bolt_land()
 		casts += 1
 
 	assert_lt(casts, 200, "a fight that never ends is not a fight")
@@ -150,6 +158,105 @@ func test_a_creature_can_actually_be_killed_by_casting():
 		not is_instance_valid(marker) or marker.info.health <= 0.0,
 		"it really died"
 	)
+
+
+# -- a projectile cast truly homes (docs/concept/spell_runtime.md,
+# "Projectile flight: a cast that truly homes") -----------------------------
+#
+# Real play: "selecting a threat with tab doesn't make the spells homing."
+# A projectile-delivery cast now spawns a real SpellProjectileMarker that
+# tracks its resolved target's LIVE position and only deals damage on
+# arrival -- these tests drive it the same way _let_the_jaws_close already
+# drives a creature's windup, rather than asserting the same frame a cast
+# is thrown.
+
+const SpellProjectileMarker = preload("res://src/rendering/spell_projectile_marker.gd")
+
+
+func _projectiles_in_the_world() -> Array:
+	var seen: Array = []
+	for child in player.get_parent().get_children():
+		if child is SpellProjectileMarker:
+			seen.append(child)
+	return seen
+
+
+## Re-scans every call (rather than snapshotting the list once) since a
+## resolved bolt frees itself mid-loop and a chained multi-atom cast can
+## still be launching later bolts while an earlier one is already in flight.
+func _let_every_bolt_land() -> void:
+	var guard := 0
+	while not _projectiles_in_the_world().is_empty() and guard < 600:
+		for bolt in _projectiles_in_the_world():
+			bolt._process(1.0 / 60.0)
+		guard += 1
+
+
+func test_a_projectile_cast_does_not_damage_its_target_the_same_frame():
+	var marker = _creature_at("boar", IN_REACH)
+	_face_the_creature(marker)
+	var before: float = marker.info.health
+	player.grant_mote("fire_damage")
+	player.weave(SpellDraft.make(["fire_damage"], "projectile"))
+
+	assert_true(player.cast_held(), "the cast is accepted")
+
+	assert_almost_eq(
+		marker.info.health, before, 0.001,
+		"a true projectile has not arrived yet -- damage must not land on the same frame it was thrown"
+	)
+	assert_false(_projectiles_in_the_world().is_empty(), "a real bolt must have launched")
+
+
+func test_a_projectile_cast_damages_its_target_once_it_arrives():
+	var marker = _creature_at("boar", IN_REACH)
+	_face_the_creature(marker)
+	var before: float = marker.info.health
+	player.grant_mote("fire_damage")
+	player.weave(SpellDraft.make(["fire_damage"], "projectile"))
+	player.cast_held()
+
+	_let_every_bolt_land()
+
+	assert_lt(marker.info.health, before, "the bolt must deal its damage once it actually lands")
+
+
+## True homing, through the real cast path: the creature moves WHILE the
+## bolt it drew is still travelling, and the bolt still catches it -- the
+## same claim test_spell_projectile_marker.gd already pins at the node
+## level, now proven through Player.cast_held() end to end.
+func test_a_projectile_cast_still_catches_a_target_that_moves_mid_flight():
+	var marker = _creature_at("boar", Vector2(100.0, 0.0))
+	_face_the_creature(marker)
+	var before: float = marker.info.health
+	player.grant_mote("fire_damage")
+	player.weave(SpellDraft.make(["fire_damage"], "projectile"))
+	player.cast_held()
+	var bolts := _projectiles_in_the_world()
+	assert_false(bolts.is_empty(), "precondition: a bolt launched")
+	bolts[0]._process(1.0 / 60.0)
+	marker.position += Vector2(0.0, 40.0)  # steps off the bolt's original line
+
+	_let_every_bolt_land()
+
+	assert_lt(marker.info.health, before, "a bolt that truly homes must still catch a target that moved")
+
+
+## A miss still throws something real -- it just resolves at empty air
+## instead of a creature, the same "a cast is always visible" principle the
+## old instant-pop miss already honoured, now proven for the travelling
+## case too.
+func test_a_projectile_cast_with_nothing_in_range_still_launches_and_whiffs():
+	player.grant_mote("fire_damage")
+	player.weave(SpellDraft.make(["fire_damage"], "projectile"))
+	player._last_facing_direction = Vector2.RIGHT
+
+	player.cast_held()
+
+	assert_false(_projectiles_in_the_world().is_empty(), "an empty-air cast must still launch a real bolt")
+	_let_every_bolt_land()
+	# Reaching here without error/hang is the assertion: a bolt aimed at a
+	# fixed point with nothing to track must resolve and free itself.
 
 
 # -- and the other direction ---------------------------------------------

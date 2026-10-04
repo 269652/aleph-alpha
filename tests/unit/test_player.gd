@@ -31,6 +31,7 @@ const StoneSize = preload("res://src/world/stone_size.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const Player = preload("res://scenes/player.gd")
 const SpellEffectMarker = preload("res://src/rendering/spell_effect_marker.gd")
+const SpellProjectileMarker = preload("res://src/rendering/spell_projectile_marker.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
@@ -1948,6 +1949,10 @@ func test_casting_touch_with_nothing_in_range_still_shows_the_cast_effect():
 func test_casting_projectile_with_nothing_in_range_still_shows_the_cast_effect():
 	player.apply_class("mage", {"max_mana": 50.0})
 	assert_true(player.cast_spell("spark"))
+	# A real projectile now travels before it whiffs (docs/concept/
+	# spell_runtime.md, "Projectile flight: a cast that truly homes") --
+	# its own SpellEffectMarker does not exist until it arrives.
+	_let_every_bolt_land()
 	assert_true(_has_spell_effect_marker(), "a whiffed projectile cast should still show its effect")
 
 
@@ -1987,6 +1992,9 @@ func test_casting_a_two_atom_spell_spawns_a_marker_per_atom():
 	# there.
 	var before := _count_spell_effect_markers()
 	assert_true(player.cast_spell("cinder_lash"))
+	# cinder_lash is projectile delivery -- both atoms' bolts must actually
+	# arrive before their own SpellEffectMarkers exist to count.
+	_let_every_bolt_land()
 	assert_eq(_count_spell_effect_markers() - before, 2, "one marker per pipeline atom")
 
 
@@ -2003,6 +2011,27 @@ func _has_spell_effect_marker() -> bool:
 		if child is SpellEffectMarker:
 			return true
 	return false
+
+
+## docs/concept/spell_runtime.md "Projectile flight: a cast that truly
+## homes" -- a projectile atom's own SpellEffectMarker does not exist until
+## its bolt actually arrives; this drives every in-flight
+## SpellProjectileMarker forward until none remain, the same shape
+## test_battle_loop.gd's own _let_every_bolt_land already establishes.
+func _let_every_bolt_land() -> void:
+	var guard := 0
+	while true:
+		var bolts: Array = []
+		for child in get_children():
+			if child is SpellProjectileMarker:
+				bolts.append(child)
+		if bolts.is_empty():
+			return
+		for bolt in bolts:
+			bolt._process(1.0 / 60.0)
+		guard += 1
+		if guard >= 600:
+			return
 
 
 # -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----
