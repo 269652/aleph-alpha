@@ -85,6 +85,18 @@ static func displacement_for(
 	return radial_strength(normalized_distance) * temporal_strength(progress, peak_fraction)
 
 
+## The final fragment alpha: never less than the sprite's own drawn
+## silhouette (`sprite_alpha`, i.e. `original_color.a`) NOR less than the
+## effect's own falloff (`strength`), so the quad fades to transparent
+## wherever BOTH are zero instead of staying forced fully opaque. Fixes the
+## "clipping rect" bug (docs/concept/spell_vfx.md): the shader used to
+## output `COLOR.a = 1.0` unconditionally, so the whole rectangular quad
+## stayed opaque -- a resampled copy of the background -- everywhere
+## `strength` was non-zero, not just where the burst itself is drawn.
+static func output_alpha_for(sprite_alpha: float, strength: float) -> float:
+	return maxf(sprite_alpha, strength)
+
+
 ## A fresh `ShaderMaterial`, sharing the one compiled `Shader` every call
 ## reuses. Not atom-tinted (a warp has no colour of its own) and not
 ## cached, for the same concurrent-casts reason `SpellGlowShader.material_for`
@@ -149,12 +161,21 @@ void fragment() {
 
 	// Composited, not replaced: where the sprite's own art is opaque (the
 	// burst shape itself), show it unchanged; where it is transparent (the
-	// canvas around that shape), show the warped background instead of a
-	// flat colour, so the effect reads as heat bending the world around a
-	// visible burst rather than a solid square sitting on top of it.
-	// Forced fully opaque on output -- this shader already manually
-	// composites the real background into COLOR itself, so the engine's own
-	// post-shader alpha blend must not be given a reason to blend it again.
-	COLOR = vec4(mix(warped_background.rgb, original_color.rgb, original_color.a), 1.0);
+	// canvas around that shape) but still within the effect's own falloff,
+	// show the warped background instead of a flat colour, so the effect
+	// reads as heat bending the world around a visible burst rather than a
+	// solid square sitting on top of it.
+	//
+	// Alpha follows max(original_color.a, strength) -- NOT forced to 1.0 --
+	// so the quad fades to real transparency wherever BOTH the sprite's own
+	// art and the falloff are zero, instead of staying opaque across the
+	// whole rectangular quad. A real, shipped bug, found by a live report
+	// and fixed 2026-10-04 ("still show a clipping rect in the animation"):
+	// forcing full opacity here repainted a resampled copy of the
+	// background across the entire falloff disc, not just the burst's own
+	// silhouette -- wherever that resample wasn't pixel-perfect (screen
+	// filtering, sub-pixel position, a moving camera), the disc's own edge
+	// read as a visible blurred patch.
+	COLOR = vec4(mix(warped_background.rgb, original_color.rgb, original_color.a), max(original_color.a, strength));
 }
 """ % [EDGE_SOFTNESS_FRACTION, MAX_DISPLACEMENT_UV]

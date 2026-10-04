@@ -171,6 +171,49 @@ same failure mode and does not have it — it never discards an underlying
 sprite in the first place, since its `MeshInstance2D` halo draws pure
 procedural colour with nothing beneath it to preserve.
 
+**A second, related bug in the same shader, found by a live report and
+fixed 2026-10-04: "spells ... still show a clipping rect in the
+animation."** The first fix above corrected what `COLOR.rgb` composited but
+left its final line forcing `COLOR.a = 1.0` unconditionally — the comment
+beside it even called this out as deliberate ("this shader already manually
+composites the real background into COLOR itself, so the engine's own
+post-shader alpha blend must not be given a reason to blend it again"), but
+that reasoning only holds if the manual composite is pixel-perfect. It is
+not: the entire rectangular quad stayed opaque for as long as `strength`
+(the same radial×temporal falloff already driving the displacement offset)
+was non-zero anywhere in it — not just where the burst's own art is drawn —
+repainting a resampled copy of the background across the whole falloff
+disc. Wherever that resample was not pixel-perfect (screen-space linear
+filtering, a sub-pixel sprite position, a moving camera — ordinary
+gameplay conditions a static, axis-aligned, coarse checkerboard does not
+reproduce), the disc's own edge read as a visible blurred patch: the
+clipping rect.
+
+The first bug's own 25px checkerboard probe (`tools/probe_spell_distortion_
+render.gd`) does **not** show this second one — confirmed directly,
+re-rendered against current `main` before fixing anything, looked clean.
+A coarse, low-frequency test pattern can't reveal a one-or-two-pixel
+resampling blur. `tools/probe_spell_distortion_fine_grid.gd` (new) renders
+a 4px high-contrast grid at a deliberately sub-pixel, non-integer-scaled
+sprite position (`Vector2(100.37, 99.62)` at `3.14159×` — the kind of
+placement a camera following a moving player produces, not a hand-picked
+round number) specifically to make exactly this class of defect visible;
+it showed the blurred disc clearly. Fixed by
+`SpellImpactDistortionShader.output_alpha_for(sprite_alpha, strength) ->
+float: return maxf(sprite_alpha, strength)`, mirrored into the shader as
+`max(original_color.a, strength)` in place of the hardcoded `1.0` — the
+quad now fades to real transparency wherever both the sprite's own art and
+the effect's own falloff are zero, the same "never cover more than the
+effect's own footprint" principle the first fix already established for
+`COLOR.rgb`, now applied to `COLOR.a` too. Re-rendered after the fix with
+the same fine-grid probe: the grid is crisp right up to the burst's own
+silhouette, no blurred patch anywhere. The gap this slipped through the
+first time: the first fix's own postmortem asked "does the shader preserve
+its own sprite's content" and never asked "does the shader ever draw
+outside where its *effect* actually reaches" — a different, equally
+real question for any shader whose output is a function of a spatial
+falloff rather than the sprite texture alone.
+
 ### `IllustratedSpellEffectSprite` — the bridge that shipped
 
 Not `IllustratedItemArt`'s per-subject registry/resolver/loader lattice —
@@ -216,11 +259,16 @@ frame-timing before real art existed to play back. It now can, and does.
   additive, per-atom colour, timed off the marker's own beat.
   `test_spell_glow_shader.gd`.
 - ✅ **The impact distortion is real and tested** (2026-09-24, a real
-  content-discarding bug fixed 2026-10-02 — see "Mechanism" above) —
+  content-discarding bug fixed 2026-10-02, a real forced-opacity "clipping
+  rect" bug fixed 2026-10-04 — see "Mechanism" above) —
   `SpellImpactDistortionShader`, gated to the seven burst-family atoms,
   screen-space radial warp, composited with the sprite's own art rather
-  than replacing it. `test_spell_impact_distortion_shader.gd`, verified
-  photographically via `tools/probe_spell_distortion_render.gd`.
+  than replacing it, alpha falling off with the same spatial/temporal
+  strength that drives the warp rather than staying forced opaque.
+  `test_spell_impact_distortion_shader.gd`, verified photographically via
+  `tools/probe_spell_distortion_render.gd` (first bug) and
+  `tools/probe_spell_distortion_fine_grid.gd` (second bug — a coarse
+  checkerboard does not reveal it; a fine high-contrast grid does).
 - ✅ **Real illustrated art exists for every atom, and both shaders play on
   top of it** (2026-09-24/26) — `IllustratedSpellEffectSprite` (family-sheet
   delivery, see "Mechanism" above), `SpellEffectMarker.play()` wired to draw

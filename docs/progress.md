@@ -23,7 +23,70 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
-### A mage's mana, raised, and a cast that recovers (2026-10-04) — see `concept/spell_runtime.md`
+### A second "clipping rect" bug in the distortion shader, fixed (2026-10-04) — see `concept/spell_vfx.md`
+
+Real play: *"they still show a clipping rect in the animation."* The "still"
+was correct — this is a SECOND, different bug in the same shader the
+2026-10-02 fix already touched once (`concept/spell_vfx.md`'s "Mechanism"
+section has the full writeup). That fix corrected `COLOR.rgb`; it left the
+shader's final line forcing `COLOR.a = 1.0` unconditionally, regardless of
+the spatial/temporal `strength` already computed to drive the warp offset.
+The whole rectangular quad stayed opaque — a resampled copy of the
+background — everywhere `strength` was non-zero, not just where the burst's
+own art is drawn; wherever that resample wasn't pixel-perfect (screen
+filtering, sub-pixel position, a moving camera), the disc's own edge read
+as a visible blurred patch.
+
+**Caught photographically, the same discipline the first bug established**
+(a fragment shader cannot be asserted headless): the first bug's own
+25px-checkerboard probe (`tools/probe_spell_distortion_render.gd`), re-run
+fresh before touching anything, looked completely clean — a coarse,
+axis-aligned test pattern cannot reveal a one-or-two-pixel resampling blur.
+A new probe, `tools/probe_spell_distortion_fine_grid.gd`, renders a 4px
+high-contrast grid at a deliberately sub-pixel, non-round sprite position
+and scale (the kind a camera following a moving player actually produces)
+— against that, the blurred disc was obvious and unmistakable. Fixed by
+`SpellImpactDistortionShader.output_alpha_for(sprite_alpha, strength) ->
+float: maxf(sprite_alpha, strength)`, mirrored into the GLSL as
+`max(original_color.a, strength)` in place of the hardcoded `1.0`.
+Re-rendered with the same fine-grid probe after the fix: grid crisp right
+up to the burst's silhouette, no blur anywhere.
+
+Red-first: 6 new tests in `test_spell_impact_distortion_shader.gd` pin
+`output_alpha_for`'s behaviour (zero when both inputs are zero, full when
+either input is full, follows `strength` where the sprite's own art is
+transparent, never less than either input, never exceeds 1) plus a
+string-pin test asserting the GLSL source actually calls it rather than
+hardcoding opacity — confirmed red (`Static function "output_alpha_for()"
+not found`) before implementing. 28/28 full `test_spell_impact_distortion_
+shader.gd` + 18/18 full `test_spell_effect_marker.gd` green.
+
+- ✅ A second distortion-shader opacity bug, fixed — see
+  `concept/spell_vfx.md`'s "Mechanism" section for the full writeup
+
+### An explicit-targeted spell doesn't home — investigated, not a bug (2026-10-04) — see `concept/spell_runtime.md`
+
+Real play: *"Selecting a threat with tab doesn't make the spells
+homing."* Investigated before assuming the wiring was broken: explicit
+target selection (`concept/spell_runtime.md`'s "Explicit target selection"
+section) is correctly consulted at every delivery branch of
+`_resolve_cast_target` (`scenes/player.gd:4277-4309`) — Tab-selecting a
+creature really does change which one a cast resolves against. What
+doesn't exist, anywhere in the engine, is a projectile that travels: every
+cast is instant hit-scan (`_apply_cast_step_to` applies the effect
+synchronously, same frame, no yield/tween on position ever), confirmed by
+a zero-result grep for "homing" across the whole codebase and by reading
+`SpellEffectMarker.play()`'s own tweens (scale and `modulate:a` only, never
+position). This was a deliberate, already-documented design choice
+(`spell_runtime.md`'s own Open Questions: *"instant-resolve-in-a-cone is a
+deliberate stand-in"* for real projectile flight), not a regression —
+explicit targeting was never going to look like homing because nothing in
+this engine homes. Scoping a real travel/homing system is a bigger design
+decision (straight-line travel-to-target vs. true adaptive tracking of a
+moving target, and what that does to the instant-damage-on-cast
+architecture) than this fix pass covers; not built here, flagged to the
+user for scope before starting.
+
 
 Real play, same session as part 4 (below): *"the hero needs more mana and
 faster replenishment or he loses a fight against 3 boars also a cooldown

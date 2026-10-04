@@ -136,6 +136,75 @@ func test_displacement_never_exceeds_one():
 			assert_lte(value, 1.0)
 
 
+# -- output_alpha_for: the quad must not stay opaque past its own effect ---
+#
+# Reported live: "spells ... still show a clipping rect in the animation."
+# Root cause, confirmed photographically (tools/probe_spell_distortion_fine_grid.gd
+# against a fine high-contrast grid -- the 25px checkerboard the FIRST
+# distortion bug was caught against was too coarse to show this one): the
+# fragment shader's final line hardcoded `COLOR.a = 1.0` unconditionally,
+# regardless of `strength` (the same radial*temporal falloff already driving
+# the displacement offset). That forces the ENTIRE rectangular quad opaque
+# for as long as `strength` is non-zero anywhere in it -- not just the
+# burst's own drawn silhouette -- repainting a resampled copy of the
+# background across the whole falloff disc. Where that resample is not
+# pixel-perfect (screen-space filtering, sub-pixel sprite position, a moving
+# camera -- none of which a sharp, axis-aligned checkerboard reveals but a
+# fine grid does), the disc's own edge reads as a visible blurred patch: the
+# "clipping rect."
+
+func test_output_alpha_equals_sprite_alpha_when_strength_is_zero():
+	# Outside the effect's own falloff entirely: must show the sprite's real
+	# transparency (usually 0, the canvas around the drawn shape), never a
+	# forced-opaque quad.
+	assert_almost_eq(SpellImpactDistortionShader.output_alpha_for(0.0, 0.0), 0.0, 0.001)
+
+
+func test_output_alpha_is_fully_opaque_where_the_sprites_own_art_is():
+	assert_almost_eq(SpellImpactDistortionShader.output_alpha_for(1.0, 0.0), 1.0, 0.001)
+
+
+func test_output_alpha_follows_strength_where_the_sprite_itself_is_transparent():
+	# Inside the falloff disc but outside the drawn silhouette (original_color.a
+	# == 0): the warped-background patch must fade WITH strength rather than
+	# snapping straight to fully opaque.
+	assert_almost_eq(SpellImpactDistortionShader.output_alpha_for(0.0, 0.6), 0.6, 0.001)
+
+
+func test_output_alpha_is_never_less_than_either_input():
+	for a_step in range(0, 5):
+		for s_step in range(0, 5):
+			var sprite_alpha: float = float(a_step) / 4.0
+			var strength: float = float(s_step) / 4.0
+			var value: float = SpellImpactDistortionShader.output_alpha_for(sprite_alpha, strength)
+			assert_gte(value, sprite_alpha)
+			assert_gte(value, strength)
+
+
+func test_output_alpha_never_exceeds_one():
+	for a_step in range(0, 5):
+		for s_step in range(0, 5):
+			var value: float = SpellImpactDistortionShader.output_alpha_for(
+				float(a_step) / 4.0, float(s_step) / 4.0
+			)
+			assert_lte(value, 1.0)
+
+
+## Pins the actual fix, not just the CPU mirror's math -- the gap the FIRST
+## distortion bug's own postmortem named ("nothing checked that the shader
+## preserves its own sprite's content") applies here too: a correct
+## output_alpha_for means nothing if the GLSL string never calls it.
+func test_shader_does_not_hardcode_output_alpha_to_one():
+	assert_string_contains(
+		SpellImpactDistortionShader.SHADER_CODE, "max(original_color.a, strength)",
+		"the shader's final COLOR.a must fall off with strength, not stay forced opaque"
+	)
+	assert_false(
+		SpellImpactDistortionShader.SHADER_CODE.contains("original_color.a), 1.0);"),
+		"the quad must not be forced fully opaque regardless of strength"
+	)
+
+
 # -- the magnitude constant, bounded and pinned -----------------------------
 
 ## A believable heat-shimmer, not a disorienting funhouse warp -- bounded
