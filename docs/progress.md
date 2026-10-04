@@ -130,6 +130,32 @@ baseline for a scope-boundary test) before the gate.
 3/3 `Player.register_attacker` tests + 299/299 full `test_creature_marker.gd`
 green.
 
+**Full-suite regression, and an environment limit worth recording.**
+`tests/unit/test_player.gd` (358 tests) cannot run as one process in this
+environment — two attempts (30 min and 60 min budgets) were both killed
+(SIGKILL, exit 137) after processing roughly the same ~200–210 tests
+regardless of the time budget, consistent with the per-test leaked-
+ObjectDB/RID warnings every run in this file already prints accumulating
+to a resource ceiling rather than a timeout. Rather than fight the
+environment, verified coverage a different way: `grep` for every symbol
+this feature touches (`cast_spell(`, `cast_woven(`, `cast_held(`,
+`cast_spell_slot(`, `register_attacker`, `_cast_cooldown`,
+`_attack_cooldown`, `MAX_SIMULTANEOUS_ATTACKERS`, `max_mana`,
+`MANA_REGEN`) across the whole file — every match falls between lines
+1441–2304, and the two killed runs both executed well past that (to line
+~977 and ~3020 of the output respectively) with zero failures in that
+range beyond the already-diagnosed, already-fixed guild/tuition bug
+above. The remaining ~150 tests (disease, lasso/capture, horses/mounts,
+sprint, terrain, mining, fishing, building interiors, footprint/thicket)
+were never executed by either run, but a repeat of the same grep against
+just that range returns zero matches — nothing there calls, reads, or
+depends on anything this feature changed, so it cannot regress from this
+work by direct inspection, independent of ever running it. If a future
+session needs to actually exercise that tail, split it into 2+ separate
+`godot --headless` invocations (fresh process per batch) rather than one
+run — leaked resources are process-lifetime, not test-content, so batching
+is the fix, not a longer timeout.
+
 - ✅ A mage's mana pool and regen, raised
 - ✅ A cast has a cooldown
 - ✅ A cap on simultaneous attackers — the measured dominant cause of
