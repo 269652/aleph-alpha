@@ -186,6 +186,58 @@ as though it did something.
 column with no runtime reader; scaling it would be a second inert number
 layered on the first. It should scale on the day it is wired.
 
+## Three at once was never the reference exchange (2026-10-04)
+
+Real play, after the density pass in
+[ecosystem_dynamics.md](ecosystem_dynamics.md) made a 3-boar encounter
+common rather than rare: *"the hero needs more mana... he loses a fight
+against 3 boars."* The player's own diagnosis named mana; investigated
+first, because *The reference exchange is pinned* (below) is this doc's
+own calibration claim and a regression against it deserved a real
+measurement, not a guess.
+
+**The reference exchange was measured against exactly one attacker, and
+says so**: *"drives the real default character against the real roster"*
+— one character, one roster entry at a time. Nothing in `CombatPacing` or
+`test_combat_pacing.gd` ever modelled more than one creature engaged at
+once. Three boars expose a gap the single-attacker model was never built
+to see: each `CreatureMarker` runs its own independent windup/cooldown
+timers with zero awareness of any other creature near the same target —
+confirmed directly, there is no separation, flocking, or turn-taking
+anywhere in `CreatureBehavior` or the movement code. Three boars that all
+sense the player and are all willing to fight (`_will_fight`) converge and
+each independently commit to a bite the instant they're in range —
+geometrically trivial for three points converging on one — and because
+their windup+cooldown cycle is the same fixed length for every individual
+of a species, repeat bites land clustered close enough to read as one
+volley: **measured, up to ~31–53 damage in under a second, every ~1.5s**,
+against an 85–100 HP player with zero armour by default. That is a death
+clock of **single-digit seconds, independent of class or mana** — a
+melee warrior with zero mana dies at essentially the same rate a mage
+does. Mana is a real, secondary problem specifically for the mage
+archetype (see [spell_runtime.md](spell_runtime.md)'s own entry); it was
+never the dominant one.
+
+**`Player.MAX_SIMULTANEOUS_ATTACKERS` (2).** Not a damage-math change —
+`EXCHANGE_HEALTH_SCALE`/`2.5` and the single-attacker reference exchange
+stay exactly as measured and pinned below; the fix is to the geometry the
+model always assumed, not the numbers in it. A creature can only BEGIN a
+bite windup against the player if fewer than 2 others are already
+mid-windup against the same target; a third attacker still closes
+distance and still threatens, but waits for a slot rather than landing a
+free, simultaneous third bite. `Player.register_attacker(attacker) ->
+bool` is the gate, called from `CreatureMarker._try_attack` right before
+a windup commits — self-pruning (re-validates every held slot against the
+attacker's own `is_winding_up()` on every call), so a creature that died,
+fled, or finished its windup mid-frame never leaves a slot stuck occupied;
+no separate per-frame cleanup, no explicit unregister call needed
+anywhere. Scoped to the player specifically (`target.has_method(
+"register_attacker")`, duck-typed the same way `take_damage` already is)
+— creature-vs-creature fights are unaffected, and the single-attacker
+reference exchange this whole file calibrates is exactly as true as it
+was the day it was measured, for the one-attacker case it was always
+about.
+
 ## Status
 
 - ✅ **The reference exchange is pinned** (2026-09-22) — the rule above,
@@ -196,9 +248,18 @@ layered on the first. It should scale on the day it is wired.
   species fails, so the constant is a measurement rather than a preference.
   Measured, the binding species is the **boar** — 2.02 s to land two bites
   on only 28 base health. Every other bound species is satisfied between 1.3
-  (curupira) and 1.9 (wolf).
+  (curupira) and 1.9 (wolf). **Scope, named 2026-10-04**: measured against
+  exactly one attacker — see *Three at once was never the reference
+  exchange* above for the gap that left open and
+  `MAX_SIMULTANEOUS_ATTACKERS` for the fix.
 - ✅ **Levelling grows every axis** (2026-09-22) — see *A level is a bigger
   animal* below.
+- ✅ **A cap on simultaneous attackers** (2026-10-04) — see *Three at once
+  was never the reference exchange* above. `Player.
+  MAX_SIMULTANEOUS_ATTACKERS` (2), `register_attacker`/the self-pruning
+  slot list, called from `CreatureMarker._try_attack` right before a
+  windup commits. The single-attacker reference exchange above is
+  unaffected; this closes the gap it never covered.
 - 🚧 **Block is free and invisible.** `is_blocking()` costs nothing — no
   stamina, no cooldown, no readout — and reduces damage weapon-dependently,
   so a player holding the block key experiences a materially longer fight

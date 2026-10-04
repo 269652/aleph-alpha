@@ -9,7 +9,7 @@ const _STAT_KEYS := ["max_health", "attack_damage", "max_mana", "max_stamina"]
 ## (some 0.0) so callers get a consistent shape regardless of archetype.
 const _ARCHETYPES := {
 	"warrior": {"max_health": 40.0, "attack_damage": 12.0, "max_mana": 0.0, "max_stamina": 20.0},
-	"mage": {"max_health": -15.0, "attack_damage": 0.0, "max_mana": 50.0, "max_stamina": 0.0},
+	"mage": {"max_health": -15.0, "attack_damage": 0.0, "max_mana": 70.0, "max_stamina": 0.0},
 	"ranger": {"max_health": 10.0, "attack_damage": 8.0, "max_mana": 5.0, "max_stamina": 15.0},
 	"beastmaster": {"max_health": 15.0, "attack_damage": 3.0, "max_mana": 10.0, "max_stamina": 10.0},
 	"artisan": {"max_health": 5.0, "attack_damage": 0.0, "max_mana": 0.0, "max_stamina": 25.0},

@@ -23,6 +23,67 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### A mage's mana, raised, and a cast that recovers (2026-10-04) — see `concept/spell_runtime.md`
+
+Real play, same session as part 4 (below): *"the hero needs more mana and
+faster replenishment or he loses a fight against 3 boars also a cooldown
+for spells."* Two independent, both-literal fixes (the dominant cause of
+losing to 3 boars at once is a separate, still-open fix — see
+`concept/combat.md`'s "Three at once was never the reference exchange" and
+the ⬜ below).
+
+**Mana pool and regen.** `ClassArchetype`'s mage `max_mana` bonus: 50 →
+70 (`src/gameplay/class_archetype.gd`). `Player.MANA_REGEN_PER_SECOND`:
+2.0 → 3.5 — a 75% increase, bounded above by `test_player.gd`'s own
+pre-existing pacing floor (`farsight`, the cheapest spell in the full
+23-spell book at 1.92 mana, must still take over half a second to recast;
+3.5 clears it, 4.0 would not have). Caught and corrected before
+implementing, not by a failing run.
+
+**A cast has a cooldown.** `SpellExecutor.cast_time_for` was already
+computed on every cast and simply discarded — confirmed directly in
+`_cast_step`'s own body, which read input, detected the rising edge, and
+called `cast_held()` with no timer anywhere. `Player._cast_cooldown_remaining`
+now ticks in `_cast_step(delta)` exactly the way `_attack_cooldown_remaining`
+already ticks in `_attack_step`, and is set on every successful cast
+(`cast_spell`/`cast_woven`, right where `spend_mana` already runs) to
+`_spell_executor.cast_time_for(rule, skill_bonus("haste"))` — the same
+per-spell formula already computed, not a new flat number. A cast attempted
+on cooldown refuses with "Still recovering from the last cast.", checked
+before the mana-affordability gate so a cooldown refusal is never also
+blamed on mana. `_cast_step`'s signature changed from `()` to `(delta:
+float)`; both outdoor/indoor call sites in `_physics_process` updated
+identically.
+
+Red-first throughout: `test_mage_max_mana_bonus_is_seventy` and
+`test_mana_regen_per_second_is_three_point_five` confirmed red (50.0≠70.0,
+2.0≠3.5) before the constant changes; 6 new cooldown tests in
+`test_player.gd` confirmed red (parse error — `_cast_step()` took 0 args
+before the signature change existed) before the mechanism; a 7th in
+`test_player_spell_weaving.gd` (`cast_woven` shares the same clock) was
+confirmed red on its own by temporarily reverting just `cast_woven`'s two
+new lines, re-running, then restoring them — `cast_spell`'s gate alone
+does not cover `cast_woven`, so this is a real, independently-driven test,
+not a shared false green.
+
+Found and fixed in passing: two pre-existing, unrelated test failures
+(`test_a_catalogue_spell_you_have_not_learned_is_not_castable`,
+`test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana`)
+both used `"minor_heal"` as a "spell you have not learned" example, but it
+is one of `SpellTuition.STARTING_SPELL_IDS` — every fresh player already
+knows it. Swapped to `"farsight"` (confirmed not a starting spell) in both.
+
+26/26 cast-filtered + 21/21 full `test_player_spell_weaving.gd` + 12/12
+`test_class_archetype.gd` green. Full `test_player.gd` regression deferred
+to the combined commit covering this plus the simultaneous-attacker cap
+below.
+
+- ✅ A mage's mana pool and regen, raised
+- ✅ A cast has a cooldown
+- ⬜ A cap on simultaneous attackers (the measured dominant cause of losing
+  to 3 boars at once — see `concept/combat.md`'s "Three at once was never
+  the reference exchange"; not yet built)
+
 ### Way more enemies, part 4: goblins raiding together (2026-10-04) — see `concept/ecosystem_dynamics.md`
 
 *"I still don't encounter any goblin settlements or groups of monsters."*

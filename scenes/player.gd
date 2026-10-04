@@ -336,12 +336,19 @@ var health := max_health
 ## meaningful rest state (a non-caster class), so there's no floor above 0.
 var max_mana := 0.0
 var mana := 0.0
-## Chosen so a mage can recast a cheap single-atom spell (Fire Bolt, ~3 mana
-## -- see SpellBook/test_spell_book.gd) roughly every couple of seconds of
-## not casting, rather than it being effectively free (instant regen) or
-## requiring a long wait -- pinned by
-## test_mana_regen_lets_a_mage_recast_fire_bolt_within_a_few_seconds.
-const MANA_REGEN_PER_SECOND := 2.0
+## Chosen so a mage can recast the cheapest spell in the whole book
+## (`farsight`, 1.92 mana) within a handful of seconds of not casting,
+## rather than it being effectively free (instant regen) or requiring a
+## long wait -- pinned by
+## test_mana_regen_lets_a_mage_recast_the_cheapest_spell_within_a_few_
+## seconds (test_player.gd), which is also the ceiling on this constant:
+## 1.92/4.0 = 0.48s would make even the cheapest spell recast in under
+## that test's own half-second floor, so 3.5 (not a rounder 4.0) is as
+## high as this can go without that floor itself needing to move. Raised
+## from 2.0 (docs/concept/spell_runtime.md "A mage's mana pool and regen,
+## raised") after real play lost a fight against 3 boars waiting on mana
+## between casts.
+const MANA_REGEN_PER_SECOND := 3.5
 var is_dead := false
 const DEAD_MODULATE := Color(0.35, 0.35, 0.35, 1.0)
 
@@ -814,6 +821,7 @@ var _item_sprite_generator := ProceduralItemSprite.new()
 var _item_art := IllustratedItemArt.new()
 var _tile_targeting := TileTargeting.new()
 var _attack_cooldown_remaining := 0.0
+var _cast_cooldown_remaining := 0.0
 var _last_attack_input_state := false
 var _last_cast_input_state := false
 var _last_build_input_state := false
@@ -2678,7 +2686,7 @@ func _authority_step(delta: float) -> void:
 
 	_dodge_timers_step(delta)
 	_attack_step(delta)
-	_cast_step()
+	_cast_step(delta)
 	_spell_slot_step()
 	_dodge_step()
 	_rest_step()
@@ -2733,7 +2741,7 @@ func _authority_step_indoors(delta: float) -> void:
 	survival.regulate_temperature(INDOOR_AMBIENT_WARMTH, wetness, delta)
 
 	_attack_step(delta)
-	_cast_step()
+	_cast_step(delta)
 	_pickup_step(delta)
 	_stash_step()
 	_food_buff_step(delta)
@@ -3163,7 +3171,9 @@ func _attack_step(delta: float) -> void:
 const DEFAULT_CAST_SPELL_ID := "fire_bolt"
 
 
-func _cast_step() -> void:
+func _cast_step(delta: float) -> void:
+	_cast_cooldown_remaining = maxf(0.0, _cast_cooldown_remaining - delta)
+
 	var cast_pressed := (
 		Input.is_action_pressed("cast") if _controlled_locally() else _pending_cast_pressed
 	)
@@ -3751,12 +3761,20 @@ func cast_woven() -> bool:
 	var rule = _spell_executor.cast_rule(parsed["ast"])
 	if rule == null:
 		return false
+	# docs/concept/spell_runtime.md "A cast has a cooldown" -- same gate and
+	# same formula cast_spell uses, so a woven spell and an authored one
+	# recover on the same clock.
+	if _cast_cooldown_remaining > 0.0:
+		cast_message = "Still recovering from the last cast."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
 	var context := {"wielder": {"mana": mana, "health": health}}
 	if not _spell_executor.can_cast(rule, mana, context, skill_bonus("spell_efficiency")):
 		cast_message = "Not enough mana."
 		_cast_message_timer = CAST_MESSAGE_DURATION
 		return false
 	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
+	_cast_cooldown_remaining = _spell_executor.cast_time_for(rule, skill_bonus("haste"))
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 	# The same resolution an authored spell gets -- one pipeline, one
 	# executor, no second path for a player-made spell.
@@ -3816,6 +3834,14 @@ func cast_spell(spell_id: String) -> bool:
 	if rule == null:
 		return false
 
+	# docs/concept/spell_runtime.md "A cast has a cooldown" -- checked before
+	# the mana gate so a cast refused by cooldown is never also blamed on
+	# mana, even when both would otherwise apply.
+	if _cast_cooldown_remaining > 0.0:
+		cast_message = "Still recovering from the last cast."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+
 	var context := {"wielder": {"mana": mana, "health": health}}
 	if not _spell_executor.can_cast(rule, mana, context, skill_bonus("spell_efficiency")):
 		cast_message = "Not enough mana."
@@ -3823,6 +3849,7 @@ func cast_spell(spell_id: String) -> bool:
 		return false
 
 	spend_mana(_spell_executor.cost_for(rule, skill_bonus("spell_efficiency")))
+	_cast_cooldown_remaining = _spell_executor.cast_time_for(rule, skill_bonus("haste"))
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 
 	var delivery := _spell_executor.delivery_for(rule)

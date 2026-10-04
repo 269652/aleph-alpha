@@ -1508,6 +1508,15 @@ func test_mana_regen_lets_a_mage_recast_the_cheapest_spell_within_a_few_seconds(
 	assert_lt(seconds_to_recast, 10.0, "mana regen must not make recasting an agonizing wait")
 
 
+## docs/concept/spell_runtime.md "A mage's mana pool and regen, raised" --
+## real play lost a fight against 3 boars waiting on mana between casts.
+## 3.5 (not a rounder 4.0): the cheapest-spell floor test just above pins
+## recast time > 0.5s for the book's cheapest spell (farsight, 1.92 mana) --
+## 1.92/4.0 = 0.48s would BREAK that floor, 1.92/3.5 =~ 0.549s clears it.
+func test_mana_regen_per_second_is_three_point_five():
+	assert_almost_eq(Player.MANA_REGEN_PER_SECOND, 3.5, 0.001)
+
+
 # -- spell-cast status effects (ignite/blight/freeze/root/slow/shield) ------
 # See docs/concept/spell_runtime.md. Mirrors apply_venom/_venom_step's own
 # shape (DebuffStack-tracked, ticked once per authority frame).
@@ -1780,6 +1789,79 @@ func test_casting_an_unknown_spell_id_does_nothing_and_fails():
 	assert_almost_eq(player.mana, player.max_mana, 0.001)
 
 
+# -- a cast has a cooldown (docs/concept/spell_runtime.md's section of the
+# same name) -- _cast_cooldown_remaining, set on every successful cast to
+# SpellExecutor.cast_time_for's own per-spell formula (already computed
+# for every cast, never wired to anything before this), ticked down in
+# _cast_step exactly the way _attack_cooldown_remaining already ticks in
+# _attack_step. Real play: four Fire Bolts/Sparks cast back-to-back on one
+# input frame was a real, available burst mana alone never throttled.
+
+func test_casting_twice_in_a_row_is_refused_by_cooldown():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.cast_spell("fire_bolt"), "precondition: the first cast succeeds")
+
+	assert_false(player.cast_spell("fire_bolt"), "a second cast on the same frame should be refused by cooldown")
+
+
+func test_casting_on_cooldown_spends_no_mana():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.cast_spell("fire_bolt")
+	var mana_after_first_cast: float = player.mana
+
+	player.cast_spell("fire_bolt")
+
+	assert_almost_eq(player.mana, mana_after_first_cast, 0.001, "a refused cast on cooldown must spend nothing")
+
+
+func test_casting_on_cooldown_sets_a_message_blaming_recovery_not_mana():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.cast_spell("fire_bolt")
+
+	player.cast_spell("fire_bolt")
+
+	var said := player.cast_message.to_lower()
+	assert_string_contains(said, "recover", "the banner must blame the cooldown, not mana")
+	assert_false(said.contains("mana"), "a cast refused by cooldown must not be blamed on mana")
+
+
+## Pins the cooldown to the SAME formula already computed for cost, not a
+## new flat number invented for this -- SpellExecutor.cast_time_for is the
+## exact function docs/concept/spell_runtime.md's Open Questions already
+## named as computed-but-unused before this.
+func test_cast_cooldown_is_set_to_the_spells_own_cast_time():
+	var SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
+	var executor := SpellExecutor.new()
+	var expected: float = executor.cast_time_for(executor.cast_rule(player._spell_book.ast_for("fire_bolt")))
+	player.apply_class("mage", {"max_mana": 50.0})
+
+	player.cast_spell("fire_bolt")
+
+	assert_almost_eq(player._cast_cooldown_remaining, expected, 0.01)
+
+
+## _cast_step reads the local "cast" input action directly (same as
+## _authority_step above); this headless test's InputMap never registers it
+## without a World, so register it first -- same trick _register_all_keybindings
+## exists for.
+func test_cast_cooldown_expires_after_the_spells_own_cast_time_elapses():
+	_register_all_keybindings()
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.cast_spell("fire_bolt")
+	var cooldown: float = player._cast_cooldown_remaining
+
+	player._cast_step(cooldown + 0.01)
+
+	assert_true(player.cast_spell("fire_bolt"), "cooldown should have fully elapsed")
+
+
+func test_cast_cooldown_does_not_apply_to_a_refused_cast():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_false(player.cast_spell("not_a_real_spell"), "precondition: an unknown spell id is refused")
+
+	assert_true(player.cast_spell("fire_bolt"), "a refused cast must not have started a cooldown")
+
+
 func test_casting_a_self_delivery_spell_heals_the_caster():
 	player.apply_class("mage", {"max_mana": 50.0})
 	_learn_at_a_guild("minor_heal")
@@ -1952,12 +2034,20 @@ func test_the_cast_key_default_is_a_spell_a_fresh_player_actually_knows():
 	assert_true(player.known_spell_ids().has(Player.DEFAULT_CAST_SPELL_ID))
 
 
+## Pre-existing bug fixed in passing (unrelated to the combat-balance work
+## this file is otherwise touching): both this test and the one below used
+## "minor_heal" as their "known to exist but not learned" example, but
+## SpellTuition.STARTING_SPELL_IDS = ["fire_bolt", "spark", "minor_heal"]
+## -- EVERY fresh player already knows it, so `cast_spell("minor_heal")`
+## actually succeeds instead of being refused, which is exactly why both
+## tests were failing (an empty cast_message, no "not known" refusal ever
+## fired). "farsight" is a real catalogue spell no starting class knows.
 func test_a_catalogue_spell_you_have_not_learned_is_not_castable():
 	# SpellBook.has() says a spell EXISTS. It must no longer say you can
 	# cast it -- that is the whole split this feature rests on.
 	player.apply_class("mage", {"max_mana": 50.0})
 
-	assert_false(player.cast_spell("minor_heal"))
+	assert_false(player.cast_spell("farsight"))
 
 	assert_almost_eq(player.mana, player.max_mana, 0.001,
 		"a spell you do not know must spend nothing")
@@ -1966,7 +2056,7 @@ func test_a_catalogue_spell_you_have_not_learned_is_not_castable():
 func test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana():
 	player.apply_class("mage", {"max_mana": 50.0})
 
-	player.cast_spell("minor_heal")
+	player.cast_spell("farsight")
 
 	var said := player.cast_message.to_lower()
 	assert_string_contains(said, "learn", "the banner must blame knowledge, not mana")

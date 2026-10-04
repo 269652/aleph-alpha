@@ -397,12 +397,11 @@ tested pure generation, matching this codebase's established boundary.
 - Whether `suppress_mutation`/`illuminate` ever get a real consumer depends
   on `induce_mutation` and a lighting system respectively, neither of which
   this pass builds.
-- `SpellCost.cast_time` is computed (`SpellExecutor.cast_time_for`) but not
-  yet enforced as an actual pre-cast delay or interrupt window — casting
-  today resolves instantly on the rising input edge, gated only by mana and
-  the physical key-press itself (no artificial cooldown, unlike melee's
-  `ATTACK_COOLDOWN` — mana affordability already throttles repeat casts, and
-  melee has no "ammo" cost to do the same job).
+- ~~`SpellCost.cast_time` is computed but not yet enforced~~ — resolved
+  2026-10-04, see "A cast has a cooldown" below. The assumption this bullet
+  stated (mana affordability already throttles repeat casts) is exactly
+  what a real 3-boar fight falsified: four Fire Bolts/Sparks cast instantly
+  in under a second is enough burst to matter, mana or not.
 - ✅ **A spell you chose** (2026-09-21). Measured before: `cast_spell`
   accepted any known id and had exactly one caller, which passed
   `Player.DEFAULT_CAST_SPELL_ID` — so the cast key cast Fire Bolt for ever
@@ -449,3 +448,51 @@ tested pure generation, matching this codebase's established boundary.
   was the first a player heard of it. It is now a meter in the same card as
   hunger, thirst, stamina and warmth — the same row widget, so it cannot
   drift from them — in a violet no other meter uses.
+
+- ✅ **A cast has a cooldown** (2026-10-04). Real play: *"a cooldown for
+  spells"* — and `SpellCost.cast_time()` was already computed on every cast
+  (`SpellExecutor.cast_time_for`) and simply thrown away, confirmed directly
+  in `_cast_step`'s own body: read input, detect the rising edge, call
+  `cast_held()` — no timer anywhere. This doc's own Open Questions used to
+  excuse that ("mana affordability already throttles repeat casts") — real
+  numbers say otherwise: four Fire Bolts/Sparks (~12 mana each, 50 max) cast
+  back-to-back on the same input frame is a real, available burst, not a
+  hypothetical. `Player._cast_cooldown_remaining`, ticked in `_cast_step`
+  exactly the way `_attack_cooldown_remaining` already ticks in
+  `_attack_step`, set on every successful cast (`cast_spell`/`cast_woven`,
+  right where `spend_mana` already runs) to `_spell_executor.cast_time_for(
+  rule, skill_bonus("haste"))` — the SAME per-spell formula already
+  computed, not a new flat number invented for this. A cast attempted on
+  cooldown refuses with its own sentence ("Still recovering from the last
+  cast."), the same `feedback.md` rule every other refused verb already
+  follows. At zero haste investment (today, for everyone — no skill node
+  grants haste yet, same as the `governing_stat`/`haste_stat` gap already
+  named above): Fire Bolt/Spark ≈0.8s, Minor Heal ≈0.55s — close to melee's
+  own 0.5s `ATTACK_COOLDOWN`, which is the Hammerwatch-cooldown feel
+  `combat.md`'s own design pillar already named and spells alone had never
+  actually had.
+
+- ✅ **A mage's mana pool and regen, raised** (2026-10-04). Real play: *"the
+  hero needs more mana and faster replenishment... he loses a fight against
+  3 boars."* Measured first, since the self-diagnosis undersold a bigger
+  problem (`combat.md`'s "Three at once was never the reference exchange"):
+  mana is a real, secondary issue specifically for the mage archetype, not
+  the dominant cause of dying to 3 boars (raw burst damage is — see
+  `combat.md`). `ClassArchetype`'s mage `max_mana` (`class_archetype.gd`):
+  **50 → 70** — enough for a sixth opening Fire Bolt/Spark instead of
+  running dry after four. `Player.MANA_REGEN_PER_SECOND`: **2.0 → 3.5** —
+  a 75% increase, bounded above by `test_player.gd`'s own pre-existing
+  `test_mana_regen_lets_a_mage_recast_the_cheapest_spell_within_a_few_
+  seconds` floor (the cheapest spell in the whole book, `farsight` at 1.92
+  mana, must still take over half a second to recast, or that "not
+  instantly free" calibration stops being true — 3.5 clears it with real
+  margin, 4.0 would not). Cuts the wait for a 12-mana follow-up cast from
+  6s to ~3.4s. Neither
+  number scales with player level — confirmed directly, `gain_experience`'s
+  entire per-level payoff is `HEALTH_PER_LEVEL`, by the same deliberate
+  design `progression.md` already states ("a small max-health bump" is the
+  universal per-level reward; mana growth beyond the class baseline stays a
+  skill-tree investment, same as before this change) — so this raises the
+  FLOOR every mage starts and stays at without tree investment, rather than
+  adding a second, competing way mana grows on top of the Mage wedge's own
+  `attunement`/`arcane_reservoir` nodes.

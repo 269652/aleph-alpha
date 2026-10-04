@@ -76,3 +76,11 @@ func test_warrior_has_higher_max_health_than_mage():
 	var warrior_stats: Dictionary = archetype.stats_for("warrior")
 	var mage_stats: Dictionary = archetype.stats_for("mage")
 	assert_gt(warrior_stats["max_health"], mage_stats["max_health"])
+
+
+## docs/concept/spell_runtime.md "A mage's mana pool and regen, raised" --
+## real play lost a fight against 3 boars; a fresh mage's whole opening
+## burst was 4 Fire Bolts/Sparks (~12 mana each) before running dry at the
+## old 50. 70 buys a 6th cast (60 of 70 spent) instead of stalling after 4.
+func test_mage_max_mana_bonus_is_seventy():
+	assert_eq(archetype.stats_for("mage")["max_mana"], 70.0)

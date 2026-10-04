@@ -99,6 +99,19 @@ func test_casting_the_woven_spell_spends_its_real_derived_cost():
 	assert_almost_eq(before - player.mana, expected, 0.001, "the cost is the shared model's own")
 
 
+## docs/concept/spell_runtime.md "A cast has a cooldown": the same gate
+## cast_spell drives, so a woven spell and an authored one share one clock
+## rather than a mage stacking two independent bursts.
+func test_casting_the_woven_spell_twice_in_a_row_is_refused_by_cooldown():
+	player.grant_mote("fire_damage")
+	player.weave(SpellDraft.make(["fire_damage"], "projectile"))
+	player.max_mana = 50.0
+	player.mana = player.max_mana
+	assert_true(player.cast_woven(), "precondition: the first cast succeeds")
+
+	assert_false(player.cast_woven(), "a second cast on the same frame should be refused by cooldown")
+
+
 func test_casting_with_no_weave_is_a_refusal_not_a_crash():
 	assert_false(player.cast_woven())
 
