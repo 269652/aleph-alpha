@@ -241,6 +241,13 @@ const UNARMED_DAMAGE := 5.0
 const ATTACK_COOLDOWN := 0.5
 const KNOCKBACK_FORCE := 60.0
 
+## docs/concept/combat.md "Three at once was never the reference exchange":
+## the reference exchange (CombatPacing.EXCHANGE_HEALTH_SCALE) was measured
+## and pinned against exactly one attacker. A creature may only BEGIN a bite
+## windup against this player if fewer than this many others are already
+## mid-windup against it -- see register_attacker().
+const MAX_SIMULTANEOUS_ATTACKERS := 2
+
 ## A moderate, controlled swing's contact speed -- not a blade-TIP speed
 ## measurement (which runs much higher), but the speed at the point of
 ## impact a real swing delivers, the same grounding shape as
@@ -822,6 +829,12 @@ var _item_art := IllustratedItemArt.new()
 var _tile_targeting := TileTargeting.new()
 var _attack_cooldown_remaining := 0.0
 var _cast_cooldown_remaining := 0.0
+
+## Instance ids of creatures currently holding a MAX_SIMULTANEOUS_ATTACKERS
+## slot. Ids rather than references, the same reason _windup_target_id uses
+## one: a holder can be freed without this list needing to notice before the
+## next register_attacker() call prunes it.
+var _active_attacker_ids: Array[int] = []
 var _last_attack_input_state := false
 var _last_cast_input_state := false
 var _last_build_input_state := false
@@ -3457,6 +3470,27 @@ func answer(action_id: String, context: Dictionary = {}) -> void:
 ## `_answered_at`. A suffix no action id can contain, so the two keys can
 ## never collide with a real verb's.
 const REFUSAL_CLOCK_SUFFIX := "!refused"
+
+
+## docs/concept/combat.md "Three at once was never the reference exchange":
+## the gate a creature's CreatureMarker._try_attack calls, duck-typed
+## (`target.has_method("register_attacker")`) the same way take_damage
+## already is, before it commits to a bite windup against this player.
+##
+## Self-pruning rather than requiring an explicit unregister call from every
+## resolution path a windup can end through (land, miss, flee, die): every
+## call re-validates each already-held slot against the attacker's OWN
+## is_winding_up() first, so a slot never stays stuck occupied past the
+## windup that claimed it.
+func register_attacker(attacker: Node) -> bool:
+	_active_attacker_ids = _active_attacker_ids.filter(func(id: int) -> bool:
+		var holder := instance_from_id(id)
+		return holder != null and is_instance_valid(holder) and holder.is_winding_up()
+	)
+	if _active_attacker_ids.size() >= MAX_SIMULTANEOUS_ATTACKERS:
+		return false
+	_active_attacker_ids.append(attacker.get_instance_id())
+	return true
 
 
 func _perform_attack() -> void:

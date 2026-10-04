@@ -2669,6 +2669,13 @@ func _try_attack(target: Node) -> void:
 		return
 	if not target.has_method("take_damage"):
 		return
+	# docs/concept/combat.md "Three at once was never the reference
+	# exchange": the target gets to refuse a new attacker past its own cap
+	# before this creature commits to anything -- duck-typed the same way
+	# take_damage already is, so a target with no such method (another
+	# creature) is never gated at all.
+	if target.has_method("register_attacker") and not target.register_attacker(self):
+		return
 	# The telegraph this species is owed, from the table that has carried it
 	# since it was written and never had a caller
 	# (docs/concept/predator_profiles.md). It takes the TARGET's own live max

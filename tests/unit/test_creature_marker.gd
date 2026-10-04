@@ -108,6 +108,12 @@ class StubPlayer:
 	# every PLAYER_GROUP member, so every existing stub needs a real
 	# answer, not just the tests that care about it.
 	var indoors := false
+	# docs/concept/combat.md "Three at once was never the reference
+	# exchange" -- the real Player.register_attacker's gate, reduced to a
+	# toggle: every existing test leaves this false (permissive), matching
+	# today's unlimited behavior, so only tests that set it true exercise
+	# the cap at all.
+	var refuses_attackers := false
 	func take_damage(amount: float) -> void:
 		damage_taken += amount
 	func apply_venom() -> void:
@@ -116,6 +122,8 @@ class StubPlayer:
 		disease_bites.append(disease_id)
 	func is_indoors() -> bool:
 		return indoors
+	func register_attacker(_attacker: Node) -> bool:
+		return not refuses_attackers
 
 
 ## A rigged CreatureWander whose "no resource in sight, range outward to
@@ -4806,6 +4814,57 @@ func test_the_cooldown_between_bites_is_the_species_own():
 		)
 	biter._try_attack(victim)
 	assert_eq(victim.damage_taken, _bite_of("bear"), "a second bite inside the cooldown lands nothing")
+	biter.queue_free()
+	victim.queue_free()
+
+
+# -- a cap on simultaneous attackers (docs/concept/combat.md "Three at once
+# was never the reference exchange") -- _try_attack asks the target to
+# register_attacker(self) (duck-typed, same convention take_damage already
+# is) right before committing to a windup; a target that refuses never sees
+# that windup start.
+
+func test_try_attack_never_commits_a_windup_when_the_target_refuses_registration():
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new("boar")
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	victim.refuses_attackers = true
+	add_child(victim)
+
+	biter._try_attack(victim)
+
+	assert_false(biter.is_winding_up(), "a refused registration must not start a windup")
+	_let_the_jaws_close(biter)
+	assert_eq(victim.damage_taken, 0.0, "a refused attacker must land nothing")
+	biter.queue_free()
+	victim.queue_free()
+
+
+func test_try_attack_against_a_target_with_no_registration_method_is_never_gated():
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new("boar")
+	add_child(biter)
+	# A real CreatureMarker target has no register_attacker -- the duck-typed
+	# has_method check must skip the gate entirely rather than error, so
+	# creature-vs-creature fights are exactly as unaffected as the doc claims.
+	var victim := CreatureMarker.new()
+	victim.home = Vector2(100, 100)
+	victim.position = Vector2(100, 100)
+	victim.wander_seed = 6
+	victim.info = CreatureInfo.new("herbivore")
+	add_child(victim)
+
+	biter._try_attack(victim)
+
+	assert_true(biter.is_winding_up(), "an ungated target must still let the windup start")
 	biter.queue_free()
 	victim.queue_free()
 

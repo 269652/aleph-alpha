@@ -1862,6 +1862,55 @@ func test_cast_cooldown_does_not_apply_to_a_refused_cast():
 	assert_true(player.cast_spell("fire_bolt"), "a refused cast must not have started a cooldown")
 
 
+# -- a cap on simultaneous attackers (docs/concept/combat.md "Three at once
+# was never the reference exchange") -- register_attacker is a self-pruning
+# slot registry: every call re-validates each already-held slot's own
+# is_winding_up() fresh, so a creature that died, fled, or finished its
+# windup never leaves a slot stuck occupied -- no explicit unregister call
+# needed anywhere. Real play: 3 boars converging independently committed to
+# a bite the instant each was in range, clustering into one lethal volley.
+
+## A minimal attacker double for register_attacker's own tests: the pruning
+## filter only ever reads is_winding_up(), so this is that pure surface
+## rather than a real CreatureMarker's whole species/windup machinery.
+class FakeAttacker:
+	extends Node
+	var winding_up := true
+	func is_winding_up() -> bool:
+		return winding_up
+
+
+func test_register_attacker_succeeds_when_under_the_cap():
+	var attacker := FakeAttacker.new()
+	add_child_autofree(attacker)
+	assert_true(player.register_attacker(attacker))
+
+
+func test_register_attacker_refuses_once_the_cap_is_full():
+	for i in player.MAX_SIMULTANEOUS_ATTACKERS:
+		var attacker := FakeAttacker.new()
+		add_child_autofree(attacker)
+		assert_true(player.register_attacker(attacker), "precondition: filling the cap should succeed")
+
+	var one_too_many := FakeAttacker.new()
+	add_child_autofree(one_too_many)
+	assert_false(player.register_attacker(one_too_many), "an attacker past the cap should be refused")
+
+
+func test_register_attacker_admits_a_new_attacker_once_a_held_slot_stops_winding_up():
+	var holders: Array = []
+	for i in player.MAX_SIMULTANEOUS_ATTACKERS:
+		var attacker := FakeAttacker.new()
+		add_child_autofree(attacker)
+		player.register_attacker(attacker)
+		holders.append(attacker)
+	holders[0].winding_up = false  # its bite already resolved
+
+	var replacement := FakeAttacker.new()
+	add_child_autofree(replacement)
+	assert_true(player.register_attacker(replacement), "a freed slot should admit a new attacker")
+
+
 func test_casting_a_self_delivery_spell_heals_the_caster():
 	player.apply_class("mage", {"max_mana": 50.0})
 	_learn_at_a_guild("minor_heal")

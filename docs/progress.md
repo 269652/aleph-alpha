@@ -74,15 +74,39 @@ is one of `SpellTuition.STARTING_SPELL_IDS` — every fresh player already
 knows it. Swapped to `"farsight"` (confirmed not a starting spell) in both.
 
 26/26 cast-filtered + 21/21 full `test_player_spell_weaving.gd` + 12/12
-`test_class_archetype.gd` green. Full `test_player.gd` regression deferred
-to the combined commit covering this plus the simultaneous-attacker cap
-below.
+`test_class_archetype.gd` green.
+
+**A cap on simultaneous attackers** — the measured dominant cause of losing
+to 3 boars at once (see `concept/combat.md`'s "Three at once was never the
+reference exchange"), built alongside the two literal asks above rather
+than left as a follow-up. `Player.MAX_SIMULTANEOUS_ATTACKERS` (2) and
+`Player.register_attacker(attacker) -> bool`: a self-pruning slot list that
+re-validates every already-held slot against the attacker's own
+`is_winding_up()` on every call, so a creature that died, fled, or finished
+its windup never leaves a slot stuck occupied — no explicit unregister call
+needed anywhere. `CreatureMarker._try_attack` calls it right after the
+existing `take_damage` check, duck-typed the same way
+(`target.has_method("register_attacker")`), so creature-vs-creature fights
+(no such method) are never gated at all — only the player is.
+
+Red-first: 3 new `Player.register_attacker` tests against a minimal
+`FakeAttacker` double (only `is_winding_up()` matters to the pruning
+filter) confirmed red (`Invalid call` / `Invalid access` —
+`register_attacker`/`MAX_SIMULTANEOUS_ATTACKERS` did not exist) before the
+Player-side mechanism; 2 new `CreatureMarker._try_attack` integration tests
+(a refusing target never sees a windup start; an ungated target — another
+creature, no `register_attacker` — is unaffected) confirmed red (the first
+one; the second was already true with no gate at all, which is the correct
+baseline for a scope-boundary test) before the gate.
+
+3/3 `Player.register_attacker` tests + 299/299 full `test_creature_marker.gd`
+green.
 
 - ✅ A mage's mana pool and regen, raised
 - ✅ A cast has a cooldown
-- ⬜ A cap on simultaneous attackers (the measured dominant cause of losing
-  to 3 boars at once — see `concept/combat.md`'s "Three at once was never
-  the reference exchange"; not yet built)
+- ✅ A cap on simultaneous attackers — the measured dominant cause of
+  losing to 3 boars at once, built in the same pass as the two literal
+  asks above rather than deferred
 
 ### Way more enemies, part 4: goblins raiding together (2026-10-04) — see `concept/ecosystem_dynamics.md`
 
