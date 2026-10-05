@@ -23,6 +23,61 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### Merged to `main`; a pre-existing, unrelated test gap surfaced in the process (2026-10-05)
+
+`claude/admiring-einstein-zorxts` merged into `main` on explicit request — a
+clean fast-forward (`c9ee2f0` → `1f839ba`), since `main` had received zero
+commits of its own since the branch point: no divergence, no conflicts
+possible. This finally carries goblin-camp clustering, the mana/cooldown/
+attacker-cap combat balance, both distortion-shader fixes, and the full
+homing-projectile feature (including its `show_as` fix, above) onto `main`
+for the first time this session.
+
+Per this file's own re-run-after-merge discipline, every file the merge
+touched was re-run **directly against the merged `main` checkout**, not
+assumed clean from the pre-merge branch result: `test_a_new_mage_can_cast`
+14/14, `test_battle_loop` 12/12, `test_class_archetype` 12/12,
+`test_creature_marker` 299/299, `test_creature_renderer` 67/67,
+`test_player_spell_slots`/`test_player_spell_weaving`/
+`test_spell_impact_distortion_shader`/`test_spell_kill_credit`/
+`test_spell_projectile_flight`/`test_spell_projectile_marker` 88/88 combined,
+and `test_player.gd` — 357/358.
+
+**Infrastructure finding, not a code defect:** `test_player.gd` (358 tests)
+cannot run to completion as a single process in this container — Godot/GUT
+leaks on the order of ~900 `ObjectDB` instances per test (confirmed via the
+`WARNING: N ObjectDB instances were leaked at exit` GUT already prints on
+every clean run), and at this file's real size that compounds past the
+container's memory cgroup limit; `dmesg` confirmed an actual OOM-kill
+(`anon-rss:13972420kB`) partway through, silently masked the first time by
+piping through `tee` (which reports its own exit code, not the piped
+command's — a hygiene fix worth remembering for next time). Fixed for this
+pass by mechanically splitting the file into 5 independent chunks (every
+`const`/`var`/inner-`class`/helper-`func` block duplicated into each chunk
+verbatim, `before_each`/`after_each` included, only the 358 `test_` funcs
+partitioned across them) and running each as its own process — bounding
+peak RSS per run and avoiding the ceiling entirely. The chunking files were
+scratch verification scaffolding only, deleted after use, never committed.
+
+**The one real failure, found only because this was — apparently for the
+first time — actually run start-to-finish:**
+`test_interior_outfit_mirrors_the_players_appearance_armor_and_weapon`
+(`tests/unit/test_player.gd:4897`) asserts the interior-avatar's armor/
+weapon textures equal `ProceduralItemSprite.new().generate_texture(...)`'s
+raw output, byte for byte. `leather_helm` and `iron_sword` have since
+gained real illustrated art (`assets/sprites/leather_helm`,
+`assets/sprites/iron_sword`), so `_interior_outfit()`'s real call path
+(`IllustratedItemArt.texture_for`, `scenes/player.gd:3025-3036`) now
+correctly returns the illustrated-and-fitted texture instead of the
+procedural placeholder once art exists for an item — the exact
+illustrated-then-procedural-fallback rule this session's own spell-VFX and
+projectile-marker work relies on. The test's expectation predates those
+assets and was never updated: a stale assertion, not a functional
+regression, and unrelated to anything this session changed. Reproduced
+deterministically on 3 consecutive isolated re-runs (not flaky). Left
+unfixed pending the user's call on scope — flagged here rather than
+silently patched or silently ignored.
+
 ### The homing bolt was invisible; Tab-cycling was never actually broken (2026-10-05) — see `concept/spell_runtime.md`
 
 Real play: *"Tab doesn't target abd cycle enemies anymore and spark and
