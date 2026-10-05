@@ -9,6 +9,8 @@ extends GutTest
 ## resolution-over-time logic already sits on.
 
 const SpellProjectileMarker = preload("res://src/rendering/spell_projectile_marker.gd")
+const ProceduralSpellEffectSprite = preload("res://src/rendering/procedural_spell_effect_sprite.gd")
+const IllustratedSpellEffectSprite = preload("res://src/rendering/illustrated_spell_effect_sprite.gd")
 
 var projectile: SpellProjectileMarker
 var target: Node2D
@@ -123,3 +125,67 @@ func test_the_arrival_callback_fires_exactly_once():
 	for _i in 5:
 		projectile._process(1.0 / 60.0)
 	assert_eq(call_count[0], 1)
+
+
+# -- a real visual, not an invisible logic node (docs/concept/spell_runtime.md,
+# "Projectile flight: a cast that truly homes") --
+#
+# Reported live: "spark and fireball are still not homing." Confirmed via a
+# real GPU-rendered probe (tools/probe_tab_cycle_and_homing.gd) that the
+# underlying MECHANISM was already correct -- the bolt genuinely tracked a
+# moving target and deferred its damage to arrival -- but nothing was ever
+# drawn for it: extends Node2D with no Sprite2D/draw() of its own anywhere.
+# A player watching real gameplay sees the cast swing, then nothing, then
+# the impact VFX -- indistinguishable from the old instant-resolve feel,
+# despite the real travel happening underneath.
+
+func test_show_as_gives_the_bolt_a_visible_sprite():
+	projectile.show_as("fire_damage")
+	var sprites := 0
+	for child in projectile.get_children():
+		if child is Sprite2D:
+			assert_not_null(child.texture, "the bolt's own sprite must have real art, not a blank one")
+			sprites += 1
+	assert_eq(sprites, 1, "show_as must add exactly one visible sprite")
+
+
+func test_show_as_uses_the_atoms_own_art():
+	projectile.show_as("fire_damage")
+	var generator := ProceduralSpellEffectSprite.new()
+	var illustrated := IllustratedSpellEffectSprite.new()
+	var frames := illustrated.frames_for("fire_damage")
+	var expected_texture: Texture2D = frames[0] if not frames.is_empty() else generator.texture_for("fire_damage")
+	var sprite: Sprite2D = null
+	for child in projectile.get_children():
+		if child is Sprite2D:
+			sprite = child
+	assert_not_null(sprite, "precondition: show_as added a sprite")
+	assert_eq(sprite.texture, expected_texture, "fire_damage's bolt must show fire_damage's own art, not a placeholder")
+
+
+## A bolt in flight reads smaller than the same atom's full impact burst --
+## compact in motion, the burst only arrives when it lands.
+func test_the_bolts_sprite_is_smaller_than_the_full_impact_size():
+	projectile.show_as("fire_damage")
+	var sprite: Sprite2D = null
+	for child in projectile.get_children():
+		if child is Sprite2D:
+			sprite = child
+	var on_screen_width: float = sprite.texture.get_width() * sprite.scale.x
+	assert_lt(on_screen_width, float(IllustratedSpellEffectSprite.DISPLAY_WORLD_SIZE))
+	assert_gt(on_screen_width, 0.0, "must still be visible, not scaled to nothing")
+
+
+## The sprite is a plain CHILD of the bolt, not independently positioned --
+## confirms there is no second, competing position to keep in sync as the
+## bolt homes.
+func test_the_bolts_sprite_moves_with_it_as_it_travels():
+	projectile.show_as("fire_damage")
+	projectile.aim_at_target(target)
+	projectile.launch(func(_t, _p): pass)
+	projectile._process(1.0 / 60.0)
+	var sprite: Sprite2D = null
+	for child in projectile.get_children():
+		if child is Sprite2D:
+			sprite = child
+	assert_eq(sprite.global_position, projectile.global_position)

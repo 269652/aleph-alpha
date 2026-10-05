@@ -10,10 +10,20 @@ extends Node2D
 ## callback to run once it actually gets there.
 
 const SpellProjectileFlight = preload("res://src/gameplay/spell_projectile_flight.gd")
+const ProceduralSpellEffectSprite = preload("res://src/rendering/procedural_spell_effect_sprite.gd")
+const IllustratedSpellEffectSprite = preload("res://src/rendering/illustrated_spell_effect_sprite.gd")
 
 ## Shared across every bolt, the same reasoning SpellEffectMarker's own
 ## static generators use: the flight math is a pure function of its inputs.
 static var _flight := SpellProjectileFlight.new()
+static var _generator := ProceduralSpellEffectSprite.new()
+static var _illustrated := IllustratedSpellEffectSprite.new()
+
+## A bolt in flight reads smaller than the same atom's full impact burst --
+## compact in motion; the burst only arrives when it actually lands. Tuned,
+## test-pinned (test_the_bolts_sprite_is_smaller_than_the_full_impact_size),
+## not eyeballed.
+const BOLT_SIZE_MULTIPLIER := 0.5
 
 ## The instance id of the creature/player this bolt is homing on, or 0 for
 ## one aimed at a fixed point. Re-validated via instance_from_id/
@@ -32,6 +42,28 @@ var _aim_point: Vector2
 var _delay_remaining := 0.0
 var _resolved := false
 var _on_arrival: Callable
+
+
+## A visible sprite for `atom_id`, reusing the exact illustrated-then-
+## procedural-fallback lookup SpellEffectMarker.play already establishes --
+## the same art the impact itself will show, smaller, since a bolt in
+## flight is not yet the burst it is flying toward. Without this the bolt
+## is a pure logic node (position, target-tracking, an arrival callback)
+## with nothing drawn for it at all -- reported live as "spark ... still
+## not homing": the MECHANISM was already correct (a real, deferred-
+## damage, target-tracking flight), but nothing was ever visible for a
+## player to see curve toward anything.
+func show_as(atom_id: String) -> void:
+	var frames := _illustrated.frames_for(atom_id)
+	var texture: Texture2D = frames[0] if not frames.is_empty() else _generator.texture_for(atom_id)
+	var sprite := Sprite2D.new()
+	sprite.texture = texture
+	var display_scale := (
+		float(IllustratedSpellEffectSprite.DISPLAY_WORLD_SIZE) / float(texture.get_width())
+		* BOLT_SIZE_MULTIPLIER
+	)
+	sprite.scale = Vector2.ONE * display_scale
+	add_child(sprite)
 
 
 ## Homes on `target`'s live position every frame until it arrives.

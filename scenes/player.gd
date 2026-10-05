@@ -4120,6 +4120,7 @@ func _launch_projectile(atom_id: String, params: Dictionary, target, chain_index
 	else:
 		projectile.aim_at_point(_cast_aim_point("projectile"))
 	get_parent().add_child(projectile)
+	projectile.show_as(atom_id)
 	projectile.launch(
 		Callable(self, "_resolve_projectile_arrival").bind(atom_id, params, chain_index),
 		chain_index * CHAIN_STAGGER_SECONDS

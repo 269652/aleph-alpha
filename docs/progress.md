@@ -23,6 +23,92 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### The homing bolt was invisible; Tab-cycling was never actually broken (2026-10-05) — see `concept/spell_runtime.md`
+
+Real play: *"Tab doesn't target abd cycle enemies anymore and spark and
+fireball are still not homing."* Two reports, investigated together with a
+NEW tool this pass built specifically because unit tests already missed
+one real bug this exact session (the forced-opaque shader) and a second
+invisible-by-construction one (below) — a real GPU-rendered probe that
+drives REAL `Input.action_press`/`_physics_process` over REAL frames,
+`tools/probe_tab_cycle_and_homing.gd`, extending the screenshot-diffing
+discipline `spell_vfx.md`'s shader bugs already established from a single
+static frame to a driven sequence.
+
+**Homing: a real, confirmed bug — the bolt was genuinely invisible.**
+First pass of the probe proved the MECHANISM was already correct: a
+launched bolt's position genuinely updated toward its target's live
+position every real frame, persisted in flight for a real, measured
+duration (~0.1–0.2s, frame-by-frame, well before any damage landed), and
+only then resolved and dealt damage. But `SpellProjectileMarker` (built the
+prior session) extended `Node2D` with zero `Sprite2D`/`draw()` of its own
+— a pure logic node. A player watching real gameplay saw the cast swing,
+then nothing on screen at all, then the impact VFX — indistinguishable
+from the old instant-resolve feel the whole feature was built to replace,
+despite the real travel genuinely happening underneath. Fixed by
+`SpellProjectileMarker.show_as(atom_id)`, reusing `SpellEffectMarker`'s own
+illustrated-then-procedural art lookup at half the full impact size. 4 new
+red-first tests (sprite exists with real art, uses the atom's own texture,
+reads smaller than the full impact, tracks position as the bolt moves) —
+confirmed red (`Nonexistent function 'show_as'`) before implementing.
+12/12 full `test_spell_projectile_marker.gd` green. Re-ran the live probe
+after the fix: `show_as` is called, the sprite exists with the right
+texture/scale/position throughout — confirmed the same way the mechanism
+itself was confirmed, not assumed from the unit tests alone.
+
+**Tab-cycling: investigated thoroughly, found NOT broken.** The first run
+of the probe also showed `explicit_target` staying null through every
+Shift+Tab press — alarming, since nothing in this session touched
+`_cycle_spell_target`/`_nearby_enemy_candidates`/`_dodge_step` at all, and
+`main` has carried this exact code, unchanged, since it was originally
+merged. Chased rather than reported as a regression on faith: two bugs in
+the PROBE itself, not the game, both found by reading `Player`'s own
+documented preconditions rather than guessing —
+1. `Player._is_local_player_instance` checks `name.to_int() ==
+   multiplayer.get_unique_id()`; an un-renamed `PlayerScene.instantiate()`
+   keeps its default scene-root name (non-numeric), reads as a REMOTE
+   player, and `_controlled_locally()` goes false — every
+   `Input.is_action_pressed` poll in the whole file silently skips.
+   `World.gd` always names a real player `str(multiplayer.get_unique_id())`
+   before anything else touches it; the probe hadn't been.
+2. `Player._authority_step`'s own first line is `if _chunk_manager == null:
+   return` — every per-frame step below it, `_dodge_step` among them, never
+   runs without it. `setup(chunk_manager, tile_size)` is `player.gd`'s own
+   documented "must be called before the first `_physics_process`" entry
+   point (the same one `World.gd`'s real player-spawn path calls); the
+   probe hadn't called it either.
+
+With both fixed (naming the player node, calling `setup()` — exactly what
+`World.gd` already does for a real player), the SAME probe, same chord,
+same candidates: Tab-cycling resolved correctly, both presses, the ring
+indicator genuinely toggled. Confirmed by direct code reading too:
+`_nearby_enemy_candidates` correctly includes a boar
+(`temperament == "aggressive"`, matching `CreatureInfo.AGGRESSIVE` exactly)
+within `SpellTargetSelection.TARGET_RADIUS`, and `_set_explicit_target`
+correctly toggles `CreatureMarker.set_targeted`. **No code change was
+needed or made for this half of the report** — it was a false alarm from
+an unrealistic test harness, caught before being mistaken for a regression
+and "fixed" with no real effect.
+
+**What very likely explains the report despite the code being correct:**
+`main` has not received ANY of this project's work since
+`c9ee2f0ec74ecc915b7b185e02c95eb869b2d8c2` (confirmed via `git merge-base
+origin/main claude/admiring-einstein-zorxts`) — which predates the
+goblin-camp pass, the whole combat-balance pass (mana/cooldown/attacker
+cap), both distortion-shader fixes, AND the entire homing-projectile
+feature this entry is about. If `main` is the checkout actually being
+played (per this repo's own `CLAUDE.md`), homing was never going to be
+there to see regardless of this fix, and Tab-cycling — while genuinely
+present and correct on `main` since its original merge — may simply not
+have been exercised/noticed clearly before now. Flagged back to the user
+rather than assumed: this branch has not been merged since the
+explicit-target-selection pass itself.
+
+- ✅ A real, visible homing bolt (the mechanism was already real; the
+  sprite was the missing half)
+- ✅ Tab-cycling confirmed correct via a realistic live probe, not just
+  unit tests — no fix needed
+
 ### A second "clipping rect" bug in the distortion shader, fixed (2026-10-04) — see `concept/spell_vfx.md`
 
 Real play: *"they still show a clipping rect in the animation."* The "still"

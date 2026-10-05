@@ -284,6 +284,37 @@ They are spent/set at cast time, synchronously, exactly as before — a
 accepted, not once whatever it threw has landed. Only the EFFECT (and the
 feedback that announces it) now arrives when the projectile does.
 
+**A second bug, found by a live report and fixed 2026-10-05: "spark and
+fireball are still not homing."** The mechanism above was already correct
+— verified directly, not assumed, by a real GPU-rendered live-input probe
+(`tools/probe_tab_cycle_and_homing.gd`, driving real `Input.action_press`/
+`_physics_process` over real frames, the same "don't just trace the code"
+discipline `spell_vfx.md`'s own shader bugs required): a launched bolt
+genuinely tracked its target's live position and genuinely deferred its
+damage to arrival. But `SpellProjectileMarker` extended `Node2D` with no
+`Sprite2D`/`draw()` of its own anywhere — a pure logic node, invisible by
+construction. A player watching real gameplay saw the cast's swing
+animation, then nothing, then the impact VFX popping in — indistinguishable
+from the old instant-resolve feel despite the real travel happening
+underneath it. Fixed by `SpellProjectileMarker.show_as(atom_id)`: a child
+`Sprite2D` using the exact illustrated-then-procedural-fallback art lookup
+`SpellEffectMarker.play` already establishes (the same art the impact
+itself will show), at `BOLT_SIZE_MULTIPLIER` (0.5×) of the full impact
+size — compact in flight, full-sized only once it actually lands. Called
+from `_launch_projectile` right after `aim_at_target`/`aim_at_point`.
+
+The SAME live probe also investigated a second report from the same
+message — *"Tab doesn't target and cycle enemies anymore"* — and did
+**not** reproduce it: `_cycle_spell_target`/`_nearby_enemy_candidates`/
+`_dodge_step`'s Shift+Tab chord all resolved correctly once the probe
+itself was set up realistically (`Player.setup(chunk_manager, tile_size)`
+called before the first `_physics_process`, and the player node named to
+match its own multiplayer unique id — both real, documented requirements
+`Player._authority_step`/`_is_local_player_instance` already state, which
+two successive, now-fixed bugs in the PROBE itself had skipped). See
+`docs/progress.md`'s own entry for the full account of chasing that down
+rather than taking the first (wrong) result at face value.
+
 ### Trigger: a new input action, not the hotbar
 
 `HotbarAction._ACTION_BY_KIND` decides EQUIP/USE/PLACE purely from an
